@@ -14,6 +14,7 @@ public class MessagesManager {
 
     private final String prefix;
     private final PlaceholderAPIUtil placeholderUtil;
+    private final cn.drcomo.corelib.message.MessageService messageService;
 
     /**
      * 使用指定前缀与 PAPI 工具创建消息管理器。
@@ -21,9 +22,17 @@ public class MessagesManager {
      * @param prefix          消息前缀，支持传统与十六进制颜色代码
      * @param placeholderUtil 核心库提供的占位符解析工具
      */
-    public MessagesManager(String prefix, PlaceholderAPIUtil placeholderUtil) {
+    public MessagesManager(String prefix, PlaceholderAPIUtil placeholderUtil, cn.drcomo.corelib.message.MessageService messageService) {
         this.prefix = ColorUtil.translateColors(prefix);
         this.placeholderUtil = placeholderUtil;
+        this.messageService = messageService;
+    }
+
+    /**
+     * 兼容旧代码的构造函数，MessageService 置空，仅用于过渡。
+     */
+    public MessagesManager(String prefix, PlaceholderAPIUtil placeholderUtil) {
+        this(prefix, placeholderUtil, null);
     }
 
     /**
@@ -37,6 +46,13 @@ public class MessagesManager {
         if (message == null || message.isEmpty()) {
             return;
         }
+        if (messageService != null) {
+            // 当已接入 MessageService，使用其 sendRaw 处理前缀与颜色
+            String msg = withPrefix ? this.prefix + message : message;
+            messageService.sendRaw(sender, msg);
+            return;
+        }
+        // 旧实现
         String msg = withPrefix ? this.prefix + message : message;
         Player player = sender instanceof Player ? (Player) sender : null;
         sender.sendMessage(translate(msg, player));

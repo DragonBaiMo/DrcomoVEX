@@ -6,7 +6,7 @@ import org.bukkit.plugin.PluginDescriptionFile;
 import org.bukkit.plugin.PluginManager;
 import org.bukkit.plugin.java.JavaPlugin;
 import cn.drcomo.api.ServerVariablesAPI;
-import cn.drcomo.api.ServerVariablesExpansion;
+
 import cn.drcomo.config.ConfigsManager;
 import cn.drcomo.database.MySQLConnection;
 import cn.drcomo.listeners.PlayerListener;
@@ -38,6 +38,7 @@ public class DrcomoVEX extends JavaPlugin {
     private DebugUtil logger;
     private YamlUtil yamlUtil;
     private PlaceholderAPIUtil placeholderUtil;
+    private cn.drcomo.corelib.message.MessageService messageService;
     private AsyncTaskManager asyncTaskManager;
 
     /**
@@ -50,6 +51,17 @@ public class DrcomoVEX extends JavaPlugin {
         this.logger = new DebugUtil(this, DebugUtil.LogLevel.INFO);
         this.yamlUtil = new YamlUtil(this, logger);
         this.placeholderUtil = new PlaceholderAPIUtil(this, getName().toLowerCase());
+        // 创建消息服务（默认语言文件路径可根据配置调整）
+        String languagePath = "languages/zh_CN";
+        String keyPrefix = "messages.";
+        this.messageService = new cn.drcomo.corelib.message.MessageService(
+                this,
+                logger,
+                yamlUtil,
+                placeholderUtil,
+                languagePath,
+                keyPrefix
+        );
         this.asyncTaskManager = new AsyncTaskManager(this, logger);
 
         this.variablesManager = new VariablesManager(this);
@@ -61,10 +73,55 @@ public class DrcomoVEX extends JavaPlugin {
         this.configsManager = new ConfigsManager(this, yamlUtil);
         this.configsManager.configure();
 
-        ServerVariablesAPI api = new ServerVariablesAPI(this);
-        if(Bukkit.getServer().getPluginManager().getPlugin("PlaceholderAPI") != null){
-            new ServerVariablesExpansion(this).register();
-        }
+        // 初始化 API
+        new ServerVariablesAPI(this);
+
+        // -----------------------------
+        // 通过核心库 PlaceholderAPIUtil 注册占位符
+        // 前缀将自动使用在 onEnable 早期创建的 placeholderUtil 标识符
+        // %<plugin>_globalvalue_<variable>%
+        placeholderUtil.register("globalvalue", (player, rawArgs) ->
+                ServerVariablesAPI.getServerVariableValue(rawArgs));
+
+        placeholderUtil.register("globaldisplay", (player, rawArgs) ->
+                ServerVariablesAPI.getServerVariableDisplay(rawArgs));
+
+        placeholderUtil.register("value_otherplayer", (player, rawArgs) -> {
+            int idx = rawArgs.indexOf(":");
+            if (idx == -1) {
+                return "";
+            }
+            String playerName = rawArgs.substring(0, idx);
+            String variable = rawArgs.substring(idx + 1);
+            return ServerVariablesAPI.getPlayerVariableValue(playerName, variable);
+        });
+
+        placeholderUtil.register("display_otherplayer", (player, rawArgs) -> {
+            int idx = rawArgs.indexOf(":");
+            if (idx == -1) {
+                return "";
+            }
+            String playerName = rawArgs.substring(0, idx);
+            String variable = rawArgs.substring(idx + 1);
+            return ServerVariablesAPI.getPlayerVariableDisplay(playerName, variable);
+        });
+
+        placeholderUtil.register("value", (player, rawArgs) -> {
+            if (player == null) {
+                return "";
+            }
+            return ServerVariablesAPI.getPlayerVariableValue(player.getName(), rawArgs);
+        });
+
+        placeholderUtil.register("display", (player, rawArgs) -> {
+            if (player == null) {
+                return "";
+            }
+            return ServerVariablesAPI.getPlayerVariableDisplay(player.getName(), rawArgs);
+        });
+
+        placeholderUtil.register("initial_value", (player, rawArgs) ->
+                ServerVariablesAPI.getVariableInitialValue(rawArgs));
 
         if(configsManager.getMainConfigManager().isMySQL()){
             mySQLConnection = new MySQLConnection(this);
@@ -203,12 +260,12 @@ public class DrcomoVEX extends JavaPlugin {
     }
 
     /**
-     * 获取异步任务管理器。
+     * 获取消息服务实例。
      *
-     * @return {@link AsyncTaskManager} 实例
+     * @return MessageService 实例
      */
-    public AsyncTaskManager getAsyncTaskManager() {
-        return asyncTaskManager;
+    public cn.drcomo.corelib.message.MessageService getMessageService() {
+        return messageService;
     }
 
     /**

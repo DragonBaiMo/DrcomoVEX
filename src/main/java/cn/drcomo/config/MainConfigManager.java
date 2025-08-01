@@ -2,7 +2,6 @@ package cn.drcomo.config;
 
 import org.bukkit.configuration.file.YamlConfiguration;
 import cn.drcomo.DrcomoVEX;
-import cn.drcomo.managers.MessagesManager;
 import cn.drcomo.tasks.DataSaveTask;
 import cn.drcomo.corelib.config.YamlUtil;
 
@@ -50,9 +49,10 @@ public class MainConfigManager {
         public void configure() {
                 YamlConfiguration config = yamlUtil.getConfig("config");
 
-                plugin.setMessagesManager(new MessagesManager(
+                plugin.setMessagesManager(new cn.drcomo.managers.MessagesManager(
                                 config.getString("messages.prefix"),
-                                plugin.getPlaceholderUtil()));
+                                plugin.getPlaceholderUtil(),
+                                plugin.getMessageService()));
 
                 DataSaveTask dataSaveTask = plugin.getDataSaveTask();
                 if(dataSaveTask != null) {
