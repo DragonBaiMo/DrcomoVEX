@@ -1,0 +1,64 @@
+name: Sync DrcomoCoreLib Docs
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: windows-latest
+
+    steps:
+    # 1️⃣ 签出当前仓库（触发时所在分支）
+    - name: Checkout self
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    # 2️⃣ 拉取 DrcomoCoreLib 的 gh-pages 到 drcomodocs 目录
+    - name: Checkout DrcomoCoreLib (gh-pages)
+      uses: actions/checkout@v4
+      with:
+        repository: BaiMoYi/DrcomoCoreLib
+        ref: gh-pages
+        path: drcomodocs
+        fetch-depth: 0
+
+    # 3️⃣ 删除旧的 DrcomoCoreLib 目录并重建
+    - name: Remove old DrcomoCoreLib
+      shell: pwsh
+      run: |
+        if (Test-Path DrcomoCoreLib) {
+          Remove-Item DrcomoCoreLib -Recurse -Force
+        }
+        New-Item -ItemType Directory -Path DrcomoCoreLib | Out-Null
+
+    # 4️⃣ 复制所有 .md（忽略 .html/.nojekyll）到 DrcomoCoreLib 目录
+    - name: Copy only Markdown docs
+      shell: pwsh
+      run: |
+        Get-ChildItem -Path drcomodocs -Recurse |
+          Where-Object { $_.PSIsContainer -or ($_.Extension -eq '.md' -and $_.Name -ne '.nojekyll') } |
+          ForEach-Object {
+            $rel = $_.FullName.Substring((Get-Item drcomodocs).FullName.Length + 1)
+            $dst = Join-Path DrcomoCoreLib $rel
+            if ($_.PSIsContainer) {
+              New-Item -ItemType Directory -Path $dst -Force | Out-Null
+            } else {
+              Copy-Item $_.FullName -Destination $dst -Force
+            }
+          }
+
+    # 5️⃣ 提交并推送到触发时所在的分支（一般为 main/master）
+    - name: Commit and push changes
+      shell: pwsh
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        git config user.name "github-actions[bot]"
+        git config user.email "github-actions[bot]@users.noreply.github.com"
+        git add DrcomoCoreLib
+        git commit --allow-empty -m "ci: sync DrcomoCoreLib Markdown docs"
+        git push origin HEAD:${{ github.ref_name }}
