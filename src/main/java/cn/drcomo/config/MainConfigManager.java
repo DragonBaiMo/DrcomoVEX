@@ -54,12 +54,13 @@ public class MainConfigManager {
                                 config.getString("messages.prefix"),
                                 plugin.getPlaceholderUtil()));
 
-		DataSaveTask dataSaveTask = plugin.getDataSaveTask();
-		if(dataSaveTask != null) {
-			dataSaveTask.end();
-		}
-		dataSaveTask = new DataSaveTask(plugin);
-		dataSaveTask.start(config.getInt("config.data_save_time"));
+                DataSaveTask dataSaveTask = plugin.getDataSaveTask();
+                if(dataSaveTask != null) {
+                        dataSaveTask.end();
+                }
+                dataSaveTask = new DataSaveTask(plugin, plugin.getAsyncTaskManager());
+                dataSaveTask.start(config.getInt("config.data_save_time"));
+                plugin.setDataSaveTask(dataSaveTask);
 
 		updateNotify = config.getBoolean("update_notify");
 		isMySQL = config.getBoolean("config.mysql_database.enabled");
