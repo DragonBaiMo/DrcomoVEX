@@ -269,6 +269,15 @@ public class DrcomoVEX extends JavaPlugin {
     }
 
     /**
+     * 获取异步任务管理器。
+     *
+     * @return 异步任务管理器实例
+     */
+    public AsyncTaskManager getAsyncTaskManager() {
+        return asyncTaskManager;
+    }
+
+    /**
      * 根据更新检查结果输出提示信息。
      *
      * @param result 更新检查返回结果
