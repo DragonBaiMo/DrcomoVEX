@@ -50,7 +50,9 @@ public class MainConfigManager {
         public void configure() {
                 YamlConfiguration config = yamlUtil.getConfig("config");
 
-		plugin.setMessagesManager(new MessagesManager(config.getString("messages.prefix")));
+                plugin.setMessagesManager(new MessagesManager(
+                                config.getString("messages.prefix"),
+                                plugin.getPlaceholderUtil()));
 
 		DataSaveTask dataSaveTask = plugin.getDataSaveTask();
 		if(dataSaveTask != null) {

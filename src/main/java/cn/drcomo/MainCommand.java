@@ -56,18 +56,26 @@ public class MainCommand implements CommandExecutor, TabCompleter {
 
 	}
 
-	public void help(CommandSender sender, String[] args, FileConfiguration config, MessagesManager msgManager){
-		sender.sendMessage(MessagesManager.getColoredMessage("&7[ [ &8[&aServerVariables&8] &7] ]"));
-		sender.sendMessage(MessagesManager.getColoredMessage(" "));
-		sender.sendMessage(MessagesManager.getColoredMessage("&6/svar help &8Shows this message."));
-		sender.sendMessage(MessagesManager.getColoredMessage("&6/svar set <variable> <value> (optional)<player> (optional)silent:true &8Sets the value of a variable."));
-		sender.sendMessage(MessagesManager.getColoredMessage("&6/svar get <variable> (optional)<player> (optional)silent:true &8Gets the value from a variable."));
-		sender.sendMessage(MessagesManager.getColoredMessage("&6/svar add <variable> <value> (optional)<player> (optional)silent:true &8Adds a value to a variable (INTEGER or DOUBLE)."));
-		sender.sendMessage(MessagesManager.getColoredMessage("&6/svar reduce <variable> <value> (optional)<player> (optional)silent:true &8Reduces the value of a variable (INTEGER or DOUBLE)."));
-		sender.sendMessage(MessagesManager.getColoredMessage("&6/svar reset <variable> <value> (optional)<player> (optional)silent:true &8Resets the value of a variable."));
-		sender.sendMessage(MessagesManager.getColoredMessage("&6/svar reload &8Reloads the config."));
-		sender.sendMessage(MessagesManager.getColoredMessage(" "));
-		sender.sendMessage(MessagesManager.getColoredMessage("&7[ [ &8[&aServerVariables&8] &7] ]"));
+        /**
+         * 向执行者展示指令帮助信息。
+         *
+         * @param sender     执行指令的命令发送者
+         * @param args       原始参数数组
+         * @param config     插件主配置
+         * @param msgManager 消息管理器实例
+         */
+        public void help(CommandSender sender, String[] args, FileConfiguration config, MessagesManager msgManager){
+                msgManager.sendMessage(sender, "&7[ [ &8[&aServerVariables&8] &7] ]", false);
+                msgManager.sendMessage(sender, " ", false);
+                msgManager.sendMessage(sender, "&6/svar help &8Shows this message.", false);
+                msgManager.sendMessage(sender, "&6/svar set <variable> <value> (optional)<player> (optional)silent:true &8Sets the value of a variable.", false);
+                msgManager.sendMessage(sender, "&6/svar get <variable> (optional)<player> (optional)silent:true &8Gets the value from a variable.", false);
+                msgManager.sendMessage(sender, "&6/svar add <variable> <value> (optional)<player> (optional)silent:true &8Adds a value to a variable (INTEGER or DOUBLE).", false);
+                msgManager.sendMessage(sender, "&6/svar reduce <variable> <value> (optional)<player> (optional)silent:true &8Reduces the value of a variable (INTEGER or DOUBLE).", false);
+                msgManager.sendMessage(sender, "&6/svar reset <variable> <value> (optional)<player> (optional)silent:true &8Resets the value of a variable.", false);
+                msgManager.sendMessage(sender, "&6/svar reload &8Reloads the config.", false);
+                msgManager.sendMessage(sender, " ", false);
+                msgManager.sendMessage(sender, "&7[ [ &8[&aServerVariables&8] &7] ]", false);
 
 	}
 

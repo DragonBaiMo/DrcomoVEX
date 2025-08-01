@@ -23,16 +23,22 @@ public class MySQLConnection {
         this.plugin = plugin;
     }
 
+    /**
+     * 初始化 MySQL 连接并加载数据。
+     * <p>成功连接后会创建所需数据表并从数据库载入玩家变量，
+     * 同时向控制台输出连接结果。</p>
+     */
     public void setupMySql(){
-        FileConfiguration config = plugin.getConfigsManager().getMainConfigManager().getConfigFile().getConfig();
+        FileConfiguration config = plugin.getConfigsManager().getMainConfigManager().getConfig();
         try {
             connection = new HikariConnection(config);
             connection.getHikari().getConnection();
             createTables();
             loadData();
-            Bukkit.getConsoleSender().sendMessage(MessagesManager.getColoredMessage(plugin.prefix+" &aSuccessfully connected to the Database."));
+            MessagesManager msg = plugin.getMessagesManager();
+            msg.sendMessage(Bukkit.getConsoleSender(), "&aSuccessfully connected to the Database.", true);
         }catch(Exception e) {
-            Bukkit.getConsoleSender().sendMessage(MessagesManager.getColoredMessage(plugin.prefix+" &cError while connecting to the Database."));
+            plugin.getMessagesManager().sendMessage(Bukkit.getConsoleSender(), "&cError while connecting to the Database.", true);
         }
     }
 
