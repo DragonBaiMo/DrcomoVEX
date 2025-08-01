@@ -312,9 +312,15 @@ if (coreLib != null) {
 
 
 ### 数学公式计算
-- **功能描述**：计算字符串形式的数学表达式（支持变量）。  
+- **功能描述**：计算字符串形式的数学表达式（支持变量）。
 - **包类路径**：`cn.drcomo.corelib.math.FormulaCalculator`
 - **查询文档**：[查看](./JavaDocs/math/FormulaCalculator-JavaDoc.md)
+
+
+### 数值工具
+- **功能描述**：判断字符串是否为有效数字并提供基础加法运算。
+- **包类路径**：`cn.drcomo.corelib.math.NumberUtil`
+- **查询文档**：[查看](./JavaDocs/math/NumberUtil-JavaDoc.md)
 
 
 ### 异步任务管理
