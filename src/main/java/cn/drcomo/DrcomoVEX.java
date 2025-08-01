@@ -16,6 +16,7 @@ import cn.drcomo.utils.ServerVersion;
 import cn.drcomo.corelib.hook.placeholder.PlaceholderAPIUtil;
 import cn.drcomo.corelib.util.DebugUtil;
 import cn.drcomo.corelib.config.YamlUtil;
+import cn.drcomo.corelib.async.AsyncTaskManager;
 
 
 public class DrcomoVEX extends JavaPlugin {
@@ -37,6 +38,7 @@ public class DrcomoVEX extends JavaPlugin {
     private DebugUtil logger;
     private YamlUtil yamlUtil;
     private PlaceholderAPIUtil placeholderUtil;
+    private AsyncTaskManager asyncTaskManager;
 
     /**
      * 插件启用时的初始化逻辑。
@@ -48,6 +50,7 @@ public class DrcomoVEX extends JavaPlugin {
         this.logger = new DebugUtil(this, DebugUtil.LogLevel.INFO);
         this.yamlUtil = new YamlUtil(this, logger);
         this.placeholderUtil = new PlaceholderAPIUtil(this, getName().toLowerCase());
+        this.asyncTaskManager = new AsyncTaskManager(this, logger);
 
         this.variablesManager = new VariablesManager(this);
         this.serverVariablesManager = new ServerVariablesManager(this);
@@ -83,6 +86,9 @@ public class DrcomoVEX extends JavaPlugin {
     public void onDisable(){
         this.configsManager.saveServerData();
         this.configsManager.savePlayerData();
+        if(asyncTaskManager != null){
+            asyncTaskManager.shutdown();
+        }
         logger.info(messagesManager.translate(messagesManager.getPrefix() + " &eHas been disabled! &fVersion: " + version, null));
     }
 
@@ -194,6 +200,15 @@ public class DrcomoVEX extends JavaPlugin {
      */
     public PlaceholderAPIUtil getPlaceholderUtil() {
         return placeholderUtil;
+    }
+
+    /**
+     * 获取异步任务管理器。
+     *
+     * @return {@link AsyncTaskManager} 实例
+     */
+    public AsyncTaskManager getAsyncTaskManager() {
+        return asyncTaskManager;
     }
 
     /**
