@@ -13,13 +13,15 @@ import cn.drcomo.listeners.PlayerListener;
 import cn.drcomo.model.internal.UpdateCheckerResult;
 import cn.drcomo.tasks.DataSaveTask;
 import cn.drcomo.utils.ServerVersion;
+import cn.drcomo.corelib.hook.placeholder.PlaceholderAPIUtil;
+import cn.drcomo.corelib.util.DebugUtil;
+import cn.drcomo.corelib.config.YamlUtil;
 
 
 public class DrcomoVEX extends JavaPlugin {
 
-    public String prefix;
     public static ServerVersion serverVersion;
-    private PluginDescriptionFile pdfFile = getDescription();
+    private final PluginDescriptionFile pdfFile = getDescription();
     public String version = pdfFile.getVersion();
 
     private VariablesManager variablesManager;
@@ -32,10 +34,20 @@ public class DrcomoVEX extends JavaPlugin {
     private DataSaveTask dataSaveTask;
 
     private MySQLConnection mySQLConnection;
+    private DebugUtil logger;
+    private YamlUtil yamlUtil;
+    private PlaceholderAPIUtil placeholderUtil;
 
+    /**
+     * 插件启用时的初始化逻辑。
+     * <p>负责实例化核心库工具、加载配置并注册监听与指令。</p>
+     */
     public void onEnable(){
         setVersion();
-        setPrefix();
+
+        this.logger = new DebugUtil(this, DebugUtil.LogLevel.INFO);
+        this.yamlUtil = new YamlUtil(this, logger);
+        this.placeholderUtil = new PlaceholderAPIUtil(this, getName().toLowerCase());
 
         this.variablesManager = new VariablesManager(this);
         this.serverVariablesManager = new ServerVariablesManager(this);
@@ -43,7 +55,7 @@ public class DrcomoVEX extends JavaPlugin {
         registerCommands();
         registerEvents();
 
-        this.configsManager = new ConfigsManager(this);
+        this.configsManager = new ConfigsManager(this, yamlUtil);
         this.configsManager.configure();
 
         ServerVariablesAPI api = new ServerVariablesAPI(this);
@@ -56,21 +68,22 @@ public class DrcomoVEX extends JavaPlugin {
             mySQLConnection.setupMySql();
         }
 
-        Bukkit.getConsoleSender().sendMessage(MessagesManager.getColoredMessage(prefix+" &eHas been enabled! &fVersion: "+version));
-        Bukkit.getConsoleSender().sendMessage(MessagesManager.getColoredMessage(prefix+" &eThanks for using my plugin!   &f~Ajneb97"));
+        String prefix = messagesManager.getPrefix();
+        logger.info(messagesManager.translate(prefix + " &eHas been enabled! &fVersion: " + version, null));
+        logger.info(messagesManager.translate(prefix + " &eThanks for using my plugin!   &f~Ajneb97", null));
 
         updateCheckerManager = new UpdateCheckerManager(version);
         updateMessage(updateCheckerManager.check());
     }
 
+    /**
+     * 插件卸载时的收尾逻辑。
+     * <p>保存变量数据并输出关闭信息。</p>
+     */
     public void onDisable(){
         this.configsManager.saveServerData();
         this.configsManager.savePlayerData();
-        Bukkit.getConsoleSender().sendMessage(MessagesManager.getColoredMessage(prefix+" &eHas been disabled! &fVersion: "+version));
-    }
-
-    public void setPrefix(){
-        prefix = MessagesManager.getColoredMessage("&8[&a&lServerVariables&8]");
+        logger.info(messagesManager.translate(messagesManager.getPrefix() + " &eHas been disabled! &fVersion: " + version, null));
     }
 
     public void setVersion(){
@@ -156,15 +169,47 @@ public class DrcomoVEX extends JavaPlugin {
         return mySQLConnection;
     }
 
+    /**
+     * 获取调试日志工具。
+     *
+     * @return 核心库提供的调试日志实例
+     */
+    public DebugUtil getDebug() {
+        return logger;
+    }
+
+    /**
+     * 获取 YAML 配置工具实例。
+     *
+     * @return {@link YamlUtil} 实例
+     */
+    public YamlUtil getYamlUtil() {
+        return yamlUtil;
+    }
+
+    /**
+     * 获取占位符解析工具。
+     *
+     * @return {@link PlaceholderAPIUtil} 实例
+     */
+    public PlaceholderAPIUtil getPlaceholderUtil() {
+        return placeholderUtil;
+    }
+
+    /**
+     * 根据更新检查结果输出提示信息。
+     *
+     * @param result 更新检查返回结果
+     */
     public void updateMessage(UpdateCheckerResult result){
         if(!result.isError()){
             String latestVersion = result.getLatestVersion();
             if(latestVersion != null){
-                Bukkit.getConsoleSender().sendMessage(MessagesManager.getColoredMessage("&cThere is a new version available. &e(&7"+latestVersion+"&e)"));
-                Bukkit.getConsoleSender().sendMessage(MessagesManager.getColoredMessage("&cYou can download it at: &fhttps://modrinth.com/plugin/servervariables"));
+                logger.info(messagesManager.translate("&cThere is a new version available. &e(&7" + latestVersion + "&e)", null));
+                logger.info(messagesManager.translate("&cYou can download it at: &fhttps://modrinth.com/plugin/servervariables", null));
             }
         }else{
-            Bukkit.getConsoleSender().sendMessage(MessagesManager.getColoredMessage(prefix+" &cError while checking update."));
+            logger.error(messagesManager.translate(messagesManager.getPrefix() + " &cError while checking update.", null));
         }
 
     }
