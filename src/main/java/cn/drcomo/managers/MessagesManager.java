@@ -1,43 +1,47 @@
 package cn.drcomo.managers;
 
-import net.md_5.bungee.api.ChatColor;
+import cn.drcomo.corelib.color.ColorUtil;
 import org.bukkit.command.CommandSender;
-import cn.drcomo.utils.OtherUtils;
 
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
-
+/**
+ * 负责处理消息前缀与颜色代码的工具管理器。
+ * <p>使用 {@link ColorUtil} 对文本进行颜色转换，并将消息发送给指定的命令发送者。</p>
+ */
 public class MessagesManager {
 
-    private String prefix;
+    private final String prefix;
+
+    /**
+     * 使用指定前缀创建消息管理器。
+     *
+     * @param prefix 消息前缀，支持传统与十六进制颜色代码
+     */
     public MessagesManager(String prefix) {
-        this.prefix = prefix;
+        this.prefix = ColorUtil.translateColors(prefix);
     }
 
-    public void sendMessage(CommandSender sender, String message, boolean prefix) {
-        if(!message.isEmpty()) {
-            if(prefix) {
-                sender.sendMessage(getColoredMessage(this.prefix+message));
-            }else {
-                sender.sendMessage(getColoredMessage(message));
-            }
+    /**
+     * 向接收者发送消息，可选择是否附带前缀。
+     *
+     * @param sender     接收消息的命令发送者
+     * @param message    待发送的消息内容
+     * @param withPrefix 是否在消息前附带统一前缀
+     */
+    public void sendMessage(CommandSender sender, String message, boolean withPrefix) {
+        if (!message.isEmpty()) {
+            String msg = withPrefix ? this.prefix + message : message;
+            sender.sendMessage(getColoredMessage(msg));
         }
     }
 
+    /**
+     * 将文本中的颜色代码转换为 Bukkit 可识别的彩色文本。
+     *
+     * @param message 原始消息文本
+     * @return 已转换颜色代码的文本
+     */
     public static String getColoredMessage(String message) {
-        if(OtherUtils.isNew()) {
-            Pattern pattern = Pattern.compile("#[a-fA-F0-9]{6}");
-            Matcher match = pattern.matcher(message);
-
-            while(match.find()) {
-                String color = message.substring(match.start(),match.end());
-                message = message.replace(color, ChatColor.of(color)+"");
-
-                match = pattern.matcher(message);
-            }
-        }
-
-        message = ChatColor.translateAlternateColorCodes('&', message);
-        return message;
+        return ColorUtil.translateColors(message);
     }
 }
+
