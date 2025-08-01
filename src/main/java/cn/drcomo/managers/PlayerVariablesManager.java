@@ -12,7 +12,7 @@ import cn.drcomo.model.ServerVariablesVariable;
 import cn.drcomo.model.structure.ValueType;
 import cn.drcomo.model.structure.Variable;
 import cn.drcomo.model.structure.VariableType;
-import cn.drcomo.utils.MathUtils;
+import cn.drcomo.corelib.math.NumberUtil;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -116,12 +116,12 @@ public class PlayerVariablesManager {
             return VariableResult.error(result.getErrorMessage());
         }
 
-        //Value must be a number
-        if(!MathUtils.isParsable(value)){
+        // 值必须是数字
+        if(!NumberUtil.isNumeric(value)){
             return VariableResult.error(config.getString("messages.invalidValue"));
         }
 
-        //ValueType must not be TEXT
+        // ValueType 不可为 TEXT
         ValueType valueType = result.getVariable().getValueType();
         if(valueType == ValueType.TEXT){
             return add ? VariableResult.error(config.getString("messages.variableAddError")) :
@@ -129,7 +129,10 @@ public class PlayerVariablesManager {
         }
 
         try{
-            double newValue = MathUtils.getDoubleSum(value,result.getResultValue(),add);
+            double newValue = NumberUtil.add(
+                    Double.parseDouble(result.getResultValue()),
+                    add ? Double.parseDouble(value) : -Double.parseDouble(value)
+            );
             if(value.contains(".") || valueType == ValueType.DOUBLE){
                 return setVariable(playerName,variableName,newValue+"");
             }else{
