@@ -8,7 +8,7 @@ import cn.drcomo.model.ServerVariablesVariable;
 import cn.drcomo.model.structure.ValueType;
 import cn.drcomo.model.structure.Variable;
 import cn.drcomo.model.structure.VariableType;
-import cn.drcomo.utils.MathUtils;
+import cn.drcomo.corelib.math.NumberUtil;
 
 import java.util.ArrayList;
 
@@ -50,7 +50,7 @@ public class ServerVariablesManager {
             return VariableResult.error(result.getErrorMessage());
         }
 
-        if(!MathUtils.isParsable(value)){
+        if(!NumberUtil.isNumeric(value)){
             return VariableResult.error(config.getString("messages.invalidValue"));
         }
 
@@ -61,11 +61,14 @@ public class ServerVariablesManager {
 
         try{
             if(value.contains(".")){
-                //Double
-                double newValue = MathUtils.getDoubleSum(value, result.getResultValue(), add);
+                // 双精度
+                double newValue = NumberUtil.add(
+                        Double.parseDouble(result.getResultValue()),
+                        add ? Double.parseDouble(value) : -Double.parseDouble(value)
+                );
                 return setVariable(variableName,newValue+"");
             }else{
-                //Integer
+                // 整数
                 long numericValue = Long.parseLong(value);
                 long newValue = add ? Long.parseLong(result.getResultValue())+numericValue : Long.parseLong(result.getResultValue())-numericValue;
                 return setVariable(variableName,newValue+"");
