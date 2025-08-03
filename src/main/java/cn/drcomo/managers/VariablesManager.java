@@ -811,22 +811,15 @@ public class VariablesManager {
                     break;
             }
             
-            // 特殊处理：对于数值类型，先尝试直接返回，绕过可能有问题的验证
-            if (type == ValueType.INT || type == ValueType.DOUBLE) {
-                logger.debug("数值类型跳过复杂验证，直接返回: " + result);
-                return result;
-            }
-            
             // 验证结果
             String validatedResult = processAndValidateValue(variable, result, player);
             if (validatedResult != null) {
                 logger.debug("加法结果验证通过: " + validatedResult);
+                return validatedResult;
             } else {
-                logger.warn("加法结果验证失败，尝试返回原始计算结果: " + result);
-                // 如果验证失败，但计算结果本身是有效的，则返回计算结果
-                return result;
+                logger.warn("加法结果验证失败: " + result + " 变量: " + variable.getKey());
+                return null;
             }
-            return validatedResult;
             
         } catch (Exception e) {
             logger.error("加法操作失败: " + currentValue + " + " + addValue, e);
@@ -1139,28 +1132,32 @@ public class VariablesManager {
                     
                     if (limitations.getMinValue() != null) {
                         String minExpr = resolveExpression(limitations.getMinValue(), player);
+                        logger.debug("最小值约束表达式: " + limitations.getMinValue() + " -> " + minExpr);
                         try {
                             double minValue = Double.parseDouble(minExpr);
+                            logger.debug("数值约束检查: " + numValue + " >= " + minValue + " ? " + (numValue >= minValue));
                             if (numValue < minValue) {
                                 logger.debug("值小于最小约束: " + numValue + " < " + minValue);
                                 return false;
                             }
                         } catch (NumberFormatException e) {
-                            logger.warn("最小值约束解析失败，跳过约束检查: " + minExpr);
+                            logger.warn("最小值约束解析失败，跳过约束检查: " + minExpr + ", 错误: " + e.getMessage());
                             // 解析失败时不阻止操作，仅记录警告
                         }
                     }
                     
                     if (limitations.getMaxValue() != null) {
                         String maxExpr = resolveExpression(limitations.getMaxValue(), player);
+                        logger.debug("最大值约束表达式: " + limitations.getMaxValue() + " -> " + maxExpr);
                         try {
                             double maxValue = Double.parseDouble(maxExpr);
+                            logger.debug("数值约束检查: " + numValue + " <= " + maxValue + " ? " + (numValue <= maxValue));
                             if (numValue > maxValue) {
                                 logger.debug("值大于最大约束: " + numValue + " > " + maxValue);
                                 return false;
                             }
                         } catch (NumberFormatException e) {
-                            logger.warn("最大值约束解析失败，跳过约束检查: " + maxExpr);
+                            logger.warn("最大值约束解析失败，跳过约束检查: " + maxExpr + ", 错误: " + e.getMessage());
                             // 解析失败时不阻止操作，仅记录警告
                         }
                     }
@@ -1172,10 +1169,15 @@ public class VariablesManager {
             }
             
             // 长度约束
-            if (limitations.getMinLength() > 0 && value.length() < limitations.getMinLength()) {
+            Integer minLength = limitations.getMinLength();
+            Integer maxLength = limitations.getMaxLength();
+            
+            if (minLength != null && minLength > 0 && value.length() < minLength) {
+                logger.debug("值长度小于最小长度约束: " + value.length() + " < " + minLength);
                 return false;
             }
-            if (limitations.getMaxLength() > 0 && value.length() > limitations.getMaxLength()) {
+            if (maxLength != null && maxLength > 0 && value.length() > maxLength) {
+                logger.debug("值长度大于最大长度约束: " + value.length() + " > " + maxLength);
                 return false;
             }
             
