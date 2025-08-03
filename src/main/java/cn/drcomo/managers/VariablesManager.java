@@ -1014,6 +1014,23 @@ public class VariablesManager {
     public Set<String> getAllVariableKeys() {
         return new HashSet<>(variableRegistry.keySet());
     }
+
+    /**
+     * 清理指定变量的所有缓存
+     *
+     * @param key 变量键名
+     */
+    public void invalidateAllCaches(String key) {
+        try {
+            // 移除对应的值缓存
+            valueCache.keySet().removeIf(cacheKey -> cacheKey.endsWith(":" + key));
+            // 移除可能相关的表达式缓存
+            expressionCache.entrySet().removeIf(entry -> entry.getKey().contains(key));
+            logger.debug("已清理变量缓存: " + key);
+        } catch (Exception e) {
+            logger.error("清理变量缓存失败: " + key, e);
+        }
+    }
     
     /**
      * 保存所有数据
