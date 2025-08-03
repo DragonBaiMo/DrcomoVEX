@@ -119,3 +119,29 @@
         });
         ```
 
+* #### `convertOuterCharsToPercent(String input, char openChar, char closeChar)`
+
+    * **返回类型:** `String`
+    * **功能描述:** 将最外层指定符号对替换为 `%`，内部层级的同符号保持不变。
+    * **参数说明:**
+        * `input` (`String`): 待处理字符串。
+        * `openChar` (`char`): 左符号，例如 `{`。
+        * `closeChar` (`char`): 右符号，例如 `}`。
+    * **使用示例:**
+        ```java
+        String r = PlaceholderAPIUtil.convertOuterCharsToPercent("[a[b]c]", '[', ']');
+        // r -> "%a[b]c%"
+        ```
+
+* #### `convertOuterBracesToPercent(String input)`
+
+    * **返回类型:** `String`
+    * **功能描述:** 仅针对花括号的便捷封装，等同于 `convertOuterCharsToPercent(input, '{', '}')`。
+    * **参数说明:**
+        * `input` (`String`): 待处理字符串。
+    * **使用示例:**
+        ```java
+        String r = PlaceholderAPIUtil.convertOuterBracesToPercent("{a{b}c}");
+        // r -> "%a{b}c%"
+        ```
+
