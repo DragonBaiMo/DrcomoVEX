@@ -5,6 +5,7 @@ import cn.drcomo.managers.*;
 import cn.drcomo.listeners.PlayerListener;
 import cn.drcomo.api.ServerVariablesAPI;
 import cn.drcomo.tasks.DataSaveTask;
+import cn.drcomo.tasks.VariableCycleTask;
 import cn.drcomo.database.HikariConnection;
 import cn.drcomo.corelib.util.DebugUtil;
 import cn.drcomo.corelib.config.YamlUtil;
@@ -47,6 +48,7 @@ public class DrcomoVEX extends JavaPlugin {
     
     // 定时任务
     private DataSaveTask dataSaveTask;
+    private VariableCycleTask variableCycleTask;
     
     @Override
     public void onEnable() {
@@ -91,6 +93,9 @@ public class DrcomoVEX extends JavaPlugin {
         // 1. 停止定时任务
         if (dataSaveTask != null) {
             dataSaveTask.stop();
+        }
+        if (variableCycleTask != null) {
+            variableCycleTask.stop();
         }
         
         // 2. 保存所有数据
@@ -221,10 +226,15 @@ public class DrcomoVEX extends JavaPlugin {
      */
     private void startScheduledTasks() {
         dataSaveTask = new DataSaveTask(
-                this, logger, variablesManager, 
+                this, logger, variablesManager,
                 configsManager.getMainConfig()
         );
         dataSaveTask.start();
+
+        variableCycleTask = new VariableCycleTask(
+                this, logger, variablesManager, configsManager
+        );
+        variableCycleTask.start();
     }
     
     /**
