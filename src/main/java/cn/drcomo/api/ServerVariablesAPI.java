@@ -172,9 +172,9 @@ public class ServerVariablesAPI {
             if (isBlank.apply(rawArgs)) {
                 result = "变量名不能为空";
             } else {
-                String variableKey;
+                String variableKey = rawArgs; // 直接使用完整变量键
                 try {
-                    variableKey = placeholderUtil.splitArgs(rawArgs)[0];
+                    placeholderUtil.splitArgs(rawArgs); // 如需额外参数可在此解析
                 } catch (Exception e) {
                     logger.error("占位符 drcomovex_var 参数解析失败，原始输入: " + rawArgs, e);
                     result = "错误";
@@ -226,9 +226,9 @@ public class ServerVariablesAPI {
             if (isBlank.apply(rawArgs)) {
                 result = "变量名不能为空";
             } else {
-                String variableKey;
+                String variableKey = rawArgs; // 直接使用完整变量键
                 try {
-                    variableKey = placeholderUtil.splitArgs(rawArgs)[0];
+                    placeholderUtil.splitArgs(rawArgs); // 如需额外参数可在此解析
                 } catch (Exception e) {
                     logger.error("占位符 drcomovex_server_var 参数解析失败，原始输入: " + rawArgs, e);
                     result = "错误";
@@ -268,9 +268,9 @@ public class ServerVariablesAPI {
             if (isBlank.apply(rawArgs)) {
                 result = "变量名不能为空";
             } else {
-                String variableKey;
+                String variableKey = rawArgs; // 直接使用完整变量键
                 try {
-                    variableKey = placeholderUtil.splitArgs(rawArgs)[0];
+                    placeholderUtil.splitArgs(rawArgs); // 如需额外参数可在此解析
                 } catch (Exception e) {
                     logger.error("占位符 drcomovex_player_var 参数解析失败，原始输入: " + rawArgs, e);
                     result = "错误";
