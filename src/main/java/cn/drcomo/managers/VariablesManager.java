@@ -537,7 +537,7 @@ public class VariablesManager {
                 String currentValue = getVariableValueInternalNoCache(player, variable);
                 logger.debug("移除操作 - 当前值: " + currentValue + " 变量: " + key);
                 
-                String newValue = performRemoveOperation(variable, currentValue, removeValue);
+                String newValue = performRemoveOperation(variable, currentValue, removeValue, player);
                 if (newValue == null) {
                     future.complete(VariableResult.failure("删除操作失败", "REMOVE", key, player.getName()));
                     return;
@@ -771,10 +771,19 @@ public class VariablesManager {
                 String minValue = variable.getLimitations().getMinValue();
                 String maxValue = variable.getLimitations().getMaxValue();
                 logger.debug("检查约束: 值=" + resolvedValue + ", 最小值=" + minValue + ", 最大值=" + maxValue);
-                
+
                 if (!validateConstraints(resolvedValue, variable.getLimitations(), player)) {
-                    logger.warn("值超出约束: 值=" + resolvedValue + ", 变量=" + variable.getKey() + 
+                    logger.warn("值超出约束: 值=" + resolvedValue + ", 变量=" + variable.getKey() +
                                ", 最小值=" + minValue + ", 最大值=" + maxValue);
+
+                    // 尝试自动钳制到边界
+                    String clamped = clampValueToLimitations(variable, resolvedValue, player);
+                    if (validateConstraints(clamped, variable.getLimitations(), player)) {
+                        logger.debug("钳制后值合法: " + clamped);
+                        return clamped;
+                    }
+
+                    logger.warn("钳制后仍不符合约束: 值=" + clamped + ", 变量=" + variable.getKey());
                     return null;
                 } else {
                     logger.debug("约束检查通过: 值=" + resolvedValue);
@@ -782,7 +791,7 @@ public class VariablesManager {
             } else {
                 logger.debug("无约束条件，跳过验证: 值=" + resolvedValue);
             }
-            
+
             return resolvedValue;
             
         } catch (Exception e) {
@@ -848,10 +857,7 @@ public class VariablesManager {
                     break;
             }
             
-            // 根据限制条件自动钳制结果
-            result = clampValueToLimitations(variable, result, player);
-            
-            // 验证结果
+            // 验证并自动钳制结果
             String validatedResult = processAndValidateValue(variable, result, player);
             if (validatedResult != null) {
                 logger.debug("加法结果验证通过: " + validatedResult);
@@ -870,17 +876,17 @@ public class VariablesManager {
     /**
      * 执行删除操作
      */
-    private String performRemoveOperation(Variable variable, String currentValue, String removeValue) {
+    private String performRemoveOperation(Variable variable, String currentValue, String removeValue, OfflinePlayer player) {
         try {
             if (currentValue == null || currentValue.trim().isEmpty()) {
                 return currentValue;
             }
-            
+
             ValueType type = variable.getValueType();
             if (type == null) {
                 type = inferTypeFromValue(currentValue);
             }
-            
+
             String result;
             switch (type) {
                 case INT:
@@ -888,34 +894,39 @@ public class VariablesManager {
                     int removeInt = parseIntOrDefault(removeValue, 0);
                     result = String.valueOf(currentInt - removeInt);
                     break;
-                    
+
                 case DOUBLE:
                     double currentDouble = parseDoubleOrDefault(currentValue, 0.0);
                     double removeDouble = parseDoubleOrDefault(removeValue, 0.0);
                     result = String.valueOf(currentDouble - removeDouble);
                     break;
-                    
+
                 case LIST:
                     // 从列表中移除元素
                     List<String> items = new ArrayList<>(Arrays.asList(currentValue.split(",")));
                     items.removeIf(item -> item.trim().equals(removeValue.trim()));
                     result = String.join(",", items);
                     break;
-                    
+
                 default: // STRING
                     // 从字符串中移除子字符串
                     result = currentValue.replace(removeValue, "");
                     break;
             }
-            
-            // 根据限制条件自动钳制结果
-            result = clampValueToLimitations(variable, result, null);
-            
-            return result;
-            
+
+            // 验证并自动钳制结果
+            String validatedResult = processAndValidateValue(variable, result, player);
+            if (validatedResult != null) {
+                logger.debug("删除结果验证通过: " + validatedResult);
+                return validatedResult;
+            } else {
+                logger.warn("删除结果验证失败: " + result + " 变量: " + variable.getKey());
+                return null;
+            }
+
         } catch (Exception e) {
             logger.error("删除操作失败: " + currentValue + " - " + removeValue, e);
-            return currentValue;
+            return null;
         }
     }
     
