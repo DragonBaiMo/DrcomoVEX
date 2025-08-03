@@ -14,6 +14,7 @@ import cn.drcomo.corelib.message.MessageService;
 import cn.drcomo.corelib.hook.placeholder.PlaceholderAPIUtil;
 import org.bukkit.plugin.java.JavaPlugin;
 import org.bukkit.Bukkit;
+import java.io.File;
 
 /**
  * DrcomoVEX 变量扩展系统 主类
@@ -131,20 +132,30 @@ public class DrcomoVEX extends JavaPlugin {
         
         // 配置工具
         yamlUtil = new YamlUtil(this, logger);
-        
+
+        // 若 messages.yml 不存在则复制默认文件
+        File msgFile = new File(getDataFolder(), "messages.yml");
+        if (!msgFile.exists()) {
+            yamlUtil.copyYamlFile("messages.yml", "");
+            logger.info("未找到 messages.yml，已生成默认文件。");
+        } else {
+            logger.info("检测到 messages.yml，准备加载消息。");
+        }
+
         // 异步任务管理器
         asyncTaskManager = AsyncTaskManager.newBuilder(this, logger)
                 .poolSize(4)
                 .build();
-        
+
         // PlaceholderAPI工具
         placeholderUtil = new PlaceholderAPIUtil(this, "drcomovex");
-        
+
         // 消息服务
         messageService = new MessageService(
                 this, logger, yamlUtil, placeholderUtil,
                 "messages.yml", "messages."
         );
+        logger.info("消息服务已加载，使用配置文件 messages.yml。");
     }
     
     /**
