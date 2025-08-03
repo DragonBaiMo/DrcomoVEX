@@ -1,347 +1,452 @@
 package cn.drcomo;
 
-
-
-
+import cn.drcomo.managers.*;
+import cn.drcomo.model.VariableResult;
+import cn.drcomo.corelib.util.DebugUtil;
 import org.bukkit.Bukkit;
+import org.bukkit.OfflinePlayer;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandExecutor;
 import org.bukkit.command.CommandSender;
 import org.bukkit.command.TabCompleter;
-import org.bukkit.configuration.file.FileConfiguration;
 import org.bukkit.entity.Player;
-import cn.drcomo.managers.MessagesManager;
-import cn.drcomo.model.VariableResult;
-import cn.drcomo.model.structure.Variable;
 
-import java.util.ArrayList;
-import java.util.List;
+import java.util.*;
+import java.util.concurrent.CompletableFuture;
+import java.util.stream.Collectors;
 
-
+/**
+ * DrcomoVEX 主指令处理器
+ * 
+ * 处理所有 /vex 指令的执行和 Tab 补全。
+ * 支持子指令: get, set, add, remove, reset, reload, help
+ * 
+ * @author BaiMo
+ */
 public class MainCommand implements CommandExecutor, TabCompleter {
-
-	private DrcomoVEX plugin;
-	public MainCommand(DrcomoVEX plugin){
-		this.plugin = plugin;
-	}
-
-	public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
-		if(!sender.hasPermission("servervariables.admin")){
-			return false;
-		}
-
-		FileConfiguration config = plugin.getConfig();
-		MessagesManager msgManager = plugin.getMessagesManager();
-		if(args.length >= 1){
-			if(args[0].equalsIgnoreCase("set")){
-				set(sender,args,config,msgManager);
-			}else if(args[0].equalsIgnoreCase("reload")){
-				reload(sender,args,config,msgManager);
-			}else if(args[0].equalsIgnoreCase("get")){
-				get(sender,args,config,msgManager);
-			}else if(args[0].equalsIgnoreCase("add")){
-				add(sender,args,config,msgManager);
-			}else if(args[0].equalsIgnoreCase("reduce")){
-				reduce(sender,args,config,msgManager);
-			}else if(args[0].equalsIgnoreCase("reset")){
-				reset(sender,args,config,msgManager);
-			}else{
-				help(sender,args,config,msgManager);
-			}
-		}else{
-			help(sender,args,config,msgManager);
-		}
-
-		return true;
-
-	}
-
-        /**
-         * 向执行者展示指令帮助信息。
-         *
-         * @param sender     执行指令的命令发送者
-         * @param args       原始参数数组
-         * @param config     插件主配置
-         * @param msgManager 消息管理器实例
-         */
-        public void help(CommandSender sender, String[] args, FileConfiguration config, MessagesManager msgManager){
-                msgManager.sendMessage(sender, "&7[ [ &8[&aServerVariables&8] &7] ]", false);
-                msgManager.sendMessage(sender, " ", false);
-                msgManager.sendMessage(sender, "&6/svar help &8Shows this message.", false);
-                msgManager.sendMessage(sender, "&6/svar set <variable> <value> (optional)<player> (optional)silent:true &8Sets the value of a variable.", false);
-                msgManager.sendMessage(sender, "&6/svar get <variable> (optional)<player> (optional)silent:true &8Gets the value from a variable.", false);
-                msgManager.sendMessage(sender, "&6/svar add <variable> <value> (optional)<player> (optional)silent:true &8Adds a value to a variable (INTEGER or DOUBLE).", false);
-                msgManager.sendMessage(sender, "&6/svar reduce <variable> <value> (optional)<player> (optional)silent:true &8Reduces the value of a variable (INTEGER or DOUBLE).", false);
-                msgManager.sendMessage(sender, "&6/svar reset <variable> <value> (optional)<player> (optional)silent:true &8Resets the value of a variable.", false);
-                msgManager.sendMessage(sender, "&6/svar reload &8Reloads the config.", false);
-                msgManager.sendMessage(sender, " ", false);
-                msgManager.sendMessage(sender, "&7[ [ &8[&aServerVariables&8] &7] ]", false);
-
-	}
-
-	public void set(CommandSender sender, String[] args, FileConfiguration config, MessagesManager msgManager){
-		//servervariables set <variable> <value> (Set global variable)
-		//servervariables set <variable> <value> <player> (Set player variable)
-		//servervariables set <variable> "<value with spaces>" <player>
-		if(args.length <= 2){
-			msgManager.sendMessage(sender,config.getString("messages.commandSetError"),true);
-			return;
-		}
-
-		String variableName = args[1];
-		String newValue = args[2];
-
-		int valueExtraArgs = 0;
-		if(newValue.startsWith("\"")){
-			String newValueWithSpaces = newValue; // "value with spaces"
-			for(int i=3;i<args.length;i++){
-				String arg = args[i];
-				newValueWithSpaces=newValueWithSpaces+" "+arg;
-				valueExtraArgs++;
-				if(arg.endsWith("\"")){
-					break;
-				}
-			}
-
-			if(!newValueWithSpaces.startsWith("\"") || !newValueWithSpaces.endsWith("\"")){
-				msgManager.sendMessage(sender,config.getString("messages.commandSetError"),true);
-				return;
-			}
-
-			newValue = newValueWithSpaces.replace("\"","");
-		}
-
-
-		String playerName = null;
-
-		VariableResult result = null;
-		if(args.length >= 4+valueExtraArgs && !args[3+valueExtraArgs].equals("silent:true")){
-			playerName = args[3+valueExtraArgs];
-			result = plugin.getPlayerVariablesManager().setVariable(playerName,variableName,newValue);
-		}else{
-			result = plugin.getServerVariablesManager().setVariable(variableName,newValue);
-		}
-
-		boolean silent = args[args.length-1].equals("silent:true");
-
-		sendMessageSet(sender,result,msgManager,config,variableName,playerName,silent);
-	}
-
-	public void get(CommandSender sender, String[] args, FileConfiguration config, MessagesManager msgManager) {
-		//servervariables get <variable> (Get global variable)
-		//servervariables get <variable> <player> (Get player variable)
-		if (args.length <= 1) {
-			msgManager.sendMessage(sender, config.getString("messages.commandGetError"), true);
-			return;
-		}
-
-		String variableName = args[1];
-		String playerName = null;
-		VariableResult result = null;
-
-		if(args.length >= 3){
-			playerName = args[2];
-			result = plugin.getPlayerVariablesManager().getVariableValue(playerName,variableName, false);
-		}else{
-			result = plugin.getServerVariablesManager().getVariableValue(variableName,false);
-		}
-
-		if(result.isError()){
-			msgManager.sendMessage(sender,result.getErrorMessage(),true);
-		}else{
-			if(playerName != null){
-				msgManager.sendMessage(sender,config.getString("messages.commandGetCorrectPlayer").replace("%variable%",variableName)
-						.replace("%value%",result.getResultValue()).replace("%player%",playerName),true);
-			}else{
-				msgManager.sendMessage(sender,config.getString("messages.commandGetCorrect").replace("%variable%",variableName)
-						.replace("%value%",result.getResultValue()),true);
-			}
-		}
-	}
-
-	public void add(CommandSender sender, String[] args, FileConfiguration config, MessagesManager msgManager){
-		//servervariables add <variable> <value> (Add value to server variable if INTEGER or DOUBLE)
-		//servervariables add <variable> <value> <player> (Add value to player variable if INTEGER or DOUBLE)
-		if(args.length <= 2){
-			msgManager.sendMessage(sender,config.getString("messages.commandAddError"),true);
-			return;
-		}
-
-		String variableName = args[1];
-		String value = args[2];
-		String playerName = null;
-
-		VariableResult result = null;
-		if(args.length >= 4 && !args[3].equals("silent:true")){
-			playerName = args[3];
-			result = plugin.getPlayerVariablesManager().modifyVariable(playerName,variableName,value,true);
-		}else{
-			result = plugin.getServerVariablesManager().modifyVariable(variableName,value,true);
-		}
-
-		boolean silent = args[args.length-1].equals("silent:true");
-
-		sendMessageSet(sender,result,msgManager,config,variableName,playerName,silent);
-	}
-
-	public void reduce(CommandSender sender, String[] args, FileConfiguration config, MessagesManager msgManager){
-		//servervariables reduce <variable> <value> (Reduce value of server variable if INTEGER or DOUBLE)
-		//servervariables reduce <variable> <value> <player> (Reduce value of player variable if INTEGER or DOUBLE)
-		if(args.length <= 2){
-			msgManager.sendMessage(sender,config.getString("messages.commandReduceError"),true);
-			return;
-		}
-
-		String variableName = args[1];
-		String value = args[2];
-		String playerName = null;
-
-		VariableResult result = null;
-		if(args.length >= 4 && !args[3].equals("silent:true")){
-			playerName = args[3];
-			result = plugin.getPlayerVariablesManager().modifyVariable(playerName,variableName,value,false);
-		}else{
-			result = plugin.getServerVariablesManager().modifyVariable(variableName,value,false);
-		}
-
-		boolean silent = args[args.length-1].equals("silent:true");
-
-		sendMessageSet(sender,result,msgManager,config,variableName,playerName,silent);
-	}
-
-	public void reset(CommandSender sender, String[] args, FileConfiguration config, MessagesManager msgManager){
-		//servervariables reset <variable> (Resets a global variable to the default value)
-		//servervariables reset <variable> <player> (Resets a player variable to the default value)
-		if(args.length <= 1){
-			msgManager.sendMessage(sender,config.getString("messages.commandResetError"),true);
-			return;
-		}
-
-		String variableName = args[1];
-		String playerName = null;
-
-		VariableResult result = null;
-		if(args.length >= 3 && !args[2].equals("silent:true")){
-			playerName = args[2];
-			result = plugin.getPlayerVariablesManager().resetVariable(playerName,variableName,playerName.equals("*"));
-		}else{
-			result = plugin.getServerVariablesManager().resetVariable(variableName);
-		}
-
-		boolean silent = args[args.length-1].equals("silent:true");
-
-		if(result.isError()){
-			msgManager.sendMessage(sender,result.getErrorMessage(),true);
-		}else{
-			if(silent){
-				return;
-			}
-			if(playerName != null){
-				if(playerName.equals("*")){
-					msgManager.sendMessage(sender,config.getString("messages.commandResetCorrectAll").replace("%variable%",variableName),true);
-				}else{
-					msgManager.sendMessage(sender,config.getString("messages.commandResetCorrectPlayer").replace("%variable%",variableName)
-							.replace("%player%",playerName),true);
-				}
-			}else{
-				msgManager.sendMessage(sender,config.getString("messages.commandResetCorrect").replace("%variable%",variableName),true);
-			}
-		}
-	}
-
-	private void sendMessageSet(CommandSender sender,VariableResult result,MessagesManager msgManager,FileConfiguration config,
-							   String variableName,String playerName,boolean silent){
-		boolean silentCommandsHideErrors = plugin.getConfigsManager().getMainConfigManager().isSilentCommandsHideErrors();
-		if(result.isError()){
-			if(silent && silentCommandsHideErrors){
-				return;
-			}
-			msgManager.sendMessage(sender,result.getErrorMessage(),true);
-		}else{
-			if(silent){
-				return;
-			}
-			if(playerName != null){
-				msgManager.sendMessage(sender,config.getString("messages.commandSetCorrectPlayer").replace("%variable%",variableName)
-						.replace("%value%",result.getResultValue()).replace("%player%",playerName),true);
-			}else{
-				msgManager.sendMessage(sender,config.getString("messages.commandSetCorrect").replace("%variable%",variableName)
-						.replace("%value%",result.getResultValue()),true);
-			}
-		}
-	}
-
-	public void reload(CommandSender sender, String[] args, FileConfiguration config, MessagesManager msgManager){
-		// /servervariables reload
-		plugin.getConfigsManager().reloadConfigs();
-		msgManager.sendMessage(sender,config.getString("messages.pluginReloaded"),true);
-	}
-
-
-	@Override
-	public List<String> onTabComplete(CommandSender sender, Command command, String label, String[] args) {
-		if(!sender.hasPermission("servervariables.admin")){
-			return null;
-		}
-
-		if(args.length == 1){
-			//Show all commands
-			List<String> completions = new ArrayList<String>();
-			List<String> commands = new ArrayList<String>();
-			commands.add("reload");commands.add("set");commands.add("get");commands.add("add");commands.add("reduce");
-			commands.add("reset");commands.add("help");
-			for(String c : commands) {
-				if(args[0].isEmpty() || c.startsWith(args[0].toLowerCase())) {
-					completions.add(c);
-				}
-			}
-			return completions;
-		}else{
-			List<String> completions = new ArrayList<String>();
-			ArrayList<Variable> variables = plugin.getVariablesManager().getVariables();
-			if((args[0].equalsIgnoreCase("set") || args[0].equalsIgnoreCase("get") || args[0].equalsIgnoreCase("add")
-					|| args[0].equalsIgnoreCase("reduce") || args[0].equalsIgnoreCase("reset"))
-					&& args.length == 2) {
-				String argVariable = args[1];
-				for(Variable variable : variables) {
-					if(argVariable.isEmpty() || variable.getName().toLowerCase().startsWith(argVariable.toLowerCase())) {
-						completions.add(variable.getName());
-					}
-				}
-				return completions;
-			}else if(args[0].equalsIgnoreCase("set") && args.length == 3){
-				Variable variable = plugin.getVariablesManager().getVariable(args[1]);
-				String argVariable = args[2];
-
-				if(variable != null){
-					List<String> possibleRealValues = variable.getPossibleRealValues();
-					for(String possibleValue : possibleRealValues){
-						if(argVariable.isEmpty() || possibleValue.toLowerCase().startsWith(argVariable.toLowerCase())) {
-							completions.add(possibleValue);
-						}
-					}
-				}
-				completions.add("<value>");
-				return completions;
-			}else if((args[0].equalsIgnoreCase("add") || args[0].equalsIgnoreCase("reduce")) && args.length == 3){
-				completions.add("<value>");
-				return completions;
-			}else if(args[0].equalsIgnoreCase("reset") && args.length == 3) {
-				for(Player p : Bukkit.getOnlinePlayers()) {
-					if(args[2].toLowerCase().isEmpty() || p.getName().startsWith(args[2].toLowerCase())){
-						completions.add(p.getName());
-					}
-				}
-				addAllWord(completions,args[2]);
-				return completions;
-			}
-		}
-		return null;
-	}
-
-	private void addAllWord(List<String> completions,String arg){
-		if(arg.isEmpty() || "*".startsWith(arg.toLowerCase())) {
-			completions.add("*");
-		}
-	}
+    
+    private final DrcomoVEX plugin;
+    private final DebugUtil logger;
+    private final MessagesManager messagesManager;
+    private final VariablesManager variablesManager;
+    private final ServerVariablesManager serverVariablesManager;
+    private final PlayerVariablesManager playerVariablesManager;
+    
+    public MainCommand(
+            DrcomoVEX plugin,
+            DebugUtil logger,
+            MessagesManager messagesManager,
+            VariablesManager variablesManager,
+            ServerVariablesManager serverVariablesManager,
+            PlayerVariablesManager playerVariablesManager
+    ) {
+        this.plugin = plugin;
+        this.logger = logger;
+        this.messagesManager = messagesManager;
+        this.variablesManager = variablesManager;
+        this.serverVariablesManager = serverVariablesManager;
+        this.playerVariablesManager = playerVariablesManager;
+    }
+    
+    @Override
+    public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
+        if (args.length == 0) {
+            sendHelp(sender);
+            return true;
+        }
+        
+        String subCommand = args[0].toLowerCase();
+        
+        switch (subCommand) {
+            case "get":
+                handleGet(sender, args);
+                break;
+            case "set":
+                handleSet(sender, args);
+                break;
+            case "add":
+                handleAdd(sender, args);
+                break;
+            case "remove":
+                handleRemove(sender, args);
+                break;
+            case "reset":
+                handleReset(sender, args);
+                break;
+            case "reload":
+                handleReload(sender, args);
+                break;
+            case "help":
+                sendHelp(sender);
+                break;
+            default:
+                messagesManager.sendMessage(sender, "error.unknown-command", 
+                        Map.of("command", subCommand));
+                break;
+        }
+        
+        return true;
+    }
+    
+    /**
+     * 处理 get 指令
+     * 格式: /vex get <变量名> [-p:玩家ID]
+     */
+    private void handleGet(CommandSender sender, String[] args) {
+        if (args.length < 2) {
+            messagesManager.sendMessage(sender, "error.usage-get");
+            return;
+        }
+        
+        String variableKey = args[1];
+        OfflinePlayer targetPlayer = parseTargetPlayer(sender, args);
+        
+        if (targetPlayer == null) {
+            return;
+        }
+        
+        // 检查权限
+        if (!hasPermission(sender, "drcomovex.command.get", targetPlayer)) {
+            messagesManager.sendMessage(sender, "error.no-permission");
+            return;
+        }
+        
+        // 异步获取变量值
+        variablesManager.getVariable(targetPlayer, variableKey)
+                .thenAccept(result -> {
+                    if (result.isSuccess()) {
+                        messagesManager.sendMessage(sender, "success.get",
+                                Map.of(
+                                        "variable", variableKey,
+                                        "player", targetPlayer.getName(),
+                                        "value", result.getValue()
+                                ));
+                    } else {
+                        messagesManager.sendMessage(sender, "error.variable-not-found",
+                                Map.of("variable", variableKey));
+                    }
+                })
+                .exceptionally(throwable -> {
+                    logger.error("获取变量失败: " + variableKey, throwable);
+                    messagesManager.sendMessage(sender, "error.internal");
+                    return null;
+                });
+    }
+    
+    /**
+     * 处理 set 指令
+     * 格式: /vex set <变量名> <值> [-p:玩家ID]
+     */
+    private void handleSet(CommandSender sender, String[] args) {
+        if (args.length < 3) {
+            messagesManager.sendMessage(sender, "error.usage-set");
+            return;
+        }
+        
+        String variableKey = args[1];
+        String value = args[2];
+        OfflinePlayer targetPlayer = parseTargetPlayer(sender, args);
+        
+        if (targetPlayer == null) {
+            return;
+        }
+        
+        // 检查权限
+        if (!hasPermission(sender, "drcomovex.command.set", targetPlayer)) {
+            messagesManager.sendMessage(sender, "error.no-permission");
+            return;
+        }
+        
+        // 异步设置变量值
+        variablesManager.setVariable(targetPlayer, variableKey, value)
+                .thenAccept(result -> {
+                    if (result.isSuccess()) {
+                        messagesManager.sendMessage(sender, "success.set",
+                                Map.of(
+                                        "variable", variableKey,
+                                        "player", targetPlayer.getName(),
+                                        "value", value
+                                ));
+                    } else {
+                        messagesManager.sendMessage(sender, "error.operation-failed",
+                                Map.of("reason", result.getErrorMessage()));
+                    }
+                })
+                .exceptionally(throwable -> {
+                    logger.error("设置变量失败: " + variableKey, throwable);
+                    messagesManager.sendMessage(sender, "error.internal");
+                    return null;
+                });
+    }
+    
+    /**
+     * 处理 add 指令
+     * 格式: /vex add <变量名> <值> [-p:玩家ID]
+     */
+    private void handleAdd(CommandSender sender, String[] args) {
+        if (args.length < 3) {
+            messagesManager.sendMessage(sender, "error.usage-add");
+            return;
+        }
+        
+        String variableKey = args[1];
+        String value = args[2];
+        OfflinePlayer targetPlayer = parseTargetPlayer(sender, args);
+        
+        if (targetPlayer == null) {
+            return;
+        }
+        
+        // 检查权限
+        if (!hasPermission(sender, "drcomovex.command.add", targetPlayer)) {
+            messagesManager.sendMessage(sender, "error.no-permission");
+            return;
+        }
+        
+        // 异步增加变量值
+        variablesManager.addVariable(targetPlayer, variableKey, value)
+                .thenAccept(result -> {
+                    if (result.isSuccess()) {
+                        messagesManager.sendMessage(sender, "success.add",
+                                Map.of(
+                                        "variable", variableKey,
+                                        "player", targetPlayer.getName(),
+                                        "value", value,
+                                        "new_value", result.getValue()
+                                ));
+                    } else {
+                        messagesManager.sendMessage(sender, "error.operation-failed",
+                                Map.of("reason", result.getErrorMessage()));
+                    }
+                })
+                .exceptionally(throwable -> {
+                    logger.error("增加变量失败: " + variableKey, throwable);
+                    messagesManager.sendMessage(sender, "error.internal");
+                    return null;
+                });
+    }
+    
+    /**
+     * 处理 remove 指令
+     * 格式: /vex remove <变量名> <值> [-p:玩家ID]
+     */
+    private void handleRemove(CommandSender sender, String[] args) {
+        if (args.length < 3) {
+            messagesManager.sendMessage(sender, "error.usage-remove");
+            return;
+        }
+        
+        String variableKey = args[1];
+        String value = args[2];
+        OfflinePlayer targetPlayer = parseTargetPlayer(sender, args);
+        
+        if (targetPlayer == null) {
+            return;
+        }
+        
+        // 检查权限
+        if (!hasPermission(sender, "drcomovex.command.remove", targetPlayer)) {
+            messagesManager.sendMessage(sender, "error.no-permission");
+            return;
+        }
+        
+        // 异步移除变量值
+        variablesManager.removeVariable(targetPlayer, variableKey, value)
+                .thenAccept(result -> {
+                    if (result.isSuccess()) {
+                        messagesManager.sendMessage(sender, "success.remove",
+                                Map.of(
+                                        "variable", variableKey,
+                                        "player", targetPlayer.getName(),
+                                        "value", value,
+                                        "new_value", result.getValue()
+                                ));
+                    } else {
+                        messagesManager.sendMessage(sender, "error.operation-failed",
+                                Map.of("reason", result.getErrorMessage()));
+                    }
+                })
+                .exceptionally(throwable -> {
+                    logger.error("移除变量失败: " + variableKey, throwable);
+                    messagesManager.sendMessage(sender, "error.internal");
+                    return null;
+                });
+    }
+    
+    /**
+     * 处理 reset 指令
+     * 格式: /vex reset <变量名> [-p:玩家ID]
+     */
+    private void handleReset(CommandSender sender, String[] args) {
+        if (args.length < 2) {
+            messagesManager.sendMessage(sender, "error.usage-reset");
+            return;
+        }
+        
+        String variableKey = args[1];
+        OfflinePlayer targetPlayer = parseTargetPlayer(sender, args);
+        
+        if (targetPlayer == null) {
+            return;
+        }
+        
+        // 检查权限
+        if (!hasPermission(sender, "drcomovex.command.reset", targetPlayer)) {
+            messagesManager.sendMessage(sender, "error.no-permission");
+            return;
+        }
+        
+        // 异步重置变量
+        variablesManager.resetVariable(targetPlayer, variableKey)
+                .thenAccept(result -> {
+                    if (result.isSuccess()) {
+                        messagesManager.sendMessage(sender, "success.reset",
+                                Map.of(
+                                        "variable", variableKey,
+                                        "player", targetPlayer.getName(),
+                                        "value", result.getValue()
+                                ));
+                    } else {
+                        messagesManager.sendMessage(sender, "error.operation-failed",
+                                Map.of("reason", result.getErrorMessage()));
+                    }
+                })
+                .exceptionally(throwable -> {
+                    logger.error("重置变量失败: " + variableKey, throwable);
+                    messagesManager.sendMessage(sender, "error.internal");
+                    return null;
+                });
+    }
+    
+    /**
+     * 处理 reload 指令
+     * 格式: /vex reload
+     */
+    private void handleReload(CommandSender sender, String[] args) {
+        // 检查权限
+        if (!sender.hasPermission("drcomovex.admin.reload")) {
+            messagesManager.sendMessage(sender, "error.no-permission");
+            return;
+        }
+        
+        // 异步重载配置
+        plugin.getAsyncTaskManager().submitAsync(() -> {
+            try {
+                // 重载配置
+                plugin.getConfigsManager().reload();
+                
+                // 重载变量定义
+                variablesManager.reload();
+                
+                // 重载消息
+                messagesManager.reload();
+                
+                // 在主线程中发送消息
+                Bukkit.getScheduler().runTask(plugin, () -> {
+                    messagesManager.sendMessage(sender, "success.reload");
+                    logger.info("配置已重载，执行者: " + sender.getName());
+                });
+                
+            } catch (Exception e) {
+                logger.error("重载配置失败", e);
+                Bukkit.getScheduler().runTask(plugin, () -> {
+                    messagesManager.sendMessage(sender, "error.reload-failed");
+                });
+            }
+        });
+    }
+    
+    /**
+     * 发送帮助信息
+     */
+    private void sendHelp(CommandSender sender) {
+        messagesManager.sendMessageList(sender, "help.commands");
+    }
+    
+    /**
+     * 解析目标玩家
+     */
+    private OfflinePlayer parseTargetPlayer(CommandSender sender, String[] args) {
+        // 查找 -p: 参数
+        String targetPlayerName = null;
+        for (String arg : args) {
+            if (arg.startsWith("-p:")) {
+                targetPlayerName = arg.substring(3);
+                break;
+            }
+        }
+        
+        // 如果没有指定目标玩家，默认为命令执行者
+        if (targetPlayerName == null) {
+            if (sender instanceof Player) {
+                return (Player) sender;
+            } else {
+                messagesManager.sendMessage(sender, "error.console-specify-player");
+                return null;
+            }
+        }
+        
+        // 获取目标玩家
+        OfflinePlayer targetPlayer = Bukkit.getOfflinePlayer(targetPlayerName);
+        if (targetPlayer == null || !targetPlayer.hasPlayedBefore()) {
+            messagesManager.sendMessage(sender, "error.player-not-found",
+                    Map.of("player", targetPlayerName));
+            return null;
+        }
+        
+        return targetPlayer;
+    }
+    
+    /**
+     * 检查权限
+     */
+    private boolean hasPermission(CommandSender sender, String permission, OfflinePlayer targetPlayer) {
+        // 基本权限检查
+        if (!sender.hasPermission(permission)) {
+            return false;
+        }
+        
+        // 如果操作其他玩家，需要额外权限
+        if (sender instanceof Player && !sender.getName().equals(targetPlayer.getName())) {
+            return sender.hasPermission(permission + ".others");
+        }
+        
+        return true;
+    }
+    
+    @Override
+    public List<String> onTabComplete(CommandSender sender, Command command, String alias, String[] args) {
+        List<String> completions = new ArrayList<>();
+        
+        if (args.length == 1) {
+            // 子指令补全
+            List<String> subCommands = Arrays.asList("get", "set", "add", "remove", "reset", "reload", "help");
+            return subCommands.stream()
+                    .filter(cmd -> cmd.toLowerCase().startsWith(args[0].toLowerCase()))
+                    .collect(Collectors.toList());
+        }
+        
+        if (args.length == 2 && !args[0].equalsIgnoreCase("reload") && !args[0].equalsIgnoreCase("help")) {
+            // 变量名补全
+            return variablesManager.getAllVariableKeys().stream()
+                    .filter(key -> key.toLowerCase().startsWith(args[1].toLowerCase()))
+                    .collect(Collectors.toList());
+        }
+        
+        if (args.length >= 3) {
+            // 玩家名补全 (-p:参数)
+            for (String arg : args) {
+                if (arg.startsWith("-p:")) {
+                    return Collections.emptyList();
+                }
+            }
+            
+            // 提供 -p: 提示
+            if (sender.hasPermission("drcomovex.command." + args[0].toLowerCase() + ".others")) {
+                completions.add("-p:");
+            }
+        }
+        
+        return completions;
+    }
 }

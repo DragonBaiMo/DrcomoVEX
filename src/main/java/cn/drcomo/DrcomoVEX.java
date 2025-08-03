@@ -1,297 +1,296 @@
 package cn.drcomo;
 
-import cn.drcomo.managers.*;
-import org.bukkit.Bukkit;
-import org.bukkit.plugin.PluginDescriptionFile;
-import org.bukkit.plugin.PluginManager;
-import org.bukkit.plugin.java.JavaPlugin;
-import cn.drcomo.api.ServerVariablesAPI;
-
 import cn.drcomo.config.ConfigsManager;
-import cn.drcomo.database.MySQLConnection;
+import cn.drcomo.managers.*;
 import cn.drcomo.listeners.PlayerListener;
-import cn.drcomo.model.internal.UpdateCheckerResult;
+import cn.drcomo.api.ServerVariablesAPI;
 import cn.drcomo.tasks.DataSaveTask;
-import cn.drcomo.utils.ServerVersion;
-import cn.drcomo.corelib.hook.placeholder.PlaceholderAPIUtil;
+import cn.drcomo.database.HikariConnection;
 import cn.drcomo.corelib.util.DebugUtil;
 import cn.drcomo.corelib.config.YamlUtil;
 import cn.drcomo.corelib.async.AsyncTaskManager;
+import cn.drcomo.corelib.message.MessageService;
+import cn.drcomo.corelib.hook.placeholder.PlaceholderAPIUtil;
+import org.bukkit.plugin.java.JavaPlugin;
+import org.bukkit.Bukkit;
 
-
+/**
+ * DrcomoVEX 变量扩展系统 主类
+ * 
+ * 这是一个基于直觉设计的服务器变量管理系统，支持智能类型推断、
+ * 动态表达式计算、周期性重置和全能指令操作。
+ * 
+ * @author BaiMo
+ * @version 1.0.0
+ */
 public class DrcomoVEX extends JavaPlugin {
-
-    public static ServerVersion serverVersion;
-    private final PluginDescriptionFile pdfFile = getDescription();
-    public String version = pdfFile.getVersion();
-
+    
+    private static DrcomoVEX instance;
+    
+    // 核心工具类
+    private DebugUtil logger;
+    private YamlUtil yamlUtil;
+    private AsyncTaskManager asyncTaskManager;
+    private MessageService messageService;
+    private PlaceholderAPIUtil placeholderUtil;
+    
+    // 业务管理器
+    private ConfigsManager configsManager;
     private VariablesManager variablesManager;
     private ServerVariablesManager serverVariablesManager;
     private PlayerVariablesManager playerVariablesManager;
     private MessagesManager messagesManager;
-    private ConfigsManager configsManager;
     private UpdateCheckerManager updateCheckerManager;
-
+    
+    // 数据库连接
+    private HikariConnection database;
+    
+    // 定时任务
     private DataSaveTask dataSaveTask;
-
-    private MySQLConnection mySQLConnection;
-    private DebugUtil logger;
-    private YamlUtil yamlUtil;
-    private PlaceholderAPIUtil placeholderUtil;
-    private cn.drcomo.corelib.message.MessageService messageService;
-    private AsyncTaskManager asyncTaskManager;
-
-    /**
-     * 插件启用时的初始化逻辑。
-     * <p>负责实例化核心库工具、加载配置并注册监听与指令。</p>
-     */
-    public void onEnable(){
-        setVersion();
-
-        this.logger = new DebugUtil(this, DebugUtil.LogLevel.INFO);
-        this.yamlUtil = new YamlUtil(this, logger);
-        this.placeholderUtil = new PlaceholderAPIUtil(this, getName().toLowerCase());
-        // 创建消息服务（默认语言文件路径可根据配置调整）
-        String languagePath = "languages/zh_CN";
-        String keyPrefix = "messages.";
-        this.messageService = new cn.drcomo.corelib.message.MessageService(
-                this,
-                logger,
-                yamlUtil,
-                placeholderUtil,
-                languagePath,
-                keyPrefix
-        );
-        this.asyncTaskManager = new AsyncTaskManager(this, logger);
-
-        this.variablesManager = new VariablesManager(this);
-        this.serverVariablesManager = new ServerVariablesManager(this);
-        this.playerVariablesManager = new PlayerVariablesManager(this);
+    
+    @Override
+    public void onEnable() {
+        instance = this;
+        
+        // 1. 初始化核心工具链
+        initializeCoreTools();
+        
+        // 2. 初始化配置管理
+        initializeConfigs();
+        
+        // 3. 初始化数据库连接
+        initializeDatabase();
+        
+        // 4. 初始化业务管理器
+        initializeManagers();
+        
+        // 5. 注册事件监听器
+        registerListeners();
+        
+        // 6. 注册指令处理器
         registerCommands();
-        registerEvents();
-
-        this.configsManager = new ConfigsManager(this, yamlUtil);
-        this.configsManager.configure();
-
-        // 初始化 API
-        new ServerVariablesAPI(this);
-
-        // -----------------------------
-        // 通过核心库 PlaceholderAPIUtil 注册占位符
-        // 前缀将自动使用在 onEnable 早期创建的 placeholderUtil 标识符
-        // %<plugin>_globalvalue_<variable>%
-        placeholderUtil.register("globalvalue", (player, rawArgs) ->
-                ServerVariablesAPI.getServerVariableValue(rawArgs));
-
-        placeholderUtil.register("globaldisplay", (player, rawArgs) ->
-                ServerVariablesAPI.getServerVariableDisplay(rawArgs));
-
-        placeholderUtil.register("value_otherplayer", (player, rawArgs) -> {
-            int idx = rawArgs.indexOf(":");
-            if (idx == -1) {
-                return "";
-            }
-            String playerName = rawArgs.substring(0, idx);
-            String variable = rawArgs.substring(idx + 1);
-            return ServerVariablesAPI.getPlayerVariableValue(playerName, variable);
-        });
-
-        placeholderUtil.register("display_otherplayer", (player, rawArgs) -> {
-            int idx = rawArgs.indexOf(":");
-            if (idx == -1) {
-                return "";
-            }
-            String playerName = rawArgs.substring(0, idx);
-            String variable = rawArgs.substring(idx + 1);
-            return ServerVariablesAPI.getPlayerVariableDisplay(playerName, variable);
-        });
-
-        placeholderUtil.register("value", (player, rawArgs) -> {
-            if (player == null) {
-                return "";
-            }
-            return ServerVariablesAPI.getPlayerVariableValue(player.getName(), rawArgs);
-        });
-
-        placeholderUtil.register("display", (player, rawArgs) -> {
-            if (player == null) {
-                return "";
-            }
-            return ServerVariablesAPI.getPlayerVariableDisplay(player.getName(), rawArgs);
-        });
-
-        placeholderUtil.register("initial_value", (player, rawArgs) ->
-                ServerVariablesAPI.getVariableInitialValue(rawArgs));
-
-        if(configsManager.getMainConfigManager().isMySQL()){
-            mySQLConnection = new MySQLConnection(this);
-            mySQLConnection.setupMySql();
+        
+        // 7. 启动定时任务
+        startScheduledTasks();
+        
+        // 8. 注册API接口
+        registerAPI();
+        
+        // 9. 检查更新
+        checkForUpdates();
+        
+        logger.info("DrcomoVEX 变量扩展系统已成功启动！");
+        logger.info("版本: 1.0.0 (代号: 直觉)");
+        logger.info("感谢使用 DrcomoVEX - 让变量管理变得直观而强大！");
+    }
+    
+    @Override
+    public void onDisable() {
+        logger.info("正在关闭 DrcomoVEX 变量扩展系统...");
+        
+        // 1. 停止定时任务
+        if (dataSaveTask != null) {
+            dataSaveTask.stop();
         }
-
-        String prefix = messagesManager.getPrefix();
-        logger.info(messagesManager.translate(prefix + " &eHas been enabled! &fVersion: " + version, null));
-        logger.info(messagesManager.translate(prefix + " &eThanks for using my plugin!   &f~Ajneb97", null));
-
-        updateCheckerManager = new UpdateCheckerManager(version);
-        updateMessage(updateCheckerManager.check());
-    }
-
-    /**
-     * 插件卸载时的收尾逻辑。
-     * <p>保存变量数据并输出关闭信息。</p>
-     */
-    public void onDisable(){
-        this.configsManager.saveServerData();
-        this.configsManager.savePlayerData();
-        if(asyncTaskManager != null){
-            asyncTaskManager.shutdown();
+        
+        // 2. 保存所有数据
+        if (variablesManager != null) {
+            variablesManager.saveAllData();
         }
-        logger.info(messagesManager.translate(messagesManager.getPrefix() + " &eHas been disabled! &fVersion: " + version, null));
+        
+        // 3. 关闭数据库连接
+        if (database != null) {
+            database.close();
+        }
+        
+        // 4. 停止文件监听
+        if (yamlUtil != null) {
+            yamlUtil.stopAllWatches();
+        }
+        
+        // 5. 关闭异步任务管理器
+        if (asyncTaskManager != null) {
+            asyncTaskManager.close();
+        }
+        
+        logger.info("DrcomoVEX 已安全关闭，感谢使用！");
     }
-
-    public void setVersion(){
-        String packageName = Bukkit.getServer().getClass().getPackage().getName();
-        String bukkitVersion = Bukkit.getServer().getBukkitVersion().split("-")[0];
-        switch(bukkitVersion){
-            case "1.20.5":
-            case "1.20.6":
-                serverVersion = ServerVersion.v1_20_R4;
-                break;
-            case "1.21":
-            case "1.21.1":
-                serverVersion = ServerVersion.v1_21_R1;
-                break;
-            case "1.21.2":
-            case "1.21.3":
-                serverVersion = ServerVersion.v1_21_R2;
-                break;
-            case "1.21.4":
-                serverVersion = ServerVersion.v1_21_R3;
-                break;
-            case "1.21.5":
-                serverVersion = ServerVersion.v1_21_R4;
-                break;
-            case "1.21.6":
-            case "1.21.7":
-            case "1.21.8":
-                serverVersion = ServerVersion.v1_21_R5;
-                break;
-            default:
-                try{
-                    serverVersion = ServerVersion.valueOf(packageName.replace("org.bukkit.craftbukkit.", ""));
-                }catch(Exception e){
-                    serverVersion = ServerVersion.v1_21_R5;
-                }
+    
+    /**
+     * 初始化核心工具链
+     */
+    private void initializeCoreTools() {
+        // 日志工具
+        logger = new DebugUtil(this, DebugUtil.LogLevel.INFO);
+        logger.setPrefix("&f[&6DrcomoVEX&f] ");
+        
+        // 配置工具
+        yamlUtil = new YamlUtil(this, logger);
+        
+        // 异步任务管理器
+        asyncTaskManager = AsyncTaskManager.newBuilder(this, logger)
+                .poolSize(4)
+                .build();
+        
+        // PlaceholderAPI工具
+        placeholderUtil = new PlaceholderAPIUtil(this, "drcomovex");
+        
+        // 消息服务
+        messageService = new MessageService(
+                this, logger, yamlUtil, placeholderUtil,
+                "messages.yml", "messages"
+        );
+    }
+    
+    /**
+     * 初始化配置管理
+     */
+    private void initializeConfigs() {
+        configsManager = new ConfigsManager(this, logger, yamlUtil);
+        configsManager.initialize();
+    }
+    
+    /**
+     * 初始化数据库连接
+     */
+    private void initializeDatabase() {
+        database = new HikariConnection(this, logger, configsManager);
+        database.initialize();
+    }
+    
+    /**
+     * 初始化业务管理器
+     */
+    private void initializeManagers() {
+        // 消息管理器
+        messagesManager = new MessagesManager(this, logger, messageService);
+        
+        // 变量管理器 (核心)
+        variablesManager = new VariablesManager(
+                this, logger, yamlUtil, asyncTaskManager, 
+                placeholderUtil, database
+        );
+        
+        // 服务器变量管理器
+        serverVariablesManager = new ServerVariablesManager(
+                this, logger, variablesManager, database
+        );
+        
+        // 玩家变量管理器
+        playerVariablesManager = new PlayerVariablesManager(
+                this, logger, variablesManager, database
+        );
+        
+        // 更新检查管理器
+        updateCheckerManager = new UpdateCheckerManager(
+                this, logger, asyncTaskManager
+        );
+        
+        // 初始化所有管理器
+        messagesManager.initialize();
+        variablesManager.initialize();
+        serverVariablesManager.initialize();
+        playerVariablesManager.initialize();
+        updateCheckerManager.initialize();
+    }
+    
+    /**
+     * 注册事件监听器
+     */
+    private void registerListeners() {
+        Bukkit.getPluginManager().registerEvents(
+                new PlayerListener(this, logger, playerVariablesManager),
+                this
+        );
+    }
+    
+    /**
+     * 注册指令处理器
+     */
+    private void registerCommands() {
+        MainCommand mainCommand = new MainCommand(
+                this, logger, messagesManager, variablesManager,
+                serverVariablesManager, playerVariablesManager
+        );
+        getCommand("vex").setExecutor(mainCommand);
+        getCommand("vex").setTabCompleter(mainCommand);
+    }
+    
+    /**
+     * 启动定时任务
+     */
+    private void startScheduledTasks() {
+        dataSaveTask = new DataSaveTask(
+                this, logger, variablesManager, 
+                configsManager.getMainConfig()
+        );
+        dataSaveTask.start();
+    }
+    
+    /**
+     * 注册API接口
+     */
+    private void registerAPI() {
+        ServerVariablesAPI api = new ServerVariablesAPI(
+                variablesManager, serverVariablesManager, playerVariablesManager
+        );
+        
+        // 注册 PlaceholderAPI 扩展（PlaceholderAPIUtil 已自行处理 PAPI 是否可用）
+        api.registerPlaceholders(placeholderUtil);
+    }
+    
+    /**
+     * 检查更新
+     */
+    private void checkForUpdates() {
+        if (configsManager.getMainConfig().getBoolean("settings.check-updates", true)) {
+            updateCheckerManager.checkForUpdates();
         }
     }
+    
+    // Getter方法
+    public static DrcomoVEX getInstance() {
+        return instance;
+    }
+    
 
-    public VariablesManager getVariablesManager() {
-        return variablesManager;
-    }
-
-    public ServerVariablesManager getServerVariablesManager() {
-        return serverVariablesManager;
-    }
-
-    public MessagesManager getMessagesManager() {
-        return messagesManager;
-    }
-
-    public void setMessagesManager(MessagesManager messagesManager) {
-        this.messagesManager = messagesManager;
-    }
-
-    public ConfigsManager getConfigsManager() {
-        return configsManager;
-    }
-
-    public PlayerVariablesManager getPlayerVariablesManager() {
-        return playerVariablesManager;
-    }
-    public void registerEvents() {
-        PluginManager pm = getServer().getPluginManager();
-        pm.registerEvents(new PlayerListener(this), this);
-    }
-
-    public DataSaveTask getDataSaveTask() {
-        return dataSaveTask;
-    }
-
-    public void setDataSaveTask(DataSaveTask dataSaveTask) {
-        this.dataSaveTask = dataSaveTask;
-    }
-    public UpdateCheckerManager getUpdateCheckerManager() {
-        return updateCheckerManager;
-    }
-
-    public void registerCommands(){
-        this.getCommand("servervariables").setExecutor(new MainCommand(this));
-    }
-
-    public MySQLConnection getMySQLConnection() {
-        return mySQLConnection;
-    }
-
-    /**
-     * 获取调试日志工具。
-     *
-     * @return 核心库提供的调试日志实例
-     */
-    public DebugUtil getDebug() {
-        return logger;
-    }
-
-    /**
-     * 获取 YAML 配置工具实例。
-     *
-     * @return {@link YamlUtil} 实例
-     */
     public YamlUtil getYamlUtil() {
         return yamlUtil;
     }
-
-    /**
-     * 获取占位符解析工具。
-     *
-     * @return {@link PlaceholderAPIUtil} 实例
-     */
-    public PlaceholderAPIUtil getPlaceholderUtil() {
-        return placeholderUtil;
-    }
-
-    /**
-     * 获取消息服务实例。
-     *
-     * @return MessageService 实例
-     */
-    public cn.drcomo.corelib.message.MessageService getMessageService() {
-        return messageService;
-    }
-
-    /**
-     * 获取异步任务管理器。
-     *
-     * @return 异步任务管理器实例
-     */
+    
     public AsyncTaskManager getAsyncTaskManager() {
         return asyncTaskManager;
     }
-
-    /**
-     * 根据更新检查结果输出提示信息。
-     *
-     * @param result 更新检查返回结果
-     */
-    public void updateMessage(UpdateCheckerResult result){
-        if(!result.isError()){
-            String latestVersion = result.getLatestVersion();
-            if(latestVersion != null){
-                logger.info(messagesManager.translate("&cThere is a new version available. &e(&7" + latestVersion + "&e)", null));
-                logger.info(messagesManager.translate("&cYou can download it at: &fhttps://modrinth.com/plugin/servervariables", null));
-            }
-        }else{
-            logger.error(messagesManager.translate(messagesManager.getPrefix() + " &cError while checking update.", null));
-        }
-
+    
+    public MessageService getMessageService() {
+        return messageService;
+    }
+    
+    public PlaceholderAPIUtil getPlaceholderUtil() {
+        return placeholderUtil;
+    }
+    
+    public ConfigsManager getConfigsManager() {
+        return configsManager;
+    }
+    
+    public VariablesManager getVariablesManager() {
+        return variablesManager;
+    }
+    
+    public ServerVariablesManager getServerVariablesManager() {
+        return serverVariablesManager;
+    }
+    
+    public PlayerVariablesManager getPlayerVariablesManager() {
+        return playerVariablesManager;
+    }
+    
+    public MessagesManager getMessagesManager() {
+        return messagesManager;
+    }
+    
+    public HikariConnection getDatabase() {
+        return database;
     }
 }

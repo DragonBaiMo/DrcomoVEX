@@ -1,85 +1,285 @@
 package cn.drcomo.managers;
 
-import cn.drcomo.corelib.color.ColorUtil;
-import cn.drcomo.corelib.hook.placeholder.PlaceholderAPIUtil;
+import cn.drcomo.DrcomoVEX;
+import cn.drcomo.corelib.util.DebugUtil;
+import cn.drcomo.corelib.message.MessageService;
 import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
 
+import java.util.List;
+import java.util.Map;
+
 /**
- * 负责处理消息前缀、颜色转换与占位符解析的工具管理器。
- * <p>基于核心库的 {@link ColorUtil} 以及 {@link PlaceholderAPIUtil}，
- * 为玩家或控制台发送经过颜色与占位符解析的消息。</p>
+ * 消息管理器
+ * 
+ * 统一管理插件的所有消息发送，支持多语言和占位符解析。
+ * 
+ * @author BaiMo
  */
 public class MessagesManager {
-
-    private final String prefix;
-    private final PlaceholderAPIUtil placeholderUtil;
-    private final cn.drcomo.corelib.message.MessageService messageService;
-
-    /**
-     * 使用指定前缀与 PAPI 工具创建消息管理器。
-     *
-     * @param prefix          消息前缀，支持传统与十六进制颜色代码
-     * @param placeholderUtil 核心库提供的占位符解析工具
-     */
-    public MessagesManager(String prefix, PlaceholderAPIUtil placeholderUtil, cn.drcomo.corelib.message.MessageService messageService) {
-        this.prefix = ColorUtil.translateColors(prefix);
-        this.placeholderUtil = placeholderUtil;
+    
+    private final DrcomoVEX plugin;
+    private final DebugUtil logger;
+    private final MessageService messageService;
+    
+    public MessagesManager(DrcomoVEX plugin, DebugUtil logger, MessageService messageService) {
+        this.plugin = plugin;
+        this.logger = logger;
         this.messageService = messageService;
     }
-
+    
     /**
-     * 兼容旧代码的构造函数，MessageService 置空，仅用于过渡。
+     * 初始化消息管理器
      */
-    public MessagesManager(String prefix, PlaceholderAPIUtil placeholderUtil) {
-        this(prefix, placeholderUtil, null);
-    }
-
-    /**
-     * 向接收者发送消息，可选择是否附带前缀。
-     *
-     * @param sender     接收消息的命令发送者
-     * @param message    待发送的消息内容
-     * @param withPrefix 是否在消息前附带统一前缀
-     */
-    public void sendMessage(CommandSender sender, String message, boolean withPrefix) {
-        if (message == null || message.isEmpty()) {
-            return;
+    public void initialize() {
+        logger.info("正在初始化消息管理器...");
+        
+        try {
+            // 消息服务已经在主类中初始化
+            
+            // 注册内部占位符
+            registerInternalPlaceholders();
+            
+            logger.info("消息管理器初始化完成！");
+        } catch (Exception e) {
+            logger.error("消息管理器初始化失败！", e);
         }
-        if (messageService != null) {
-            // 当已接入 MessageService，使用其 sendRaw 处理前缀与颜色
-            String msg = withPrefix ? this.prefix + message : message;
-            messageService.sendRaw(sender, msg);
-            return;
-        }
-        // 旧实现
-        String msg = withPrefix ? this.prefix + message : message;
-        Player player = sender instanceof Player ? (Player) sender : null;
-        sender.sendMessage(translate(msg, player));
     }
-
+    
     /**
-     * 对消息执行占位符解析并转换颜色。
-     *
-     * @param message 原始消息文本
-     * @param player  用于解析占位符的玩家对象，可为 {@code null}
-     * @return 处理后的彩色文本
+     * 重载消息配置
      */
-    public String translate(String message, Player player) {
-        String result = message;
-        if (player != null) {
-            result = placeholderUtil.parse(player, result);
+    public void reload() {
+        logger.info("正在重载消息配置...");
+        
+        try {
+            // MessageService 将自动重载配置文件
+            logger.info("消息配置重载完成！");
+        } catch (Exception e) {
+            logger.error("消息配置重载失败！", e);
         }
-        return ColorUtil.translateColors(result);
     }
-
+    
     /**
-     * 获取当前统一前缀。
-     *
-     * @return 已转换颜色代码的前缀文本
+     * 注册内部占位符
      */
-    public String getPrefix() {
-        return prefix;
+    private void registerInternalPlaceholders() {
+        // 插件基本信息
+        messageService.registerInternalPlaceholder("plugin_name", (player, args) -> plugin.getName());
+        messageService.registerInternalPlaceholder("plugin_version", (player, args) -> plugin.getDescription().getVersion());
+        messageService.registerInternalPlaceholder("plugin_author", (player, args) -> "BaiMo");
+        
+        // 系统信息
+        messageService.registerInternalPlaceholder("server_name", (player, args) -> plugin.getServer().getName());
+        messageService.registerInternalPlaceholder("server_version", (player, args) -> plugin.getServer().getVersion());
+        messageService.registerInternalPlaceholder("online_players", (player, args) -> String.valueOf(plugin.getServer().getOnlinePlayers().size()));
+        messageService.registerInternalPlaceholder("max_players", (player, args) -> String.valueOf(plugin.getServer().getMaxPlayers()));
+        
+        // 变量统计
+        messageService.registerInternalPlaceholder("total_variables", (player, args) -> 
+                String.valueOf(plugin.getVariablesManager().getAllVariableKeys().size()));
+        messageService.registerInternalPlaceholder("database_type", (player, args) -> 
+                plugin.getDatabase().getDatabaseType().toUpperCase());
+        messageService.registerInternalPlaceholder("database_status", (player, args) -> 
+                plugin.getDatabase().isConnectionValid() ? "正常" : "异常");
+        
+        // 时间信息
+        messageService.registerInternalPlaceholder("current_time", (player, args) -> 
+                String.valueOf(System.currentTimeMillis()));
+        messageService.registerInternalPlaceholder("formatted_time", (player, args) -> 
+                new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss").format(new java.util.Date()));
+        
+        logger.debug("已注册所有内部占位符");
+    }
+    
+    /**
+     * 发送单条消息
+     */
+    public void sendMessage(CommandSender sender, String messageKey) {
+        sendMessage(sender, messageKey, null);
+    }
+    
+    /**
+     * 发送单条消息并替换占位符
+     */
+    public void sendMessage(CommandSender sender, String messageKey, Map<String, String> placeholders) {
+        try {
+            if (sender instanceof Player) {
+                messageService.send((Player) sender, messageKey, placeholders);
+            } else {
+                // 对于控制台，直接发送无颜色码的消息
+                String message = messageService.parse(messageKey, null, placeholders);
+                if (message != null && !message.trim().isEmpty()) {
+                    // 移除颜色码
+                    message = message.replaceAll("§[0-9a-fk-or]", "");
+                    sender.sendMessage(message);
+                }
+            }
+        } catch (Exception e) {
+            logger.error("发送消息失败: " + messageKey, e);
+            // 发送备用消息
+            sender.sendMessage("§c消息发送失败，请联系管理员");
+        }
+    }
+    
+    /**
+     * 发送多条消息
+     */
+    public void sendMessageList(CommandSender sender, String messageKey) {
+        sendMessageList(sender, messageKey, null);
+    }
+    
+    /**
+     * 发送多条消息并替换占位符
+     */
+    public void sendMessageList(CommandSender sender, String messageKey, Map<String, String> placeholders) {
+        try {
+            if (sender instanceof Player) {
+                messageService.sendList((Player) sender, messageKey, placeholders);
+            } else {
+                // 对于控制台，获取列表消息并逐条发送
+                List<String> messages = messageService.parseList(messageKey, null, placeholders);
+                if (messages != null && !messages.isEmpty()) {
+                    for (String message : messages) {
+                        if (message != null && !message.trim().isEmpty()) {
+                            // 移除颜色码
+                            message = message.replaceAll("§[0-9a-fk-or]", "");
+                            sender.sendMessage(message);
+                        }
+                    }
+                }
+            }
+        } catch (Exception e) {
+            logger.error("发送消息列表失败: " + messageKey, e);
+            // 发送备用消息
+            sender.sendMessage("§c消息发送失败，请联系管理员");
+        }
+    }
+    
+    /**
+     * 发送 ActionBar 消息
+     */
+    public void sendActionBar(Player player, String messageKey) {
+        sendActionBar(player, messageKey, null);
+    }
+    
+    /**
+     * 发送 ActionBar 消息并替换占位符
+     */
+    public void sendActionBar(Player player, String messageKey, Map<String, String> placeholders) {
+        try {
+            messageService.sendActionBar(player, messageKey, placeholders);
+        } catch (Exception e) {
+            logger.error("发送 ActionBar 消息失败: " + messageKey, e);
+        }
+    }
+    
+    /**
+     * 发送 Title 消息
+     */
+    public void sendTitle(Player player, String titleKey, String subtitleKey) {
+        sendTitle(player, titleKey, subtitleKey, null);
+    }
+    
+    /**
+     * 发送 Title 消息并替换占位符
+     */
+    public void sendTitle(Player player, String titleKey, String subtitleKey, Map<String, String> placeholders) {
+        try {
+            messageService.sendTitle(player, titleKey, subtitleKey, placeholders);
+        } catch (Exception e) {
+            logger.error("发送 Title 消息失败: " + titleKey + ", " + subtitleKey, e);
+        }
+    }
+    
+    /**
+     * 只解析消息不发送
+     */
+    public String parseMessage(Player player, String messageKey) {
+        return parseMessage(player, messageKey, null);
+    }
+    
+    /**
+     * 只解析消息不发送并替换占位符
+     */
+    public String parseMessage(Player player, String messageKey, Map<String, String> placeholders) {
+        try {
+            return messageService.parse(messageKey, player, placeholders);
+        } catch (Exception e) {
+            logger.error("解析消息失败: " + messageKey, e);
+            return "§c消息解析失败";
+        }
+    }
+    
+    /**
+     * 解析消息列表
+     */
+    public List<String> parseMessageList(Player player, String messageKey) {
+        return parseMessageList(player, messageKey, null);
+    }
+    
+    /**
+     * 解析消息列表并替换占位符
+     */
+    public List<String> parseMessageList(Player player, String messageKey, Map<String, String> placeholders) {
+        try {
+            return messageService.parseList(messageKey, player, placeholders);
+        } catch (Exception e) {
+            logger.error("解析消息列表失败: " + messageKey, e);
+            return java.util.Collections.singletonList("§c消息解析失败");
+        }
+    }
+    
+    /**
+     * 检查消息是否存在
+     */
+    public boolean hasMessage(String messageKey) {
+        try {
+            String message = messageService.parse(messageKey, null, null);
+            return message != null && !message.trim().isEmpty();
+        } catch (Exception e) {
+            return false;
+        }
+    }
+    
+    /**
+     * 向所有在线玩家广播消息
+     */
+    public void broadcast(String messageKey) {
+        broadcast(messageKey, null);
+    }
+    
+    /**
+     * 向所有在线玩家广播消息并替换占位符
+     */
+    public void broadcast(String messageKey, Map<String, String> placeholders) {
+        for (Player player : plugin.getServer().getOnlinePlayers()) {
+            sendMessage(player, messageKey, placeholders);
+        }
+    }
+    
+    /**
+     * 向有权限的玩家广播消息
+     */
+    public void broadcastToPermission(String permission, String messageKey) {
+        broadcastToPermission(permission, messageKey, null);
+    }
+    
+    /**
+     * 向有权限的玩家广播消息并替换占位符
+     */
+    public void broadcastToPermission(String permission, String messageKey, Map<String, String> placeholders) {
+        for (Player player : plugin.getServer().getOnlinePlayers()) {
+            if (player.hasPermission(permission)) {
+                sendMessage(player, messageKey, placeholders);
+            }
+        }
+    }
+    
+    /**
+     * 获取 MessageService 实例
+     */
+    public MessageService getMessageService() {
+        return messageService;
     }
 }
-

@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__ide__getDiagnostics",
+      "Bash(mvn:*)",
+      "Bash(rm:*)",
+      "Bash(tail:*)",
+      "Bash(for file in *.java)",
+      "Bash(do echo \"Processing $file\")",
+      "Bash(done)",
+      "Bash(rg:*)",
+      "Bash(cat:*)"
+    ],
+    "deny": []
+  }
+}
