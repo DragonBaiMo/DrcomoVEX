@@ -8,13 +8,18 @@ import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 import org.bukkit.configuration.file.FileConfiguration;
 
+import java.io.IOException;
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.stream.Collectors;
 
 /**
  * Hikari数据库连接管理器
@@ -35,32 +40,8 @@ public class HikariConnection {
     private String databaseType;
 
     // SQL 语句
-    private static final List<String> INIT_SCRIPTS = Arrays.asList(
-        // 玩家变量表
-        "CREATE TABLE IF NOT EXISTS player_variables (" +
-        "    id INTEGER PRIMARY KEY AUTOINCREMENT," +
-        "    player_uuid VARCHAR(36) NOT NULL," +
-        "    variable_key VARCHAR(255) NOT NULL," +
-        "    value TEXT," +
-        "    created_at BIGINT NOT NULL," +
-        "    updated_at BIGINT NOT NULL," +
-        "    UNIQUE(player_uuid, variable_key)" +
-        ")",
-
-        // 服务器变量表
-        "CREATE TABLE IF NOT EXISTS server_variables (" +
-        "    id INTEGER PRIMARY KEY AUTOINCREMENT," +
-        "    variable_key VARCHAR(255) NOT NULL UNIQUE," +
-        "    value TEXT," +
-        "    created_at BIGINT NOT NULL," +
-        "    updated_at BIGINT NOT NULL" +
-        ")",
-
-        // 索引优化
-        "CREATE INDEX IF NOT EXISTS idx_player_variables_uuid ON player_variables(player_uuid)",
-        "CREATE INDEX IF NOT EXISTS idx_player_variables_key ON player_variables(variable_key)",
-        "CREATE INDEX IF NOT EXISTS idx_server_variables_key ON server_variables(variable_key)"
-    );
+    // 初始化脚本列表，仅包含 schema.sql
+    private static final List<String> INIT_SCRIPTS = Collections.singletonList("schema.sql");
     
     public HikariConnection(DrcomoVEX plugin, DebugUtil logger, ConfigsManager configsManager) {
         this.plugin = plugin;
@@ -174,17 +155,44 @@ public class HikariConnection {
         
         // MySQL 需要手动初始化表
         try (Connection connection = getConnection()) {
-            for (String sql : INIT_SCRIPTS) {
-                // 将 SQLite 的 SQL 转换为 MySQL 兼容的格式
-                String mysqlSql = convertToMySQLSyntax(sql);
-                try (PreparedStatement stmt = connection.prepareStatement(mysqlSql)) {
-                    stmt.executeUpdate();
+            for (String script : INIT_SCRIPTS) {
+                List<String> sqlList = loadSqlStatements(script);
+                for (String sql : sqlList) {
+                    // 将 SQLite 的 SQL 转换为 MySQL 兼容的格式
+                    String mysqlSql = convertToMySQLSyntax(sql);
+                    try (PreparedStatement stmt = connection.prepareStatement(mysqlSql)) {
+                        stmt.executeUpdate();
+                    }
                 }
             }
             logger.debug("MySQL 表结构初始化完成");
         } catch (SQLException e) {
             logger.error("初始化 MySQL 表结构失败", e);
             throw new RuntimeException("初始化表结构失败", e);
+        }
+    }
+
+    /**
+     * 从脚本文件读取 SQL 语句
+     */
+    private List<String> loadSqlStatements(String script) {
+        if (!script.endsWith(".sql")) {
+            return Collections.singletonList(script);
+        }
+
+        try (InputStream in = plugin.getResource(script)) {
+            if (in == null) {
+                logger.error("找不到初始化脚本: " + script);
+                return Collections.emptyList();
+            }
+            String content = new String(in.readAllBytes(), StandardCharsets.UTF_8);
+            return Arrays.stream(content.split(";"))
+                    .map(String::trim)
+                    .filter(s -> !s.isEmpty())
+                    .collect(Collectors.toList());
+        } catch (IOException e) {
+            logger.error("读取初始化脚本失败: " + script, e);
+            return Collections.emptyList();
         }
     }
     
