@@ -862,10 +862,17 @@ public class VariablesManager {
             if (validatedResult != null) {
                 logger.debug("加法结果验证通过: " + validatedResult);
                 return validatedResult;
-            } else {
-                logger.warn("加法结果验证失败: " + result + " 变量: " + variable.getKey());
-                return null;
             }
+
+            // 尝试钳制到边界值
+            String clamped = clampValueToLimitations(variable, result, player);
+            if (variable.getLimitations() != null && validateConstraints(clamped, variable.getLimitations(), player)) {
+                logger.debug("加法结果已钳制为边界值: " + clamped);
+                return clamped;
+            }
+
+            logger.warn("加法结果验证失败: " + result + " 变量: " + variable.getKey());
+            return null;
             
         } catch (Exception e) {
             logger.error("加法操作失败: " + currentValue + " + " + addValue, e);
@@ -919,10 +926,17 @@ public class VariablesManager {
             if (validatedResult != null) {
                 logger.debug("删除结果验证通过: " + validatedResult);
                 return validatedResult;
-            } else {
-                logger.warn("删除结果验证失败: " + result + " 变量: " + variable.getKey());
-                return null;
             }
+
+            // 尝试钳制到边界值
+            String clamped = clampValueToLimitations(variable, result, player);
+            if (variable.getLimitations() != null && validateConstraints(clamped, variable.getLimitations(), player)) {
+                logger.debug("删除结果已钳制为边界值: " + clamped);
+                return clamped;
+            }
+
+            logger.warn("删除结果验证失败: " + result + " 变量: " + variable.getKey());
+            return null;
 
         } catch (Exception e) {
             logger.error("删除操作失败: " + currentValue + " - " + removeValue, e);
@@ -1205,16 +1219,20 @@ public class VariablesManager {
                             minExpr = limitations.getMinValue(); // 使用原始值
                         }
                         logger.debug("最小值约束表达式: " + limitations.getMinValue() + " -> " + minExpr);
-                        try {
-                            double minValue = Double.parseDouble(minExpr);
-                            logger.debug("数值约束检查: " + numValue + " >= " + minValue + " ? " + (numValue >= minValue));
-                            if (numValue < minValue) {
-                                logger.debug("值小于最小约束: " + numValue + " < " + minValue);
-                                return false;
+                        if (minExpr != null) {
+                            try {
+                                double minValue = Double.parseDouble(minExpr);
+                                logger.debug("数值约束检查: " + numValue + " >= " + minValue + " ? " + (numValue >= minValue));
+                                if (numValue < minValue) {
+                                    logger.debug("值小于最小约束: " + numValue + " < " + minValue);
+                                    return false;
+                                }
+                            } catch (NumberFormatException e) {
+                                logger.warn("最小值约束解析失败，跳过约束检查: " + minExpr + ", 错误: " + e.getMessage());
+                                // 解析失败时不阻止操作，仅记录警告
                             }
-                        } catch (NumberFormatException e) {
-                            logger.warn("最小值约束解析失败，跳过约束检查: " + minExpr + ", 错误: " + e.getMessage());
-                            // 解析失败时不阻止操作，仅记录警告
+                        } else {
+                            logger.warn("最小值约束解析结果为空，跳过约束检查");
                         }
                     }
                     
@@ -1228,16 +1246,20 @@ public class VariablesManager {
                             maxExpr = limitations.getMaxValue(); // 使用原始值
                         }
                         logger.debug("最大值约束表达式: " + limitations.getMaxValue() + " -> " + maxExpr);
-                        try {
-                            double maxValue = Double.parseDouble(maxExpr);
-                            logger.debug("数值约束检查: " + numValue + " <= " + maxValue + " ? " + (numValue <= maxValue));
-                            if (numValue > maxValue) {
-                                logger.debug("值大于最大约束: " + numValue + " > " + maxValue);
-                                return false;
+                        if (maxExpr != null) {
+                            try {
+                                double maxValue = Double.parseDouble(maxExpr);
+                                logger.debug("数值约束检查: " + numValue + " <= " + maxValue + " ? " + (numValue <= maxValue));
+                                if (numValue > maxValue) {
+                                    logger.debug("值大于最大约束: " + numValue + " > " + maxValue);
+                                    return false;
+                                }
+                            } catch (NumberFormatException e) {
+                                logger.warn("最大值约束解析失败，跳过约束检查: " + maxExpr + ", 错误: " + e.getMessage());
+                                // 解析失败时不阻止操作，仅记录警告
                             }
-                        } catch (NumberFormatException e) {
-                            logger.warn("最大值约束解析失败，跳过约束检查: " + maxExpr + ", 错误: " + e.getMessage());
-                            // 解析失败时不阻止操作，仅记录警告
+                        } else {
+                            logger.warn("最大值约束解析结果为空，跳过约束检查");
                         }
                     }
                 } catch (NumberFormatException e) {
@@ -1264,11 +1286,15 @@ public class VariablesManager {
                         logger.warn("最小长度表达式解析异常: " + limitations.getMinValue() + ", 错误: " + e.getMessage());
                         minExpr = limitations.getMinValue();
                     }
-                    try {
-                        minLength = (int) Double.parseDouble(minExpr);
-                        logger.debug("解析得到列表最小长度: " + minLength);
-                    } catch (NumberFormatException e) {
-                        logger.warn("最小长度转换失败，忽略: " + minExpr + ", 错误: " + e.getMessage());
+                    if (minExpr != null) {
+                        try {
+                            minLength = (int) Double.parseDouble(minExpr);
+                            logger.debug("解析得到列表最小长度: " + minLength);
+                        } catch (NumberFormatException e) {
+                            logger.warn("最小长度转换失败，忽略: " + minExpr + ", 错误: " + e.getMessage());
+                        }
+                    } else {
+                        logger.warn("最小长度解析结果为空，忽略最小长度约束");
                     }
                 }
                 if (maxLength == null && limitations.getMaxValue() != null) {
@@ -1280,11 +1306,15 @@ public class VariablesManager {
                         logger.warn("最大长度表达式解析异常: " + limitations.getMaxValue() + ", 错误: " + e.getMessage());
                         maxExpr = limitations.getMaxValue();
                     }
-                    try {
-                        maxLength = (int) Double.parseDouble(maxExpr);
-                        logger.debug("解析得到列表最大长度: " + maxLength);
-                    } catch (NumberFormatException e) {
-                        logger.warn("最大长度转换失败，忽略: " + maxExpr + ", 错误: " + e.getMessage());
+                    if (maxExpr != null) {
+                        try {
+                            maxLength = (int) Double.parseDouble(maxExpr);
+                            logger.debug("解析得到列表最大长度: " + maxLength);
+                        } catch (NumberFormatException e) {
+                            logger.warn("最大长度转换失败，忽略: " + maxExpr + ", 错误: " + e.getMessage());
+                        }
+                    } else {
+                        logger.warn("最大长度解析结果为空，忽略最大长度约束");
                     }
                 }
 
