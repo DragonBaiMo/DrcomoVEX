@@ -242,7 +242,7 @@ public class DrcomoVEX extends JavaPlugin {
      */
     private void registerAPI() {
         ServerVariablesAPI api = new ServerVariablesAPI(
-                variablesManager, serverVariablesManager, playerVariablesManager
+                logger, variablesManager, serverVariablesManager, playerVariablesManager
         );
         
         // 注册 PlaceholderAPI 扩展（PlaceholderAPIUtil 已自行处理 PAPI 是否可用）
