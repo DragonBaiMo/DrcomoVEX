@@ -529,14 +529,14 @@ public class VariablesManager {
             if (variable.getScope().equals("server")) {
                 // 服务器变量
                 database.executeUpdateAsync(
-                    "INSERT OR REPLACE INTO server_variables (variable_key, value, updated_at) VALUES (?, ?, ?)",
-                    variable.getKey(), value, System.currentTimeMillis()
+                    "INSERT OR REPLACE INTO server_variables (variable_key, value, created_at, updated_at) VALUES (?, ?, ?, ?)",
+                    variable.getKey(), value, System.currentTimeMillis(), System.currentTimeMillis()
                 ).join();
             } else {
                 // 玩家变量
                 database.executeUpdateAsync(
-                    "INSERT OR REPLACE INTO player_variables (player_uuid, variable_key, value, updated_at) VALUES (?, ?, ?, ?)",
-                    player.getUniqueId().toString(), variable.getKey(), value, System.currentTimeMillis()
+                    "INSERT OR REPLACE INTO player_variables (player_uuid, variable_key, value, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+                    player.getUniqueId().toString(), variable.getKey(), value, System.currentTimeMillis(), System.currentTimeMillis()
                 ).join();
             }
             

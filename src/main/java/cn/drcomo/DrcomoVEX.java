@@ -143,7 +143,7 @@ public class DrcomoVEX extends JavaPlugin {
         // 消息服务
         messageService = new MessageService(
                 this, logger, yamlUtil, placeholderUtil,
-                "messages.yml", "messages."
+                "messages", "messages."
         );
     }
     
