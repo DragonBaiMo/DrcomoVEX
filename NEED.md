@@ -436,6 +436,49 @@ public interface MetricsUtil {
 
 ---
 
+## 12. 工具类增强
+
+### 12.1 NumberUtil 默认解析支持
+
+**需求描述：** 提供 `parseInt` 与 `parseDouble` 方法，可指定默认值以避免格式异常。
+
+**原始位置与用途：** `VariablesManager` 中在执行加减操作及校验时需要安全解析字符串数值。
+
+**接口建议：**
+```java
+public final class NumberUtil {
+    public static int parseInt(String input, int defaultValue);
+    public static double parseDouble(String input, double defaultValue);
+}
+```
+
+### 12.2 DebugUtil 异常调试方法
+
+**需求描述：** 调试级别日志需要支持附带异常堆栈，便于排查问题。
+
+**原始位置与用途：** `VariablesManager#getStoredValue` 等场景希望在 DEBUG 级别输出异常信息。
+
+**接口建议：**
+```java
+public void debug(String msg, Throwable t);
+```
+
+### 12.3 AsyncTaskManager CompletableFuture 支持
+
+**需求描述：** 业务层常需链式异步操作，目前 `submitAsync` 仅返回 `Future`，不便于后续处理。
+
+**原始位置与用途：** `VariablesManager`、`UpdateCheckerManager` 等方法需要返回 `CompletableFuture` 以供继续链式调用。
+
+**接口建议：**
+```java
+public interface AsyncTaskManager {
+    <T> CompletableFuture<T> supplyAsync(Supplier<T> task);
+    CompletableFuture<Void> runAsync(Runnable task);
+}
+```
+
+---
+
 **文档版本：** 1.0.0  
 **创建日期：** 2025-01-03  
 **作者：** BaiMo  

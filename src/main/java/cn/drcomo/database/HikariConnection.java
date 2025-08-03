@@ -203,11 +203,10 @@ public class HikariConnection {
      * 获取数据库连接
      */
     public Connection getConnection() throws SQLException {
-        if ("sqlite".equals(databaseType)) {
-            return sqliteDB.getConnection();
-        } else {
+        if ("mysql".equals(databaseType)) {
             return dataSource.getConnection();
         }
+        throw new UnsupportedOperationException("SQLite 不提供直接连接获取，请使用异步API");
     }
     
     /**
@@ -321,6 +320,10 @@ public class HikariConnection {
      * 检查连接是否有效
      */
     public boolean isConnectionValid() {
+        if ("sqlite".equals(databaseType)) {
+            return true;
+        }
+
         try (Connection conn = getConnection()) {
             return conn != null && !conn.isClosed() && conn.isValid(5);
         } catch (SQLException e) {
