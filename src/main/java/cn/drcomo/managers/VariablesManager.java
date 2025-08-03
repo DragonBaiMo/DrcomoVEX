@@ -45,6 +45,9 @@ public class VariablesManager {
     private final ConcurrentHashMap<String, CachedValue> valueCache = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, CachedExpression> expressionCache = new ConcurrentHashMap<>();
     
+    // 线程本地变量，用于在约束验证过程中传递当前变量键
+    private final ThreadLocal<String> currentValidatingVariable = new ThreadLocal<>();
+    
     // 安全限制
     private static final int MAX_RECURSION_DEPTH = 10;
     private static final int MAX_EXPRESSION_LENGTH = 1000;
@@ -172,6 +175,8 @@ public class VariablesManager {
      */
     private Variable parseVariableDefinition(String key, ConfigurationSection section) {
         Variable.Builder builder = new Variable.Builder(key);
+        // 提前创建 Limitations.Builder，便于在后续逻辑中随时引用
+        Limitations.Builder limitBuilder = new Limitations.Builder();
         
         // 基本信息 - 处理数字和字符串类型的约束值
         String minValue = null;
@@ -204,13 +209,30 @@ public class VariablesManager {
             ValueType valueType = ValueType.fromString(typeStr);
             if (valueType != null) {
                 builder.valueType(valueType);
+                // 当值类型为 LIST 且用户在根级别使用了 min/max 时，
+                // 默认将其视为对列表长度的约束（兼容历史配置）
+                if (valueType == ValueType.LIST) {
+                    if (minValue != null && !minValue.trim().isEmpty()) {
+                        try {
+                            limitBuilder.minLength(Integer.parseInt(minValue.trim()));
+                        } catch (NumberFormatException ignore) {
+                            logger.debug("min 参数无法转换为整数，跳过列表最小长度约束: " + minValue);
+                        }
+                    }
+                    if (maxValue != null && !maxValue.trim().isEmpty()) {
+                        try {
+                            limitBuilder.maxLength(Integer.parseInt(maxValue.trim()));
+                        } catch (NumberFormatException ignore) {
+                            logger.debug("max 参数无法转换为整数，跳过列表最大长度约束: " + maxValue);
+                        }
+                    }
+                }
             } else {
                 logger.warn("未知的值类型: " + typeStr + " 在变量: " + key);
             }
         }
         
-        // 构建 Limitations 对象（合并根级别约束和 limitations 节约束）
-        Limitations.Builder limitBuilder = new Limitations.Builder();
+        // Limitations.Builder 已在方法开头初始化
         
         // 设置根级别的 min/max 约束
         if (minValue != null && !minValue.trim().isEmpty()) {
@@ -826,6 +848,9 @@ public class VariablesManager {
                     break;
             }
             
+            // 根据限制条件自动钳制结果
+            result = clampValueToLimitations(variable, result, player);
+            
             // 验证结果
             String validatedResult = processAndValidateValue(variable, result, player);
             if (validatedResult != null) {
@@ -882,6 +907,9 @@ public class VariablesManager {
                     result = currentValue.replace(removeValue, "");
                     break;
             }
+            
+            // 根据限制条件自动钳制结果
+            result = clampValueToLimitations(variable, result, null);
             
             return result;
             
@@ -1010,6 +1038,13 @@ public class VariablesManager {
                 }
                 
                 depth++;
+            }
+            
+            // 额外调试信息
+            if (result == null || result.trim().isEmpty()) {
+                logger.debug("表达式解析结果为空，原始表达式: " + expression);
+            } else if (containsPlaceholders(result)) {
+                logger.debug("解析后仍包含未解析占位符: " + result + " (原始: " + expression + ")");
             }
             
             // 缓存结果
@@ -1201,17 +1236,37 @@ public class VariablesManager {
                 }
             }
             
-            // 长度约束
+            // 长度约束 - 需要根据数据类型来处理
             Integer minLength = limitations.getMinLength();
             Integer maxLength = limitations.getMaxLength();
             
-            if (minLength != null && minLength > 0 && value.length() < minLength) {
-                logger.debug("值长度小于最小长度约束: " + value.length() + " < " + minLength);
-                return false;
-            }
-            if (maxLength != null && maxLength > 0 && value.length() > maxLength) {
-                logger.debug("值长度大于最大长度约束: " + value.length() + " > " + maxLength);
-                return false;
+            if (minLength != null || maxLength != null) {
+                // 获取变量定义以确定数据类型
+                Variable var = getVariableDefinition(getCurrentVariableKey());
+                if (var != null && var.getValueType() == ValueType.LIST) {
+                    // LIST类型：检查列表元素数量
+                    int listSize = parseListSize(value);
+                    logger.debug("LIST约束检查: 当前元素数量=" + listSize + ", 最小=" + minLength + ", 最大=" + maxLength);
+                    
+                    if (minLength != null && minLength > 0 && listSize < minLength) {
+                        logger.debug("列表元素数量小于最小约束: " + listSize + " < " + minLength);
+                        return false;
+                    }
+                    if (maxLength != null && maxLength > 0 && listSize > maxLength) {
+                        logger.debug("列表元素数量大于最大约束: " + listSize + " > " + maxLength);
+                        return false;
+                    }
+                } else {
+                    // STRING类型：检查字符串长度
+                    if (minLength != null && minLength > 0 && value.length() < minLength) {
+                        logger.debug("字符串长度小于最小长度约束: " + value.length() + " < " + minLength);
+                        return false;
+                    }
+                    if (maxLength != null && maxLength > 0 && value.length() > maxLength) {
+                        logger.debug("字符串长度大于最大长度约束: " + value.length() + " > " + maxLength);
+                        return false;
+                    }
+                }
             }
             
             return true;
@@ -1269,6 +1324,139 @@ public class VariablesManager {
             
         } catch (Exception e) {
             logger.error("保存变量数据失败！", e);
+        }
+    }
+    
+    /**
+     * 获取当前正在验证的变量键
+     */
+    private String getCurrentVariableKey() {
+        return currentValidatingVariable.get();
+    }
+    
+    /**
+     * 设置当前正在验证的变量键
+     */
+    private void setCurrentValidatingVariable(String key) {
+        currentValidatingVariable.set(key);
+    }
+    
+    /**
+     * 清除当前正在验证的变量键
+     */
+    private void clearCurrentValidatingVariable() {
+        currentValidatingVariable.remove();
+    }
+    
+    /**
+     * 解析列表大小
+     * 支持多种列表格式：JSON数组、逗号分隔、换行分隔等
+     */
+    private int parseListSize(String value) {
+        if (value == null || value.trim().isEmpty()) {
+            return 0;
+        }
+        
+        value = value.trim();
+        
+        // 尝试解析 JSON 数组格式
+        if (value.startsWith("[") && value.endsWith("]")) {
+            try {
+                String jsonContent = value.substring(1, value.length() - 1).trim();
+                if (jsonContent.isEmpty()) {
+                    return 0;
+                }
+                // 简单计算逗号分隔的元素数量（不考虑嵌套）
+                return jsonContent.split(",").length;
+            } catch (Exception e) {
+                logger.debug("JSON数组解析失败，尝试其他格式: " + value);
+            }
+        }
+        
+        // 尝试逗号分隔格式
+        if (value.contains(",")) {
+            return value.split(",").length;
+        }
+        
+        // 尝试换行分隔格式
+        if (value.contains("\n")) {
+            String[] lines = value.split("\n");
+            int count = 0;
+            for (String line : lines) {
+                if (!line.trim().isEmpty()) {
+                    count++;
+                }
+            }
+            return count;
+        }
+        
+        // 单个元素
+        return 1;
+    }
+    
+    /**
+     * 根据限制条件对值进行自动修正（数值越界则钳制到边界，列表长度超限则截断）
+     */
+    private String clampValueToLimitations(Variable variable, String value, OfflinePlayer player) {
+        if (variable == null || value == null) {
+            return value;
+        }
+        Limitations lim = variable.getLimitations();
+        if (lim == null) {
+            return value;
+        }
+        try {
+            ValueType type = variable.getValueType();
+            if (type == null) {
+                type = inferTypeFromValue(value);
+            }
+            switch (type) {
+                case INT:
+                case DOUBLE: {
+                    double num = parseDoubleOrDefault(value, 0);
+                    if (lim.getMinValue() != null) {
+                        String minExpr = resolveExpression(lim.getMinValue(), player);
+                        num = Math.max(num, parseDoubleOrDefault(minExpr, num));
+                    }
+                    if (lim.getMaxValue() != null) {
+                        String maxExpr = resolveExpression(lim.getMaxValue(), player);
+                        num = Math.min(num, parseDoubleOrDefault(maxExpr, num));
+                    }
+                    if (type == ValueType.INT) {
+                        return String.valueOf((int) Math.round(num));
+                    } else {
+                        return String.valueOf(num);
+                    }
+                }
+                case LIST: {
+                    int listSize = parseListSize(value);
+                    int minLen = lim.getMinLength() != null ? lim.getMinLength() : -1;
+                    int maxLen = lim.getMaxLength() != null ? lim.getMaxLength() : -1;
+                    // 兼容 min/max 作为长度约束
+                    if (maxLen <= 0 && lim.getMaxValue() != null) {
+                        maxLen = parseIntOrDefault(resolveExpression(lim.getMaxValue(), player), -1);
+                    }
+                    if (minLen <= 0 && lim.getMinValue() != null) {
+                        minLen = parseIntOrDefault(resolveExpression(lim.getMinValue(), player), -1);
+                    }
+                    if (maxLen > 0 && listSize > maxLen) {
+                        String[] parts = value.split(",");
+                        StringBuilder sb = new StringBuilder();
+                        for (int i = 0; i < maxLen && i < parts.length; i++) {
+                            if (i > 0) sb.append(",");
+                            sb.append(parts[i]);
+                        }
+                        return sb.toString();
+                    }
+                    // 不足最小长度暂不自动补齐
+                    return value;
+                }
+                default:
+                    return value;
+            }
+        } catch (Exception e) {
+            logger.error("自动钳制值失败: " + value, e);
+            return value;
         }
     }
     

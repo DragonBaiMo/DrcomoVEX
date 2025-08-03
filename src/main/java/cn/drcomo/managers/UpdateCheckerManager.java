@@ -101,7 +101,12 @@ public class UpdateCheckerManager {
             JsonObject json = JsonParser.parseString(response).getAsJsonObject();
             
             // 获取最新版本号
-            String tagName = json.get("tag_name").getAsString();
+            var tagNameElement = json.get("tag_name");
+            if (tagNameElement == null || tagNameElement.isJsonNull()) {
+                logger.warn("响应中缺少tag_name字段或为null");
+                return false;
+            }
+            String tagName = tagNameElement.getAsString();
             latestVersion = tagName.startsWith("v") ? tagName.substring(1) : tagName;
             
             // 获取下载链接
