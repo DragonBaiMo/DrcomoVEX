@@ -173,9 +173,23 @@ public class VariablesManager {
     private Variable parseVariableDefinition(String key, ConfigurationSection section) {
         Variable.Builder builder = new Variable.Builder(key);
         
-        // 基本信息
-        String minValue = section.getString("min");
-        String maxValue = section.getString("max");
+        // 基本信息 - 处理数字和字符串类型的约束值
+        String minValue = null;
+        String maxValue = null;
+        
+        if (section.contains("min")) {
+            Object minObj = section.get("min");
+            if (minObj != null) {
+                minValue = minObj.toString();
+            }
+        }
+        
+        if (section.contains("max")) {
+            Object maxObj = section.get("max");
+            if (maxObj != null) {
+                maxValue = maxObj.toString();
+            }
+        }
         
         builder.name(section.getString("name"))
                .scope(section.getString("scope", "player"))
@@ -377,7 +391,18 @@ public class VariablesManager {
 
                 String processedValue = processAndValidateValue(variable, value, player);
                 if (processedValue == null) {
-                    future.complete(VariableResult.failure("值格式错误或超出约束: " + value, "SET", key, player.getName()));
+                    String errorMsg = "值格式错误或超出约束: " + value;
+                    if (variable.getLimitations() != null) {
+                        String minValue = variable.getLimitations().getMinValue();
+                        String maxValue = variable.getLimitations().getMaxValue();
+                        if (minValue != null || maxValue != null) {
+                            errorMsg += " (约束范围: " + 
+                                       (minValue != null ? minValue : "无下限") + " ~ " + 
+                                       (maxValue != null ? maxValue : "无上限") + ")";
+                        }
+                    }
+                    logger.warn("SET操作验证失败: " + errorMsg + ", 变量: " + key + ", 类型: " + variable.getValueType());
+                    future.complete(VariableResult.failure(errorMsg, "SET", key, player.getName()));
                     return;
                 }
                 

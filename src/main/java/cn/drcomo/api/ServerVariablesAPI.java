@@ -170,11 +170,24 @@ public class ServerVariablesAPI {
             String variableKey = args[0];
             try {
                 if (isPlayerVariable(variableKey)) {
-                    String value = getPlayerVariable(player, variableKey).get();
-                    return value != null ? value : "0";
+                    // 尝试同步获取，如果失败则异步获取并返回默认值
+                    try {
+                        CompletableFuture<String> future = getPlayerVariable(player, variableKey);
+                        String value = future.get(100, java.util.concurrent.TimeUnit.MILLISECONDS);
+                        return value != null ? value : "0";
+                    } catch (Exception e) {
+                        // 超时或异常时返回默认值
+                        return "0";
+                    }
                 } else if (isServerVariable(variableKey)) {
-                    String value = getServerVariable(variableKey).get();
-                    return value != null ? value : "0";
+                    try {
+                        CompletableFuture<String> future = getServerVariable(variableKey);
+                        String value = future.get(100, java.util.concurrent.TimeUnit.MILLISECONDS);
+                        return value != null ? value : "0";
+                    } catch (Exception e) {
+                        // 超时或异常时返回默认值
+                        return "0";
+                    }
                 }
             } catch (Exception e) {
                 return "错误";
@@ -190,8 +203,13 @@ public class ServerVariablesAPI {
             String variableKey = placeholderUtil.splitArgs(rawArgs)[0];
             try {
                 if (isServerVariable(variableKey)) {
-                    String value = getServerVariable(variableKey).get();
-                    return value != null ? value : "0";
+                    try {
+                        CompletableFuture<String> future = getServerVariable(variableKey);
+                        String value = future.get(100, java.util.concurrent.TimeUnit.MILLISECONDS);
+                        return value != null ? value : "0";
+                    } catch (Exception e) {
+                        return "0";
+                    }
                 }
             } catch (Exception e) {
                 return "错误";
@@ -207,8 +225,13 @@ public class ServerVariablesAPI {
             String variableKey = placeholderUtil.splitArgs(rawArgs)[0];
             try {
                 if (isPlayerVariable(variableKey)) {
-                    String value = getPlayerVariable(player, variableKey).get();
-                    return value != null ? value : "0";
+                    try {
+                        CompletableFuture<String> future = getPlayerVariable(player, variableKey);
+                        String value = future.get(100, java.util.concurrent.TimeUnit.MILLISECONDS);
+                        return value != null ? value : "0";
+                    } catch (Exception e) {
+                        return "0";
+                    }
                 }
             } catch (Exception e) {
                 return "错误";
