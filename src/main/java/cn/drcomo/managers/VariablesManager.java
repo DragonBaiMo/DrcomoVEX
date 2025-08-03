@@ -297,8 +297,14 @@ public class VariablesManager {
         }
         
         variableRegistry.put(variable.getKey(), variable);
-        logger.debug("已注册变量: " + variable.getKey() + " (" + variable.getTypeDescription() + ") 约束: " + 
-                     (variable.getLimitations() != null ? variable.getLimitations().toString() : "无"));
+        logger.info("已注册变量: " + variable.getKey() + " (" + variable.getTypeDescription() + ")");
+        if (variable.getLimitations() != null) {
+            logger.info("  - 约束信息: " + variable.getLimitations());
+            logger.info("  - 最小值: " + variable.getLimitations().getMinValue());
+            logger.info("  - 最大值: " + variable.getLimitations().getMaxValue());
+        } else {
+            logger.info("  - 无约束");
+        }
     }
     
     /**
@@ -389,6 +395,15 @@ public class VariablesManager {
                     return;
                 }
 
+                // 调试约束信息
+                if (variable.getLimitations() != null) {
+                    logger.debug("SET操作约束详情: 变量=" + key + ", 约束=" + variable.getLimitations());
+                    logger.debug("SET操作约束范围: min=" + variable.getLimitations().getMinValue() + 
+                               ", max=" + variable.getLimitations().getMaxValue());
+                } else {
+                    logger.debug("SET操作: 变量=" + key + " 无约束");
+                }
+                
                 String processedValue = processAndValidateValue(variable, value, player);
                 if (processedValue == null) {
                     String errorMsg = "值格式错误或超出约束: " + value;
@@ -1125,13 +1140,24 @@ public class VariablesManager {
      */
     private boolean validateConstraints(String value, Limitations limitations, OfflinePlayer player) {
         try {
+            logger.debug("开始验证约束: 值=" + value + ", 约束=" + limitations);
+            
             // 数值约束
             if (limitations.getMinValue() != null || limitations.getMaxValue() != null) {
+                logger.debug("检测到数值约束，开始验证");
                 try {
                     double numValue = Double.parseDouble(value);
+                    logger.debug("成功解析数值: " + numValue);
                     
                     if (limitations.getMinValue() != null) {
-                        String minExpr = resolveExpression(limitations.getMinValue(), player);
+                        logger.debug("原始最小值约束: " + limitations.getMinValue());
+                        String minExpr;
+                        try {
+                            minExpr = resolveExpression(limitations.getMinValue(), player);
+                        } catch (Exception e) {
+                            logger.warn("最小值约束表达式解析异常: " + limitations.getMinValue() + ", 错误: " + e.getMessage());
+                            minExpr = limitations.getMinValue(); // 使用原始值
+                        }
                         logger.debug("最小值约束表达式: " + limitations.getMinValue() + " -> " + minExpr);
                         try {
                             double minValue = Double.parseDouble(minExpr);
@@ -1147,7 +1173,14 @@ public class VariablesManager {
                     }
                     
                     if (limitations.getMaxValue() != null) {
-                        String maxExpr = resolveExpression(limitations.getMaxValue(), player);
+                        logger.debug("原始最大值约束: " + limitations.getMaxValue());
+                        String maxExpr;
+                        try {
+                            maxExpr = resolveExpression(limitations.getMaxValue(), player);
+                        } catch (Exception e) {
+                            logger.warn("最大值约束表达式解析异常: " + limitations.getMaxValue() + ", 错误: " + e.getMessage());
+                            maxExpr = limitations.getMaxValue(); // 使用原始值
+                        }
                         logger.debug("最大值约束表达式: " + limitations.getMaxValue() + " -> " + maxExpr);
                         try {
                             double maxValue = Double.parseDouble(maxExpr);

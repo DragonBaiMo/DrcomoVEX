@@ -173,20 +173,26 @@ public class ServerVariablesAPI {
                     // 尝试同步获取，如果失败则异步获取并返回默认值
                     try {
                         CompletableFuture<String> future = getPlayerVariable(player, variableKey);
-                        String value = future.get(100, java.util.concurrent.TimeUnit.MILLISECONDS);
+                        String value = future.get(500, java.util.concurrent.TimeUnit.MILLISECONDS);
                         return value != null ? value : "0";
-                    } catch (Exception e) {
-                        // 超时或异常时返回默认值
+                    } catch (java.util.concurrent.TimeoutException e) {
+                        // 超时时返回默认值
                         return "0";
+                    } catch (Exception e) {
+                        // 其他异常时记录错误并返回错误信息
+                        return "异常:" + e.getMessage();
                     }
                 } else if (isServerVariable(variableKey)) {
                     try {
                         CompletableFuture<String> future = getServerVariable(variableKey);
-                        String value = future.get(100, java.util.concurrent.TimeUnit.MILLISECONDS);
+                        String value = future.get(500, java.util.concurrent.TimeUnit.MILLISECONDS);
                         return value != null ? value : "0";
-                    } catch (Exception e) {
-                        // 超时或异常时返回默认值
+                    } catch (java.util.concurrent.TimeoutException e) {
+                        // 超时时返回默认值
                         return "0";
+                    } catch (Exception e) {
+                        // 其他异常时记录错误并返回错误信息
+                        return "异常:" + e.getMessage();
                     }
                 }
             } catch (Exception e) {
@@ -205,10 +211,12 @@ public class ServerVariablesAPI {
                 if (isServerVariable(variableKey)) {
                     try {
                         CompletableFuture<String> future = getServerVariable(variableKey);
-                        String value = future.get(100, java.util.concurrent.TimeUnit.MILLISECONDS);
+                        String value = future.get(500, java.util.concurrent.TimeUnit.MILLISECONDS);
                         return value != null ? value : "0";
-                    } catch (Exception e) {
+                    } catch (java.util.concurrent.TimeoutException e) {
                         return "0";
+                    } catch (Exception e) {
+                        return "异常:" + e.getMessage();
                     }
                 }
             } catch (Exception e) {
@@ -227,10 +235,12 @@ public class ServerVariablesAPI {
                 if (isPlayerVariable(variableKey)) {
                     try {
                         CompletableFuture<String> future = getPlayerVariable(player, variableKey);
-                        String value = future.get(100, java.util.concurrent.TimeUnit.MILLISECONDS);
+                        String value = future.get(500, java.util.concurrent.TimeUnit.MILLISECONDS);
                         return value != null ? value : "0";
-                    } catch (Exception e) {
+                    } catch (java.util.concurrent.TimeoutException e) {
                         return "0";
+                    } catch (Exception e) {
+                        return "异常:" + e.getMessage();
                     }
                 }
             } catch (Exception e) {
