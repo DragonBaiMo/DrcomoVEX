@@ -8,7 +8,7 @@ import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import org.bukkit.Bukkit;
 
-import java.net.URI;
+import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 
 /**
@@ -61,30 +61,29 @@ public class UpdateCheckerManager {
     public CompletableFuture<Boolean> checkForUpdates() {
         logger.info("正在检查插件更新...");
         
-        return asyncTaskManager.submitAsync(() -> {
+        CompletableFuture<Boolean> future = new CompletableFuture<>();
+        asyncTaskManager.submitAsync(() -> {
             try {
-                // 创建 HTTP 客户端
                 HttpUtil httpUtil = HttpUtil.newBuilder()
                         .logger(logger)
                         .defaultHeader("User-Agent", "DrcomoVEX-UpdateChecker")
                         .build();
-                
-                // 发送 GET 请求
-                CompletableFuture<String> responseFuture = httpUtil.get(URI.create(GITHUB_API_URL));
-                String response = responseFuture.get();
-                
+
+                String response = httpUtil.get(GITHUB_API_URL, Map.of()).join();
+
                 if (response != null && !response.trim().isEmpty()) {
-                    return parseUpdateResponse(response);
+                    future.complete(parseUpdateResponse(response));
                 } else {
                     logger.warn("获取更新信息失败：响应为空");
-                    return false;
+                    future.complete(false);
                 }
-                
             } catch (Exception e) {
                 logger.error("检查更新时发生异常", e);
-                return false;
+                future.complete(false);
             }
-        }).thenApply(hasUpdate -> {
+        });
+
+        return future.thenApply(hasUpdate -> {
             if (hasUpdate) {
                 notifyUpdateAvailable();
             } else {
@@ -197,9 +196,10 @@ public class UpdateCheckerManager {
     public void startPeriodicCheck() {
         // 每24小时检查一次
         asyncTaskManager.scheduleAtFixedRate(
-                this::checkForUpdates,
-                3600000, // 1小时后首次检查
-                86400000 // 每24小时检查一次
+                () -> { checkForUpdates(); },
+                3600000,
+                86400000,
+                java.util.concurrent.TimeUnit.MILLISECONDS
         );
         
         logger.info("已启动定时更新检查（每24小时）");

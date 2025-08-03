@@ -9,7 +9,6 @@ import cn.drcomo.corelib.config.YamlUtil;
 import cn.drcomo.corelib.async.AsyncTaskManager;
 import cn.drcomo.corelib.hook.placeholder.PlaceholderAPIUtil;
 import cn.drcomo.corelib.math.FormulaCalculator;
-import cn.drcomo.corelib.math.NumberUtil;
 import org.bukkit.Bukkit;
 import org.bukkit.OfflinePlayer;
 import org.bukkit.configuration.ConfigurationSection;
@@ -315,172 +314,164 @@ public class VariablesManager {
      * 获取变量值
      */
     public CompletableFuture<VariableResult> getVariable(OfflinePlayer player, String key) {
-        return asyncTaskManager.submitAsync(() -> {
+        CompletableFuture<VariableResult> future = new CompletableFuture<>();
+        asyncTaskManager.submitAsync(() -> {
             try {
                 Variable variable = getVariableDefinition(key);
                 if (variable == null) {
-                    return VariableResult.failure("变量不存在: " + key, "GET", key, player.getName());
+                    future.complete(VariableResult.failure("变量不存在: " + key, "GET", key, player.getName()));
+                    return;
                 }
-                
+
                 String value = getVariableValueInternal(player, variable);
-                return VariableResult.success(value, "GET", key, player.getName());
-                
+                future.complete(VariableResult.success(value, "GET", key, player.getName()));
             } catch (Exception e) {
                 logger.error("获取变量失败: " + key, e);
-                return VariableResult.fromException(e, "GET", key, player.getName());
+                future.complete(VariableResult.fromException(e, "GET", key, player.getName()));
             }
         });
+        return future;
     }
     
     /**
      * 设置变量值
      */
     public CompletableFuture<VariableResult> setVariable(OfflinePlayer player, String key, String value) {
-        return asyncTaskManager.submitAsync(() -> {
+        CompletableFuture<VariableResult> future = new CompletableFuture<>();
+        asyncTaskManager.submitAsync(() -> {
             try {
                 Variable variable = getVariableDefinition(key);
                 if (variable == null) {
-                    return VariableResult.failure("变量不存在: " + key, "SET", key, player.getName());
+                    future.complete(VariableResult.failure("变量不存在: " + key, "SET", key, player.getName()));
+                    return;
                 }
-                
-                // 检查是否为只读变量
+
                 if (variable.getLimitations() != null && variable.getLimitations().isReadOnly()) {
-                    return VariableResult.failure("变量为只读模式: " + key, "SET", key, player.getName());
+                    future.complete(VariableResult.failure("变量为只读模式: " + key, "SET", key, player.getName()));
+                    return;
                 }
-                
-                // 转换和验证值
+
                 String processedValue = processAndValidateValue(variable, value, player);
                 if (processedValue == null) {
-                    return VariableResult.failure("值格式错误或超出约束: " + value, "SET", key, player.getName());
+                    future.complete(VariableResult.failure("值格式错误或超出约束: " + value, "SET", key, player.getName()));
+                    return;
                 }
-                
-                // 保存到数据库
+
                 setVariableValueInternal(player, variable, processedValue);
-                
-                // 清理相关缓存
                 invalidateCache(player, key);
-                
-                return VariableResult.success(processedValue, "SET", key, player.getName());
-                
+
+                future.complete(VariableResult.success(processedValue, "SET", key, player.getName()));
             } catch (Exception e) {
                 logger.error("设置变量失败: " + key, e);
-                return VariableResult.fromException(e, "SET", key, player.getName());
+                future.complete(VariableResult.fromException(e, "SET", key, player.getName()));
             }
         });
+        return future;
     }
     
     /**
      * 增加变量值（智能操作）
      */
     public CompletableFuture<VariableResult> addVariable(OfflinePlayer player, String key, String addValue) {
-        return asyncTaskManager.submitAsync(() -> {
+        CompletableFuture<VariableResult> future = new CompletableFuture<>();
+        asyncTaskManager.submitAsync(() -> {
             try {
                 Variable variable = getVariableDefinition(key);
                 if (variable == null) {
-                    return VariableResult.failure("变量不存在: " + key, "ADD", key, player.getName());
+                    future.complete(VariableResult.failure("变量不存在: " + key, "ADD", key, player.getName()));
+                    return;
                 }
-                
-                // 检查是否为只读变量
+
                 if (variable.getLimitations() != null && variable.getLimitations().isReadOnly()) {
-                    return VariableResult.failure("变量为只读模式: " + key, "ADD", key, player.getName());
+                    future.complete(VariableResult.failure("变量为只读模式: " + key, "ADD", key, player.getName()));
+                    return;
                 }
-                
-                // 获取当前值
+
                 String currentValue = getVariableValueInternal(player, variable);
-                
-                // 根据类型执行加法操作
                 String newValue = performAddOperation(variable, currentValue, addValue, player);
                 if (newValue == null) {
-                    return VariableResult.failure("加法操作失败或超出约束", "ADD", key, player.getName());
+                    future.complete(VariableResult.failure("加法操作失败或超出约束", "ADD", key, player.getName()));
+                    return;
                 }
-                
-                // 保存到数据库
+
                 setVariableValueInternal(player, variable, newValue);
-                
-                // 清理相关缓存
                 invalidateCache(player, key);
-                
-                return VariableResult.success(newValue, "ADD", key, player.getName());
-                
+
+                future.complete(VariableResult.success(newValue, "ADD", key, player.getName()));
             } catch (Exception e) {
                 logger.error("增加变量失败: " + key, e);
-                return VariableResult.fromException(e, "ADD", key, player.getName());
+                future.complete(VariableResult.fromException(e, "ADD", key, player.getName()));
             }
         });
+        return future;
     }
     
     /**
      * 移除变量值（智能操作）
      */
     public CompletableFuture<VariableResult> removeVariable(OfflinePlayer player, String key, String removeValue) {
-        return asyncTaskManager.submitAsync(() -> {
+        CompletableFuture<VariableResult> future = new CompletableFuture<>();
+        asyncTaskManager.submitAsync(() -> {
             try {
                 Variable variable = getVariableDefinition(key);
                 if (variable == null) {
-                    return VariableResult.failure("变量不存在: " + key, "REMOVE", key, player.getName());
+                    future.complete(VariableResult.failure("变量不存在: " + key, "REMOVE", key, player.getName()));
+                    return;
                 }
-                
-                // 检查是否为只读变量
+
                 if (variable.getLimitations() != null && variable.getLimitations().isReadOnly()) {
-                    return VariableResult.failure("变量为只读模式: " + key, "REMOVE", key, player.getName());
+                    future.complete(VariableResult.failure("变量为只读模式: " + key, "REMOVE", key, player.getName()));
+                    return;
                 }
-                
-                // 获取当前值
+
                 String currentValue = getVariableValueInternal(player, variable);
-                
-                // 根据类型执行删除操作
                 String newValue = performRemoveOperation(variable, currentValue, removeValue);
                 if (newValue == null) {
-                    return VariableResult.failure("删除操作失败", "REMOVE", key, player.getName());
+                    future.complete(VariableResult.failure("删除操作失败", "REMOVE", key, player.getName()));
+                    return;
                 }
-                
-                // 保存到数据库
+
                 setVariableValueInternal(player, variable, newValue);
-                
-                // 清理相关缓存
                 invalidateCache(player, key);
-                
-                return VariableResult.success(newValue, "REMOVE", key, player.getName());
-                
+
+                future.complete(VariableResult.success(newValue, "REMOVE", key, player.getName()));
             } catch (Exception e) {
                 logger.error("移除变量失败: " + key, e);
-                return VariableResult.fromException(e, "REMOVE", key, player.getName());
+                future.complete(VariableResult.fromException(e, "REMOVE", key, player.getName()));
             }
         });
+        return future;
     }
     
     /**
      * 重置变量为初始值
      */
     public CompletableFuture<VariableResult> resetVariable(OfflinePlayer player, String key) {
-        return asyncTaskManager.submitAsync(() -> {
+        CompletableFuture<VariableResult> future = new CompletableFuture<>();
+        asyncTaskManager.submitAsync(() -> {
             try {
                 Variable variable = getVariableDefinition(key);
                 if (variable == null) {
-                    return VariableResult.failure("变量不存在: " + key, "RESET", key, player.getName());
+                    future.complete(VariableResult.failure("变量不存在: " + key, "RESET", key, player.getName()));
+                    return;
                 }
-                
-                // 检查是否为只读变量
+
                 if (variable.getLimitations() != null && variable.getLimitations().isReadOnly()) {
-                    return VariableResult.failure("变量为只读模式: " + key, "RESET", key, player.getName());
+                    future.complete(VariableResult.failure("变量为只读模式: " + key, "RESET", key, player.getName()));
+                    return;
                 }
-                
-                // 删除数据库中的记录（使其回退到初始值）
+
                 deleteVariableValueInternal(player, variable);
-                
-                // 清理相关缓存
                 invalidateCache(player, key);
-                
-                // 获取重置后的值
+
                 String resetValue = getVariableValueInternal(player, variable);
-                
-                return VariableResult.success(resetValue, "RESET", key, player.getName());
-                
+                future.complete(VariableResult.success(resetValue, "RESET", key, player.getName()));
             } catch (Exception e) {
                 logger.error("重置变量失败: " + key, e);
-                return VariableResult.fromException(e, "RESET", key, player.getName());
+                future.complete(VariableResult.fromException(e, "RESET", key, player.getName()));
             }
         });
+        return future;
     }
     
     // ======================== 内部实现方法 ========================
@@ -537,16 +528,16 @@ public class VariablesManager {
         try {
             if (variable.getScope().equals("server")) {
                 // 服务器变量
-                database.executeUpdate(
+                database.executeUpdateAsync(
                     "INSERT OR REPLACE INTO server_variables (variable_key, value, updated_at) VALUES (?, ?, ?)",
                     variable.getKey(), value, System.currentTimeMillis()
-                );
+                ).join();
             } else {
                 // 玩家变量
-                database.executeUpdate(
+                database.executeUpdateAsync(
                     "INSERT OR REPLACE INTO player_variables (player_uuid, variable_key, value, updated_at) VALUES (?, ?, ?, ?)",
                     player.getUniqueId().toString(), variable.getKey(), value, System.currentTimeMillis()
-                );
+                ).join();
             }
             
             logger.debug("已保存变量: " + variable.getKey() + " = " + value);
@@ -564,16 +555,16 @@ public class VariablesManager {
         try {
             if (variable.getScope().equals("server")) {
                 // 服务器变量
-                database.executeUpdate(
+                database.executeUpdateAsync(
                     "DELETE FROM server_variables WHERE variable_key = ?",
                     variable.getKey()
-                );
+                ).join();
             } else {
                 // 玩家变量
-                database.executeUpdate(
+                database.executeUpdateAsync(
                     "DELETE FROM player_variables WHERE player_uuid = ? AND variable_key = ?",
                     player.getUniqueId().toString(), variable.getKey()
-                );
+                ).join();
             }
             
             logger.debug("已删除变量: " + variable.getKey());
@@ -637,14 +628,14 @@ public class VariablesManager {
             String result;
             switch (type) {
                 case INT:
-                    int currentInt = NumberUtil.parseInt(currentValue, 0);
-                    int addInt = NumberUtil.parseInt(resolvedAddValue, 0);
+                    int currentInt = parseIntOrDefault(currentValue, 0);
+                    int addInt = parseIntOrDefault(resolvedAddValue, 0);
                     result = String.valueOf(currentInt + addInt);
                     break;
                     
                 case DOUBLE:
-                    double currentDouble = NumberUtil.parseDouble(currentValue, 0.0);
-                    double addDouble = NumberUtil.parseDouble(resolvedAddValue, 0.0);
+                    double currentDouble = parseDoubleOrDefault(currentValue, 0.0);
+                    double addDouble = parseDoubleOrDefault(resolvedAddValue, 0.0);
                     result = String.valueOf(currentDouble + addDouble);
                     break;
                     
@@ -689,14 +680,14 @@ public class VariablesManager {
             String result;
             switch (type) {
                 case INT:
-                    int currentInt = NumberUtil.parseInt(currentValue, 0);
-                    int removeInt = NumberUtil.parseInt(removeValue, 0);
+                    int currentInt = parseIntOrDefault(currentValue, 0);
+                    int removeInt = parseIntOrDefault(removeValue, 0);
                     result = String.valueOf(currentInt - removeInt);
                     break;
                     
                 case DOUBLE:
-                    double currentDouble = NumberUtil.parseDouble(currentValue, 0.0);
-                    double removeDouble = NumberUtil.parseDouble(removeValue, 0.0);
+                    double currentDouble = parseDoubleOrDefault(currentValue, 0.0);
+                    double removeDouble = parseDoubleOrDefault(removeValue, 0.0);
                     result = String.valueOf(currentDouble - removeDouble);
                     break;
                     
@@ -752,6 +743,28 @@ public class VariablesManager {
         }
         return player.getUniqueId().toString() + ":" + variableKey;
     }
+
+    /**
+     * 安全解析整数
+     */
+    private int parseIntOrDefault(String input, int def) {
+        try {
+            return Integer.parseInt(input);
+        } catch (Exception e) {
+            return def;
+        }
+    }
+
+    /**
+     * 安全解析小数
+     */
+    private double parseDoubleOrDefault(String input, double def) {
+        try {
+            return Double.parseDouble(input);
+        } catch (Exception e) {
+            return def;
+        }
+    }
     
     /**
      * 从数据库获取存储值
@@ -759,18 +772,18 @@ public class VariablesManager {
     private String getStoredValue(OfflinePlayer player, Variable variable) {
         try {
             if (variable.getScope().equals("server")) {
-                return database.queryForString(
+                return database.queryValueAsync(
                     "SELECT value FROM server_variables WHERE variable_key = ?",
                     variable.getKey()
-                );
+                ).join();
             } else {
-                return database.queryForString(
+                return database.queryValueAsync(
                     "SELECT value FROM player_variables WHERE player_uuid = ? AND variable_key = ?",
                     player.getUniqueId().toString(), variable.getKey()
-                );
+                ).join();
             }
         } catch (Exception e) {
-            logger.debug("获取存储值失败: " + variable.getKey(), e);
+            logger.error("获取存储值失败: " + variable.getKey(), e);
             return null;
         }
     }
@@ -809,7 +822,7 @@ public class VariablesManager {
                 
                 // 解析数学表达式
                 if (containsMathExpression(result)) {
-                    result = FormulaCalculator.calculate(result);
+                    result = String.valueOf(FormulaCalculator.calculate(result));
                 }
                 
                 // 如果没有变化，停止递归
@@ -950,14 +963,14 @@ public class VariablesManager {
         try {
             // 数值约束
             if (limitations.getMinValue() != null || limitations.getMaxValue() != null) {
-                double numValue = NumberUtil.parseDouble(value, Double.MIN_VALUE);
+                double numValue = parseDoubleOrDefault(value, Double.MIN_VALUE);
                 if (numValue == Double.MIN_VALUE) {
                     return false; // 无法转换为数字
                 }
                 
                 if (limitations.getMinValue() != null) {
                     String minExpr = resolveExpression(limitations.getMinValue(), player);
-                    double minValue = NumberUtil.parseDouble(minExpr, Double.MIN_VALUE);
+                    double minValue = parseDoubleOrDefault(minExpr, Double.MIN_VALUE);
                     if (minValue != Double.MIN_VALUE && numValue < minValue) {
                         return false;
                     }
@@ -965,7 +978,7 @@ public class VariablesManager {
                 
                 if (limitations.getMaxValue() != null) {
                     String maxExpr = resolveExpression(limitations.getMaxValue(), player);
-                    double maxValue = NumberUtil.parseDouble(maxExpr, Double.MAX_VALUE);
+                    double maxValue = parseDoubleOrDefault(maxExpr, Double.MAX_VALUE);
                     if (maxValue != Double.MAX_VALUE && numValue > maxValue) {
                         return false;
                     }
