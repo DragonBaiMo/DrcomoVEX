@@ -90,16 +90,44 @@ public class MainCommand implements CommandExecutor, TabCompleter {
     
     /**
      * 处理 get 指令
-     * 格式: /vex get <变量名> [-p:玩家ID]
+     * 格式: /vex get <变量名> [-p:玩家ID] 或 /vex get <变量名> <玩家名>
      */
     private void handleGet(CommandSender sender, String[] args) {
         if (args.length < 2) {
-            messagesManager.sendMessage(sender, "error.usage-get");
+            messagesManager.sendMessage(sender, "error.usage-get", new HashMap<>());
             return;
         }
         
         String variableKey = args[1];
-        OfflinePlayer targetPlayer = parseTargetPlayer(sender, args);
+        
+        // 解析参数：支持两种格式
+        OfflinePlayer targetPlayer;
+        
+        // 检查是否使用 -p: 格式
+        boolean hasPlayerFlag = false;
+        for (String arg : args) {
+            if (arg.startsWith("-p:")) {
+                hasPlayerFlag = true;
+                break;
+            }
+        }
+        
+        if (hasPlayerFlag) {
+            // 格式: /vex get <变量名> -p:<玩家名>
+            targetPlayer = parseTargetPlayer(sender, args);
+        } else if (args.length >= 3) {
+            // 格式: /vex get <变量名> <玩家名>
+            String playerName = args[2];
+            targetPlayer = Bukkit.getOfflinePlayer(playerName);
+            if (targetPlayer == null || !targetPlayer.hasPlayedBefore()) {
+                messagesManager.sendMessage(sender, "error.player-not-found",
+                        Map.of("player", playerName));
+                return;
+            }
+        } else {
+            // 格式: /vex get <变量名>（查询执行者自己）
+            targetPlayer = parseTargetPlayer(sender, args);
+        }
         
         if (targetPlayer == null) {
             return;
@@ -107,7 +135,7 @@ public class MainCommand implements CommandExecutor, TabCompleter {
         
         // 检查权限
         if (!hasPermission(sender, "drcomovex.command.get", targetPlayer)) {
-            messagesManager.sendMessage(sender, "error.no-permission");
+            messagesManager.sendMessage(sender, "error.no-permission", new HashMap<>());
             return;
         }
         
@@ -128,24 +156,55 @@ public class MainCommand implements CommandExecutor, TabCompleter {
                 })
                 .exceptionally(throwable -> {
                     logger.error("获取变量失败: " + variableKey, throwable);
-                    messagesManager.sendMessage(sender, "error.internal");
+                    messagesManager.sendMessage(sender, "error.internal", new HashMap<>());
                     return null;
                 });
     }
     
     /**
      * 处理 set 指令
-     * 格式: /vex set <变量名> <值> [-p:玩家ID]
+     * 格式: /vex set <变量名> <值> [-p:玩家ID] 或 /vex set <变量名> <玩家名> <值>
      */
     private void handleSet(CommandSender sender, String[] args) {
         if (args.length < 3) {
-            messagesManager.sendMessage(sender, "error.usage-set");
+            messagesManager.sendMessage(sender, "error.usage-set", new HashMap<>());
             return;
         }
         
         String variableKey = args[1];
-        String value = args[2];
-        OfflinePlayer targetPlayer = parseTargetPlayer(sender, args);
+        
+        // 解析参数：支持两种格式
+        String value;
+        OfflinePlayer targetPlayer;
+        
+        // 检查是否使用 -p: 格式
+        boolean hasPlayerFlag = false;
+        for (String arg : args) {
+            if (arg.startsWith("-p:")) {
+                hasPlayerFlag = true;
+                break;
+            }
+        }
+        
+        if (hasPlayerFlag) {
+            // 格式: /vex set <变量名> <值> -p:<玩家名>
+            value = args[2];
+            targetPlayer = parseTargetPlayer(sender, args);
+        } else if (args.length >= 4) {
+            // 格式: /vex set <变量名> <玩家名> <值>
+            String playerName = args[2];
+            value = args[3];
+            targetPlayer = Bukkit.getOfflinePlayer(playerName);
+            if (targetPlayer == null || !targetPlayer.hasPlayedBefore()) {
+                messagesManager.sendMessage(sender, "error.player-not-found",
+                        Map.of("player", playerName));
+                return;
+            }
+        } else {
+            // 格式: /vex set <变量名> <值>（操作执行者自己）
+            value = args[2];
+            targetPlayer = parseTargetPlayer(sender, args);
+        }
         
         if (targetPlayer == null) {
             return;
@@ -153,7 +212,7 @@ public class MainCommand implements CommandExecutor, TabCompleter {
         
         // 检查权限
         if (!hasPermission(sender, "drcomovex.command.set", targetPlayer)) {
-            messagesManager.sendMessage(sender, "error.no-permission");
+            messagesManager.sendMessage(sender, "error.no-permission", new HashMap<>());
             return;
         }
         
@@ -174,24 +233,55 @@ public class MainCommand implements CommandExecutor, TabCompleter {
                 })
                 .exceptionally(throwable -> {
                     logger.error("设置变量失败: " + variableKey, throwable);
-                    messagesManager.sendMessage(sender, "error.internal");
+                    messagesManager.sendMessage(sender, "error.internal", new HashMap<>());
                     return null;
                 });
     }
     
     /**
      * 处理 add 指令
-     * 格式: /vex add <变量名> <值> [-p:玩家ID]
+     * 格式: /vex add <变量名> <值> [-p:玩家ID] 或 /vex add <变量名> <玩家名> <值>
      */
     private void handleAdd(CommandSender sender, String[] args) {
         if (args.length < 3) {
-            messagesManager.sendMessage(sender, "error.usage-add");
+            messagesManager.sendMessage(sender, "error.usage-add", new HashMap<>());
             return;
         }
         
         String variableKey = args[1];
-        String value = args[2];
-        OfflinePlayer targetPlayer = parseTargetPlayer(sender, args);
+        
+        // 解析参数：支持两种格式
+        String value;
+        OfflinePlayer targetPlayer;
+        
+        // 检查是否使用 -p: 格式
+        boolean hasPlayerFlag = false;
+        for (String arg : args) {
+            if (arg.startsWith("-p:")) {
+                hasPlayerFlag = true;
+                break;
+            }
+        }
+        
+        if (hasPlayerFlag) {
+            // 格式: /vex add <变量名> <值> -p:<玩家名>
+            value = args[2];
+            targetPlayer = parseTargetPlayer(sender, args);
+        } else if (args.length >= 4) {
+            // 格式: /vex add <变量名> <玩家名> <值>
+            String playerName = args[2];
+            value = args[3];
+            targetPlayer = Bukkit.getOfflinePlayer(playerName);
+            if (targetPlayer == null || !targetPlayer.hasPlayedBefore()) {
+                messagesManager.sendMessage(sender, "error.player-not-found",
+                        Map.of("player", playerName));
+                return;
+            }
+        } else {
+            // 格式: /vex add <变量名> <值>（操作执行者自己）
+            value = args[2];
+            targetPlayer = parseTargetPlayer(sender, args);
+        }
         
         if (targetPlayer == null) {
             return;
@@ -199,7 +289,7 @@ public class MainCommand implements CommandExecutor, TabCompleter {
         
         // 检查权限
         if (!hasPermission(sender, "drcomovex.command.add", targetPlayer)) {
-            messagesManager.sendMessage(sender, "error.no-permission");
+            messagesManager.sendMessage(sender, "error.no-permission", new HashMap<>());
             return;
         }
         
@@ -221,24 +311,55 @@ public class MainCommand implements CommandExecutor, TabCompleter {
                 })
                 .exceptionally(throwable -> {
                     logger.error("增加变量失败: " + variableKey, throwable);
-                    messagesManager.sendMessage(sender, "error.internal");
+                    messagesManager.sendMessage(sender, "error.internal", new HashMap<>());
                     return null;
                 });
     }
     
     /**
      * 处理 remove 指令
-     * 格式: /vex remove <变量名> <值> [-p:玩家ID]
+     * 格式: /vex remove <变量名> <值> [-p:玩家ID] 或 /vex remove <变量名> <玩家名> <值>
      */
     private void handleRemove(CommandSender sender, String[] args) {
         if (args.length < 3) {
-            messagesManager.sendMessage(sender, "error.usage-remove");
+            messagesManager.sendMessage(sender, "error.usage-remove", new HashMap<>());
             return;
         }
         
         String variableKey = args[1];
-        String value = args[2];
-        OfflinePlayer targetPlayer = parseTargetPlayer(sender, args);
+        
+        // 解析参数：支持两种格式
+        String value;
+        OfflinePlayer targetPlayer;
+        
+        // 检查是否使用 -p: 格式
+        boolean hasPlayerFlag = false;
+        for (String arg : args) {
+            if (arg.startsWith("-p:")) {
+                hasPlayerFlag = true;
+                break;
+            }
+        }
+        
+        if (hasPlayerFlag) {
+            // 格式: /vex remove <变量名> <值> -p:<玩家名>
+            value = args[2];
+            targetPlayer = parseTargetPlayer(sender, args);
+        } else if (args.length >= 4) {
+            // 格式: /vex remove <变量名> <玩家名> <值>
+            String playerName = args[2];
+            value = args[3];
+            targetPlayer = Bukkit.getOfflinePlayer(playerName);
+            if (targetPlayer == null || !targetPlayer.hasPlayedBefore()) {
+                messagesManager.sendMessage(sender, "error.player-not-found",
+                        Map.of("player", playerName));
+                return;
+            }
+        } else {
+            // 格式: /vex remove <变量名> <值>（操作执行者自己）
+            value = args[2];
+            targetPlayer = parseTargetPlayer(sender, args);
+        }
         
         if (targetPlayer == null) {
             return;
@@ -246,7 +367,7 @@ public class MainCommand implements CommandExecutor, TabCompleter {
         
         // 检查权限
         if (!hasPermission(sender, "drcomovex.command.remove", targetPlayer)) {
-            messagesManager.sendMessage(sender, "error.no-permission");
+            messagesManager.sendMessage(sender, "error.no-permission", new HashMap<>());
             return;
         }
         
@@ -268,23 +389,51 @@ public class MainCommand implements CommandExecutor, TabCompleter {
                 })
                 .exceptionally(throwable -> {
                     logger.error("移除变量失败: " + variableKey, throwable);
-                    messagesManager.sendMessage(sender, "error.internal");
+                    messagesManager.sendMessage(sender, "error.internal", new HashMap<>());
                     return null;
                 });
     }
     
     /**
      * 处理 reset 指令
-     * 格式: /vex reset <变量名> [-p:玩家ID]
+     * 格式: /vex reset <变量名> [-p:玩家ID] 或 /vex reset <变量名> <玩家名>
      */
     private void handleReset(CommandSender sender, String[] args) {
         if (args.length < 2) {
-            messagesManager.sendMessage(sender, "error.usage-reset");
+            messagesManager.sendMessage(sender, "error.usage-reset", new HashMap<>());
             return;
         }
         
         String variableKey = args[1];
-        OfflinePlayer targetPlayer = parseTargetPlayer(sender, args);
+        
+        // 解析参数：支持两种格式
+        OfflinePlayer targetPlayer;
+        
+        // 检查是否使用 -p: 格式
+        boolean hasPlayerFlag = false;
+        for (String arg : args) {
+            if (arg.startsWith("-p:")) {
+                hasPlayerFlag = true;
+                break;
+            }
+        }
+        
+        if (hasPlayerFlag) {
+            // 格式: /vex reset <变量名> -p:<玩家名>
+            targetPlayer = parseTargetPlayer(sender, args);
+        } else if (args.length >= 3) {
+            // 格式: /vex reset <变量名> <玩家名>
+            String playerName = args[2];
+            targetPlayer = Bukkit.getOfflinePlayer(playerName);
+            if (targetPlayer == null || !targetPlayer.hasPlayedBefore()) {
+                messagesManager.sendMessage(sender, "error.player-not-found",
+                        Map.of("player", playerName));
+                return;
+            }
+        } else {
+            // 格式: /vex reset <变量名>（重置执行者自己）
+            targetPlayer = parseTargetPlayer(sender, args);
+        }
         
         if (targetPlayer == null) {
             return;
@@ -292,7 +441,7 @@ public class MainCommand implements CommandExecutor, TabCompleter {
         
         // 检查权限
         if (!hasPermission(sender, "drcomovex.command.reset", targetPlayer)) {
-            messagesManager.sendMessage(sender, "error.no-permission");
+            messagesManager.sendMessage(sender, "error.no-permission", new HashMap<>());
             return;
         }
         
@@ -313,7 +462,7 @@ public class MainCommand implements CommandExecutor, TabCompleter {
                 })
                 .exceptionally(throwable -> {
                     logger.error("重置变量失败: " + variableKey, throwable);
-                    messagesManager.sendMessage(sender, "error.internal");
+                    messagesManager.sendMessage(sender, "error.internal", new HashMap<>());
                     return null;
                 });
     }
@@ -325,7 +474,7 @@ public class MainCommand implements CommandExecutor, TabCompleter {
     private void handleReload(CommandSender sender, String[] args) {
         // 检查权限
         if (!sender.hasPermission("drcomovex.admin.reload")) {
-            messagesManager.sendMessage(sender, "error.no-permission");
+            messagesManager.sendMessage(sender, "error.no-permission", new HashMap<>());
             return;
         }
         
@@ -343,14 +492,14 @@ public class MainCommand implements CommandExecutor, TabCompleter {
                 
                 // 在主线程中发送消息
                 Bukkit.getScheduler().runTask(plugin, () -> {
-                    messagesManager.sendMessage(sender, "success.reload");
+                    messagesManager.sendMessage(sender, "success.reload", new HashMap<>());
                     logger.info("配置已重载，执行者: " + sender.getName());
                 });
                 
             } catch (Exception e) {
                 logger.error("重载配置失败", e);
                 Bukkit.getScheduler().runTask(plugin, () -> {
-                    messagesManager.sendMessage(sender, "error.reload-failed");
+                    messagesManager.sendMessage(sender, "error.reload-failed", new HashMap<>());
                 });
             }
         });
@@ -360,7 +509,7 @@ public class MainCommand implements CommandExecutor, TabCompleter {
      * 发送帮助信息
      */
     private void sendHelp(CommandSender sender) {
-        messagesManager.sendMessageList(sender, "help.commands");
+        messagesManager.sendMessageList(sender, "help.commands", new HashMap<>());
     }
     
     /**
@@ -381,7 +530,7 @@ public class MainCommand implements CommandExecutor, TabCompleter {
             if (sender instanceof Player) {
                 return (Player) sender;
             } else {
-                messagesManager.sendMessage(sender, "error.console-specify-player");
+                messagesManager.sendMessage(sender, "error.console-specify-player", new HashMap<>());
                 return null;
             }
         }
