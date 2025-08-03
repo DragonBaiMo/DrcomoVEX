@@ -33,7 +33,7 @@ public class HikariConnection {
     private HikariDataSource dataSource;
     private SQLiteDB sqliteDB;
     private String databaseType;
-    
+
     // SQL 语句
     private static final List<String> INIT_SCRIPTS = Arrays.asList(
         // 玩家变量表
@@ -41,25 +41,25 @@ public class HikariConnection {
         "    id INTEGER PRIMARY KEY AUTOINCREMENT," +
         "    player_uuid VARCHAR(36) NOT NULL," +
         "    variable_key VARCHAR(255) NOT NULL," +
-        "    variable_value TEXT," +
+        "    value TEXT," +
         "    created_at BIGINT NOT NULL," +
         "    updated_at BIGINT NOT NULL," +
         "    UNIQUE(player_uuid, variable_key)" +
         ")",
-        
-        // 全局变量表
-        "CREATE TABLE IF NOT EXISTS global_variables (" +
+
+        // 服务器变量表
+        "CREATE TABLE IF NOT EXISTS server_variables (" +
         "    id INTEGER PRIMARY KEY AUTOINCREMENT," +
         "    variable_key VARCHAR(255) NOT NULL UNIQUE," +
-        "    variable_value TEXT," +
+        "    value TEXT," +
         "    created_at BIGINT NOT NULL," +
         "    updated_at BIGINT NOT NULL" +
         ")",
-        
+
         // 索引优化
         "CREATE INDEX IF NOT EXISTS idx_player_variables_uuid ON player_variables(player_uuid)",
         "CREATE INDEX IF NOT EXISTS idx_player_variables_key ON player_variables(variable_key)",
-        "CREATE INDEX IF NOT EXISTS idx_global_variables_key ON global_variables(variable_key)"
+        "CREATE INDEX IF NOT EXISTS idx_server_variables_key ON server_variables(variable_key)"
     );
     
     public HikariConnection(DrcomoVEX plugin, DebugUtil logger, ConfigsManager configsManager) {
@@ -105,9 +105,11 @@ public class HikariConnection {
         
         // 使用 DrcomoCoreLib 的 SQLiteDB
         sqliteDB = new SQLiteDB(plugin, dbFile, INIT_SCRIPTS);
-        
+
         try {
             sqliteDB.connect();
+            // 手动执行初始化脚本，确保表结构完整
+            sqliteDB.initializeSchema();
             logger.info("SQLite 数据库连接成功: " + dbFile);
         } catch (Exception e) {
             logger.error("SQLite 数据库连接失败", e);
