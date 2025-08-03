@@ -4,6 +4,7 @@ import cn.drcomo.managers.*;
 import cn.drcomo.model.VariableResult;
 import cn.drcomo.model.structure.Variable;
 import cn.drcomo.corelib.hook.placeholder.PlaceholderAPIUtil;
+import cn.drcomo.corelib.util.DebugUtil;
 import org.bukkit.OfflinePlayer;
 
 import java.util.concurrent.CompletableFuture;
@@ -16,16 +17,19 @@ import java.util.concurrent.CompletableFuture;
  * @author BaiMo
  */
 public class ServerVariablesAPI {
-    
+
+    private final DebugUtil logger;
     private final VariablesManager variablesManager;
     private final ServerVariablesManager serverVariablesManager;
     private final PlayerVariablesManager playerVariablesManager;
-    
+
     public ServerVariablesAPI(
+            DebugUtil logger,
             VariablesManager variablesManager,
             ServerVariablesManager serverVariablesManager,
             PlayerVariablesManager playerVariablesManager
     ) {
+        this.logger = logger;
         this.variablesManager = variablesManager;
         this.serverVariablesManager = serverVariablesManager;
         this.playerVariablesManager = playerVariablesManager;
@@ -166,36 +170,42 @@ public class ServerVariablesAPI {
             if (isBlank.apply(rawArgs)) {
                 return "变量名不能为空";
             }
-            String[] args = placeholderUtil.splitArgs(rawArgs);
-            String variableKey = args[0];
             try {
+                String[] args = placeholderUtil.splitArgs(rawArgs);
+                String variableKey = args[0];
                 if (isPlayerVariable(variableKey)) {
-                    // 尝试同步获取，如果失败则异步获取并返回默认值
                     try {
                         CompletableFuture<String> future = getPlayerVariable(player, variableKey);
                         String value = future.get(500, java.util.concurrent.TimeUnit.MILLISECONDS);
+                        if (value == null || value.trim().isEmpty()) {
+                            logger.debug("占位符 drcomovex_var 返回空值，参数: " + rawArgs);
+                        }
                         return value != null ? value : "0";
                     } catch (java.util.concurrent.TimeoutException e) {
-                        // 超时时返回默认值
+                        logger.error("占位符 drcomovex_var 获取玩家变量超时，参数: " + rawArgs, e);
                         return "0";
                     } catch (Exception e) {
-                        // 其他异常时记录错误并返回错误信息
+                        logger.error("占位符 drcomovex_var 获取玩家变量异常，参数: " + rawArgs, e);
                         return "异常:" + e.getMessage();
                     }
                 } else if (isServerVariable(variableKey)) {
                     try {
                         CompletableFuture<String> future = getServerVariable(variableKey);
                         String value = future.get(500, java.util.concurrent.TimeUnit.MILLISECONDS);
+                        if (value == null || value.trim().isEmpty()) {
+                            logger.debug("占位符 drcomovex_var 返回空值，参数: " + rawArgs);
+                        }
                         return value != null ? value : "0";
                     } catch (java.util.concurrent.TimeoutException e) {
-                        // 超时时返回默认值
+                        logger.error("占位符 drcomovex_var 获取服务器变量超时，参数: " + rawArgs, e);
                         return "0";
                     } catch (Exception e) {
-                        // 其他异常时记录错误并返回错误信息
+                        logger.error("占位符 drcomovex_var 获取服务器变量异常，参数: " + rawArgs, e);
                         return "异常:" + e.getMessage();
                     }
                 }
             } catch (Exception e) {
+                logger.error("占位符 drcomovex_var 执行异常，参数: " + rawArgs, e);
                 return "错误";
             }
             return "变量不存在";
@@ -206,20 +216,26 @@ public class ServerVariablesAPI {
             if (isBlank.apply(rawArgs)) {
                 return "变量名不能为空";
             }
-            String variableKey = placeholderUtil.splitArgs(rawArgs)[0];
             try {
+                String variableKey = placeholderUtil.splitArgs(rawArgs)[0];
                 if (isServerVariable(variableKey)) {
                     try {
                         CompletableFuture<String> future = getServerVariable(variableKey);
                         String value = future.get(500, java.util.concurrent.TimeUnit.MILLISECONDS);
+                        if (value == null || value.trim().isEmpty()) {
+                            logger.debug("占位符 drcomovex_server_var 返回空值，参数: " + rawArgs);
+                        }
                         return value != null ? value : "0";
                     } catch (java.util.concurrent.TimeoutException e) {
+                        logger.error("占位符 drcomovex_server_var 获取服务器变量超时，参数: " + rawArgs, e);
                         return "0";
                     } catch (Exception e) {
+                        logger.error("占位符 drcomovex_server_var 获取服务器变量异常，参数: " + rawArgs, e);
                         return "异常:" + e.getMessage();
                     }
                 }
             } catch (Exception e) {
+                logger.error("占位符 drcomovex_server_var 执行异常，参数: " + rawArgs, e);
                 return "错误";
             }
             return "变量不存在";
@@ -230,20 +246,26 @@ public class ServerVariablesAPI {
             if (isBlank.apply(rawArgs)) {
                 return "变量名不能为空";
             }
-            String variableKey = placeholderUtil.splitArgs(rawArgs)[0];
             try {
+                String variableKey = placeholderUtil.splitArgs(rawArgs)[0];
                 if (isPlayerVariable(variableKey)) {
                     try {
                         CompletableFuture<String> future = getPlayerVariable(player, variableKey);
                         String value = future.get(500, java.util.concurrent.TimeUnit.MILLISECONDS);
+                        if (value == null || value.trim().isEmpty()) {
+                            logger.debug("占位符 drcomovex_player_var 返回空值，参数: " + rawArgs);
+                        }
                         return value != null ? value : "0";
                     } catch (java.util.concurrent.TimeoutException e) {
+                        logger.error("占位符 drcomovex_player_var 获取玩家变量超时，参数: " + rawArgs, e);
                         return "0";
                     } catch (Exception e) {
+                        logger.error("占位符 drcomovex_player_var 获取玩家变量异常，参数: " + rawArgs, e);
                         return "异常:" + e.getMessage();
                     }
                 }
             } catch (Exception e) {
+                logger.error("占位符 drcomovex_player_var 执行异常，参数: " + rawArgs, e);
                 return "错误";
             }
             return "变量不存在";
