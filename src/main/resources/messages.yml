@@ -3,98 +3,100 @@
 # 支持颜色码 (&a, &c, 等) 和 PlaceholderAPI 占位符
 # ================================================================
 
-# 成功消息
-success:
-  get: "&a变量 &e{variable} &a的值: &f{value}"
-  set: "&a已将变量 &e{variable} &a设置为: &f{value}"
-  add: "&a已将变量 &e{variable} &a增加 &f{value}&a, 当前值: &f{new_value}"
-  remove: "&a已从变量 &e{variable} &a中移除 &f{value}&a, 当前值: &f{new_value}"
-  reset: "&a已重置变量 &e{variable}&a, 当前值: &f{value}"
-  reload: "&a配置文件已重载完成！"
+# 所有插件消息
+messages:
+  # 成功消息
+  success:
+    get: "&a变量 &e{variable} &a的值: &f{value}"
+    set: "&a已将变量 &e{variable} &a设置为: &f{value}"
+    add: "&a已将变量 &e{variable} &a增加 &f{value}&a, 当前值: &f{new_value}"
+    remove: "&a已从变量 &e{variable} &a中移除 &f{value}&a, 当前值: &f{new_value}"
+    reset: "&a已重置变量 &e{variable}&a, 当前值: &f{value}"
+    reload: "&a配置文件已重载完成！"
 
-# 错误消息
-error:
-  no-permission: "&c你没有权限执行这个操作！"
-  unknown-command: "&c未知的子命令: &e{command}&c，请使用 &f/vex help &c查看帮助。"
-  variable-not-found: "&c变量 &e{variable} &c不存在！"
-  player-not-found: "&c玩家 &e{player} &c不存在或从未登入过服务器！"
-  operation-failed: "&c操作失败: &e{reason}"
-  internal: "&c内部错误，请联系管理员！"
-  console-specify-player: "&c控制台必须指定玩家！使用 &f-p:玩家名 &c参数。"
-  reload-failed: "&c重载配置失败，请检查控制台错误信息！"
-  
-  # 使用说明
-  usage-get: "&c用法: &f/vex get <变量名> [-p:玩家ID]"
-  usage-set: "&c用法: &f/vex set <变量名> <值> [-p:玩家ID]"
-  usage-add: "&c用法: &f/vex add <变量名> <值> [-p:玩家ID]"
-  usage-remove: "&c用法: &f/vex remove <变量名> <值> [-p:玩家ID]"
-  usage-reset: "&c用法: &f/vex reset <变量名> [-p:玩家ID]"
+  # 错误消息
+  error:
+    no-permission: "&c你没有权限执行这个操作！"
+    unknown-command: "&c未知的子命令: &e{command}&c，请使用 &f/vex help &c查看帮助。"
+    variable-not-found: "&c变量 &e{variable} &c不存在！"
+    player-not-found: "&c玩家 &e{player} &c不存在或从未登入过服务器！"
+    operation-failed: "&c操作失败: &e{reason}"
+    internal: "&c内部错误，请联系管理员！"
+    console-specify-player: "&c控制台必须指定玩家！使用 &f-p:玩家名 &c参数。"
+    reload-failed: "&c重载配置失败，请检查控制台错误信息！"
 
-# 帮助信息
-help:
-  header: "&8&l=== &6&lDrcomoVEX &e帮助 &8&l==="
-  commands:
-    - "&6/vex get <变量> [-p:玩家] &7- &f获取变量值"
-    - "&6/vex set <变量> <值> [-p:玩家] &7- &f设置变量值"
-    - "&6/vex add <变量> <值> [-p:玩家] &7- &f增加变量值"
-    - "&6/vex remove <变量> <值> [-p:玩家] &7- &f移除变量值"
-    - "&6/vex reset <变量> [-p:玩家] &7- &f重置变量值"
-    - "&6/vex reload &7- &f重载配置文件"
-    - "&6/vex help &7- &f显示帮助信息"
-  footer: "&8&l=== &e提示: &7使用 &f-p:玩家名 &7来操作其他玩家的变量 &8&l==="
+    # 使用说明
+    usage-get: "&c用法: &f/vex get <变量名> [-p:玩家ID]"
+    usage-set: "&c用法: &f/vex set <变量名> <值> [-p:玩家ID]"
+    usage-add: "&c用法: &f/vex add <变量名> <值> [-p:玩家ID]"
+    usage-remove: "&c用法: &f/vex remove <变量名> <值> [-p:玩家ID]"
+    usage-reset: "&c用法: &f/vex reset <变量名> [-p:玩家ID]"
 
-# 信息提示
-info:
-  plugin-version: "&aDrcomoVEX &f版本: &e{version}"
-  author: "&a作者: &eBaiMo"
-  description: "&7基于直觉设计的服务器变量管理系统"
-  website: "&a官网: &fhttps://github.com/DragonBaiMo/DrcomoVEX"
-  
-# 统计信息
-stats:
-  total-variables: "&a已加载变量: &e{count}"
-  database-type: "&a数据库类型: &e{type}"
-  database-status: "&a数据库状态: &e{status}"
-  cache-size: "&a缓存大小: &e{size}"
-  
-# 更新通知
-update:
-  available: "&6[更新] &a发现新版本 &e{latest}&a！当前版本: &c{current}"
-  download: "&6[更新] &a下载地址: &f{url}"
-  no-update: "&a当前已是最新版本！"
-  
-# 调试信息
-debug:
-  variable-loaded: "&7[调试] 已加载变量: &e{variable}"
-  cache-hit: "&7[调试] 缓存命中: &e{key}"
-  cache-miss: "&7[调试] 缓存未命中: &e{key}"
-  database-query: "&7[调试] 数据库查询: &e{sql}"
-  
-# 占位符示例
-placeholders:
-  examples:
-    - "&7占位符示例:"
-    - "&e%drcomovex_var_变量名% &7- 获取变量值"
-    - "&e%drcomovex_player_var_变量名% &7- 获取玩家变量值"
-    - "&e%drcomovex_server_var_变量名% &7- 获取服务器变量值"
+  # 帮助信息
+  help:
+    header: "&8&l=== &6&lDrcomoVEX &e帮助 &8&l==="
+    commands:
+      - "&6/vex get <变量> [-p:玩家] &7- &f获取变量值"
+      - "&6/vex set <变量> <值> [-p:玩家] &7- &f设置变量值"
+      - "&6/vex add <变量> <值> [-p:玩家] &7- &f增加变量值"
+      - "&6/vex remove <变量> <值> [-p:玩家] &7- &f移除变量值"
+      - "&6/vex reset <变量> [-p:玩家] &7- &f重置变量值"
+      - "&6/vex reload &7- &f重载配置文件"
+      - "&6/vex help &7- &f显示帮助信息"
+    footer: "&8&l=== &e提示: &7使用 &f-p:玩家名 &7来操作其他玩家的变量 &8&l==="
 
-# 特殊消息类型
-special:
-  # ActionBar 消息
-  actionbar:
-    variable-updated: "&a变量已更新: &e{variable} &7= &f{value}"
-    
-  # Title 消息
-  title:
-    welcome:
-      title: "&6欢迎使用 DrcomoVEX"
-      subtitle: "&7基于直觉设计的变量管理系统"
-      
+  # 信息提示
+  info:
+    plugin-version: "&aDrcomoVEX &f版本: &e{version}"
+    author: "&a作者: &eBaiMo"
+    description: "&7基于直觉设计的服务器变量管理系统"
+    website: "&a官网: &fhttps://github.com/DragonBaiMo/DrcomoVEX"
+
+  # 统计信息
+  stats:
+    total-variables: "&a已加载变量: &e{count}"
+    database-type: "&a数据库类型: &e{type}"
+    database-status: "&a数据库状态: &e{status}"
+    cache-size: "&a缓存大小: &e{size}"
+
+  # 更新通知
+  update:
+    available: "&6[更新] &a发现新版本 &e{latest}&a！当前版本: &c{current}"
+    download: "&6[更新] &a下载地址: &f{url}"
+    no-update: "&a当前已是最新版本！"
+
+  # 调试信息
+  debug:
+    variable-loaded: "&7[调试] 已加载变量: &e{variable}"
+    cache-hit: "&7[调试] 缓存命中: &e{key}"
+    cache-miss: "&7[调试] 缓存未命中: &e{key}"
+    database-query: "&7[调试] 数据库查询: &e{sql}"
+
+  # 占位符示例
+  placeholders:
+    examples:
+      - "&7占位符示例:"
+      - "&e%drcomovex_var_变量名% &7- 获取变量值"
+      - "&e%drcomovex_player_var_变量名% &7- 获取玩家变量值"
+      - "&e%drcomovex_server_var_变量名% &7- 获取服务器变量值"
+
+  # 特殊消息类型
+  special:
+    # ActionBar 消息
+    actionbar:
+      variable-updated: "&a变量已更新: &e{variable} &7= &f{value}"
+
+    # Title 消息
+    title:
+      welcome:
+        title: "&6欢迎使用 DrcomoVEX"
+        subtitle: "&7基于直觉设计的变量管理系统"
+
 # 多语言支持配置
 language:
   # 默认语言
   default: "zh_CN"
-  
+
   # 支持的语言列表
   supported:
     - "zh_CN"
