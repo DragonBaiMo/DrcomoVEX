@@ -100,22 +100,10 @@ public class MainCommand implements CommandExecutor, TabCompleter {
         
         String variableKey = args[1];
         
-        // 解析参数：支持两种格式
+        // 解析参数
         OfflinePlayer targetPlayer;
         
-        // 检查是否使用 -p: 格式
-        boolean hasPlayerFlag = false;
-        for (String arg : args) {
-            if (arg.startsWith("-p:")) {
-                hasPlayerFlag = true;
-                break;
-            }
-        }
-        
-        if (hasPlayerFlag) {
-            // 格式: /vex get <变量名> -p:<玩家名>
-            targetPlayer = parseTargetPlayer(sender, args);
-        } else if (args.length >= 3) {
+        if (args.length >= 3) {
             // 格式: /vex get <变量名> <玩家名>
             String playerName = args[2];
             targetPlayer = Bukkit.getOfflinePlayer(playerName);
@@ -125,7 +113,7 @@ public class MainCommand implements CommandExecutor, TabCompleter {
                 return;
             }
         } else {
-            // 格式: /vex get <变量名>（查询执行者自己）
+            // 默认为执行者自己
             targetPlayer = parseTargetPlayer(sender, args);
         }
         
@@ -173,24 +161,11 @@ public class MainCommand implements CommandExecutor, TabCompleter {
         
         String variableKey = args[1];
         
-        // 解析参数：支持两种格式
+        // 解析参数
         String value;
         OfflinePlayer targetPlayer;
         
-        // 检查是否使用 -p: 格式
-        boolean hasPlayerFlag = false;
-        for (String arg : args) {
-            if (arg.startsWith("-p:")) {
-                hasPlayerFlag = true;
-                break;
-            }
-        }
-        
-        if (hasPlayerFlag) {
-            // 格式: /vex set <变量名> <值> -p:<玩家名>
-            value = args[2];
-            targetPlayer = parseTargetPlayer(sender, args);
-        } else if (args.length >= 4) {
+        if (args.length >= 4) {
             // 格式: /vex set <变量名> <玩家名> <值>
             String playerName = args[2];
             value = args[3];
@@ -250,24 +225,11 @@ public class MainCommand implements CommandExecutor, TabCompleter {
         
         String variableKey = args[1];
         
-        // 解析参数：支持两种格式
+        // 解析参数
         String value;
         OfflinePlayer targetPlayer;
         
-        // 检查是否使用 -p: 格式
-        boolean hasPlayerFlag = false;
-        for (String arg : args) {
-            if (arg.startsWith("-p:")) {
-                hasPlayerFlag = true;
-                break;
-            }
-        }
-        
-        if (hasPlayerFlag) {
-            // 格式: /vex add <变量名> <值> -p:<玩家名>
-            value = args[2];
-            targetPlayer = parseTargetPlayer(sender, args);
-        } else if (args.length >= 4) {
+        if (args.length >= 4) {
             // 格式: /vex add <变量名> <玩家名> <值>
             String playerName = args[2];
             value = args[3];
@@ -328,24 +290,11 @@ public class MainCommand implements CommandExecutor, TabCompleter {
         
         String variableKey = args[1];
         
-        // 解析参数：支持两种格式
+        // 解析参数
         String value;
         OfflinePlayer targetPlayer;
         
-        // 检查是否使用 -p: 格式
-        boolean hasPlayerFlag = false;
-        for (String arg : args) {
-            if (arg.startsWith("-p:")) {
-                hasPlayerFlag = true;
-                break;
-            }
-        }
-        
-        if (hasPlayerFlag) {
-            // 格式: /vex remove <变量名> <值> -p:<玩家名>
-            value = args[2];
-            targetPlayer = parseTargetPlayer(sender, args);
-        } else if (args.length >= 4) {
+        if (args.length >= 4) {
             // 格式: /vex remove <变量名> <玩家名> <值>
             String playerName = args[2];
             value = args[3];
@@ -406,22 +355,10 @@ public class MainCommand implements CommandExecutor, TabCompleter {
         
         String variableKey = args[1];
         
-        // 解析参数：支持两种格式
+        // 解析参数
         OfflinePlayer targetPlayer;
         
-        // 检查是否使用 -p: 格式
-        boolean hasPlayerFlag = false;
-        for (String arg : args) {
-            if (arg.startsWith("-p:")) {
-                hasPlayerFlag = true;
-                break;
-            }
-        }
-        
-        if (hasPlayerFlag) {
-            // 格式: /vex reset <变量名> -p:<玩家名>
-            targetPlayer = parseTargetPlayer(sender, args);
-        } else if (args.length >= 3) {
+        if (args.length >= 3) {
             // 格式: /vex reset <变量名> <玩家名>
             String playerName = args[2];
             targetPlayer = Bukkit.getOfflinePlayer(playerName);
@@ -431,7 +368,7 @@ public class MainCommand implements CommandExecutor, TabCompleter {
                 return;
             }
         } else {
-            // 格式: /vex reset <变量名>（重置执行者自己）
+            // 默认为执行者自己
             targetPlayer = parseTargetPlayer(sender, args);
         }
         
@@ -516,34 +453,13 @@ public class MainCommand implements CommandExecutor, TabCompleter {
      * 解析目标玩家
      */
     private OfflinePlayer parseTargetPlayer(CommandSender sender, String[] args) {
-        // 查找 -p: 参数
-        String targetPlayerName = null;
-        for (String arg : args) {
-            if (arg.startsWith("-p:")) {
-                targetPlayerName = arg.substring(3);
-                break;
-            }
+        // 默认返回执行者自己
+        if (sender instanceof Player) {
+            return (Player) sender;
         }
         
-        // 如果没有指定目标玩家，默认为命令执行者
-        if (targetPlayerName == null) {
-            if (sender instanceof Player) {
-                return (Player) sender;
-            } else {
-                messagesManager.sendMessage(sender, "error.console-specify-player", new HashMap<>());
-                return null;
-            }
-        }
-        
-        // 获取目标玩家
-        OfflinePlayer targetPlayer = Bukkit.getOfflinePlayer(targetPlayerName);
-        if (targetPlayer == null || !targetPlayer.hasPlayedBefore()) {
-            messagesManager.sendMessage(sender, "error.player-not-found",
-                    Map.of("player", targetPlayerName));
-            return null;
-        }
-        
-        return targetPlayer;
+        messagesManager.sendMessage(sender, "error.console-specify-player", new HashMap<>());
+        return null;
     }
     
     /**
@@ -565,37 +481,29 @@ public class MainCommand implements CommandExecutor, TabCompleter {
     
     @Override
     public List<String> onTabComplete(CommandSender sender, Command command, String alias, String[] args) {
-        List<String> completions = new ArrayList<>();
-        
+        // 子命令补全
         if (args.length == 1) {
-            // 子指令补全
-            List<String> subCommands = Arrays.asList("get", "set", "add", "remove", "reset", "reload", "help");
-            return subCommands.stream()
-                    .filter(cmd -> cmd.toLowerCase().startsWith(args[0].toLowerCase()))
+            return Arrays.asList("get", "set", "add", "remove", "reset", "reload", "help").stream()
+                    .filter(cmd -> cmd.startsWith(args[0].toLowerCase()))
                     .collect(Collectors.toList());
         }
         
+        // 变量名补全
         if (args.length == 2 && !args[0].equalsIgnoreCase("reload") && !args[0].equalsIgnoreCase("help")) {
-            // 变量名补全
             return variablesManager.getAllVariableKeys().stream()
                     .filter(key -> key.toLowerCase().startsWith(args[1].toLowerCase()))
                     .collect(Collectors.toList());
         }
         
+        // 玩家名补全：根据参数位置推断
         if (args.length >= 3) {
-            // 玩家名补全 (-p:参数)
-            for (String arg : args) {
-                if (arg.startsWith("-p:")) {
-                    return Collections.emptyList();
-                }
-            }
-            
-            // 提供 -p: 提示
-            if (sender.hasPermission("drcomovex.command." + args[0].toLowerCase() + ".others")) {
-                completions.add("-p:");
-            }
+            String last = args[args.length - 1].toLowerCase();
+            return Bukkit.getOnlinePlayers().stream()
+                    .map(Player::getName)
+                    .filter(name -> name.toLowerCase().startsWith(last))
+                    .collect(Collectors.toList());
         }
         
-        return completions;
+        return Collections.emptyList();
     }
 }
