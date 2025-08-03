@@ -3,6 +3,7 @@ package cn.drcomo.managers;
 import cn.drcomo.DrcomoVEX;
 import cn.drcomo.corelib.util.DebugUtil;
 import cn.drcomo.corelib.message.MessageService;
+import cn.drcomo.corelib.color.ColorUtil;
 import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
 
@@ -94,13 +95,17 @@ public class MessagesManager {
     
     /**
      * 发送单条消息
+     *
+     * <p>发送前会自动转换颜色代码。</p>
      */
     public void sendMessage(CommandSender sender, String messageKey) {
         sendMessage(sender, messageKey, null);
     }
-    
+
     /**
      * 发送单条消息并替换占位符
+     *
+     * <p>发送前会自动转换颜色代码。</p>
      */
     public void sendMessage(CommandSender sender, String messageKey, Map<String, String> placeholders) {
         try {
@@ -110,6 +115,7 @@ public class MessagesManager {
                 if (rawMessage != null) {
                     // 先用PlaceholderAPIUtil处理{}占位符，再用MessageService处理内置占位符
                     String message = ((DrcomoVEX) plugin).getPlaceholderUtil().parse((Player) sender, rawMessage, placeholders != null ? placeholders : new java.util.HashMap<>());
+                    message = ColorUtil.translateColors(message);
                     messageService.sendRaw((Player) sender, message);
                 }
             } else {
@@ -118,6 +124,7 @@ public class MessagesManager {
                 if (rawMessage != null) {
                     String message = ((DrcomoVEX) plugin).getPlaceholderUtil().parse(null, rawMessage, placeholders != null ? placeholders : new java.util.HashMap<>());
                     if (message != null && !message.trim().isEmpty()) {
+                        message = ColorUtil.translateColors(message);
                         // 移除颜色码
                         message = message.replaceAll("§[0-9a-fk-or]", "");
                         sender.sendMessage(message);
@@ -133,13 +140,17 @@ public class MessagesManager {
     
     /**
      * 发送多条消息
+     *
+     * <p>发送前会自动转换颜色代码。</p>
      */
     public void sendMessageList(CommandSender sender, String messageKey) {
         sendMessageList(sender, messageKey, null);
     }
-    
+
     /**
      * 发送多条消息并替换占位符
+     *
+     * <p>发送前会自动转换颜色代码。</p>
      */
     public void sendMessageList(CommandSender sender, String messageKey, Map<String, String> placeholders) {
         try {
@@ -151,6 +162,7 @@ public class MessagesManager {
                         if (rawMessage != null && !rawMessage.trim().isEmpty()) {
                             // 对每条消息使用PlaceholderAPIUtil处理{}占位符
                             String message = ((DrcomoVEX) plugin).getPlaceholderUtil().parse((Player) sender, rawMessage, placeholders != null ? placeholders : new java.util.HashMap<>());
+                            message = ColorUtil.translateColors(message);
                             messageService.sendRaw((Player) sender, message);
                         }
                     }
@@ -163,6 +175,7 @@ public class MessagesManager {
                         if (rawMessage != null && !rawMessage.trim().isEmpty()) {
                             String message = ((DrcomoVEX) plugin).getPlaceholderUtil().parse(null, rawMessage, placeholders != null ? placeholders : new java.util.HashMap<>());
                             if (message != null) {
+                                message = ColorUtil.translateColors(message);
                                 // 移除颜色码
                                 message = message.replaceAll("§[0-9a-fk-or]", "");
                                 sender.sendMessage(message);
@@ -180,13 +193,17 @@ public class MessagesManager {
     
     /**
      * 发送 ActionBar 消息
+     *
+     * <p>发送前会自动转换颜色代码。</p>
      */
     public void sendActionBar(Player player, String messageKey) {
         sendActionBar(player, messageKey, null);
     }
-    
+
     /**
      * 发送 ActionBar 消息并替换占位符
+     *
+     * <p>发送前会自动转换颜色代码。</p>
      */
     public void sendActionBar(Player player, String messageKey, Map<String, String> placeholders) {
         try {
@@ -194,6 +211,7 @@ public class MessagesManager {
             String rawMessage = messageService.getRaw(messageKey);
             if (rawMessage != null) {
                 String message = ((DrcomoVEX) plugin).getPlaceholderUtil().parse(player, rawMessage, placeholders != null ? placeholders : new java.util.HashMap<>());
+                message = ColorUtil.translateColors(message);
                 messageService.sendRaw(player, message);
             }
         } catch (Exception e) {
@@ -203,13 +221,17 @@ public class MessagesManager {
     
     /**
      * 发送 Title 消息
+     *
+     * <p>发送前会自动转换颜色代码。</p>
      */
     public void sendTitle(Player player, String titleKey, String subtitleKey) {
         sendTitle(player, titleKey, subtitleKey, null);
     }
-    
+
     /**
      * 发送 Title 消息并替换占位符
+     *
+     * <p>发送前会自动转换颜色代码。</p>
      */
     public void sendTitle(Player player, String titleKey, String subtitleKey, Map<String, String> placeholders) {
         try {
@@ -222,11 +244,17 @@ public class MessagesManager {
             
             if (rawTitle != null) {
                 title = ((DrcomoVEX) plugin).getPlaceholderUtil().parse(player, rawTitle, placeholders != null ? placeholders : new java.util.HashMap<>());
+                if (title != null) {
+                    title = ColorUtil.translateColors(title);
+                }
             }
             if (rawSubtitle != null) {
                 subtitle = ((DrcomoVEX) plugin).getPlaceholderUtil().parse(player, rawSubtitle, placeholders != null ? placeholders : new java.util.HashMap<>());
+                if (subtitle != null) {
+                    subtitle = ColorUtil.translateColors(subtitle);
+                }
             }
-            
+
             if (title != null || subtitle != null) {
                 player.sendTitle(title != null ? title : "", subtitle != null ? subtitle : "", 10, 70, 20);
             }
