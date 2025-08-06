@@ -21,13 +21,13 @@ database:
     password: "password"
     useSSL: false
   
-  # 连接池配置
+  # 连接池配置 (已根据性能分析报告优化)
   pool:
-    minimum-idle: 2
-    maximum-pool-size: 10
-    connection-timeout: 30000
-    idle-timeout: 600000
-    max-lifetime: 1800000
+    minimum-idle: 5              # 增加最小空闲连接，提升基础性能
+    maximum-pool-size: 20        # 增加最大连接数，适应高并发场景
+    connection-timeout: 30000    # 30秒连接超时
+    idle-timeout: 600000         # 10分钟空闲超时
+    max-lifetime: 1800000        # 30分钟最大生命周期
 
 # 缓存配置
 cache:
@@ -68,14 +68,6 @@ cycle:
   # 时区设置
   timezone: "Asia/Shanghai"
 
-# 性能配置
-performance:
-  # 异步线程池大小
-  async-pool-size: 4
-  
-  # 是否启用性能监控
-  enable-metrics: true
-
 # 基本设置
 settings:
   # 是否检查更新
@@ -106,39 +98,57 @@ security:
   # 是否允许循环引用
   allow-circular-references: false
 
-# 高性能重构配置
+# 性能配置 (已根据性能分析报告全面优化)
 performance:
+  # 异步线程池大小
+  async-pool-size: 4
+  
+  # 是否启用性能监控
+  enable-metrics: true
+  
+  # 内存优先存储配置
   memory-storage:
     # 启用内存优先存储
     enabled: true
-    # 最大内存使用量 (MB)
-    max-memory-mb: 256
+    # 最大内存使用量 (MB) - 根据服务器内存调整
+    max-memory-mb: 512
     # 玩家数据过期时间（分钟，玩家离线后）
     player-data-expire-minutes: 30
+    # 内存清理阈值 (%) - 适当提高清理阈值
+    cleanup-threshold: 85
+    # 紧急清理阈值 (%)
+    emergency-cleanup-threshold: 95
   
+  # 批量持久化配置
   batch-persistence:
-    # 批量持久化间隔（秒）
-    batch-interval-seconds: 30
-    # 最大批次大小
-    max-batch-size: 1000
+    # 批量持久化间隔（秒） - 更频繁的持久化
+    batch-interval-seconds: 15
+    # 最大批次大小 - 增加批次大小
+    max-batch-size: 2000
     # 内存压力阈值触发持久化 (%)
     memory-pressure-threshold: 80.0
     # 最大重试次数
     max-retries: 3
   
+  # 异步队列配置
   async-queue:
     # 异步写入队列大小
     queue-size: 10000
     # 工作线程数
     worker-threads: 2
   
+  # 三级缓存系统配置
   cache:
     l2-expression-cache:
-      expire-minutes: 5
-      maximum-size: 10000
+      # 延长表达式缓存时间，减少重复解析
+      expire-minutes: 10
+      # 增加缓存容量，提升命中率
+      maximum-size: 20000
     l3-result-cache:
-      expire-minutes: 2
-      maximum-size: 5000
+      # 延长结果缓存时间
+      expire-minutes: 5
+      # 增加结果缓存容量
+      maximum-size: 10000
 
 # 未来扩展配置
 features:

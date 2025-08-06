@@ -20,13 +20,13 @@ public class PlayerVariablesManager {
     
     private final DrcomoVEX plugin;
     private final DebugUtil logger;
-    private final VariablesManager variablesManager;
+    private final RefactoredVariablesManager variablesManager;
     private final HikariConnection database;
     
     public PlayerVariablesManager(
             DrcomoVEX plugin,
             DebugUtil logger,
-            VariablesManager variablesManager,
+            RefactoredVariablesManager variablesManager,
             HikariConnection database
     ) {
         this.plugin = plugin;
@@ -146,20 +146,5 @@ public class PlayerVariablesManager {
     public boolean isPlayerVariable(String key) {
         Variable variable = variablesManager.getVariableDefinition(key);
         return variable != null && variable.isPlayerScoped();
-    }
-    
-    /**
-     * 清理玩家数据
-     */
-    public CompletableFuture<Integer> clearPlayerData(OfflinePlayer player) {
-        return database.deleteAsync("player_variables", "player_uuid = ?", player.getUniqueId().toString());
-    }
-    
-    /**
-     * 导出玩家数据
-     */
-    public CompletableFuture<java.util.Map<String, String>> exportPlayerData(OfflinePlayer player) {
-        // TODO: 实现玩家数据导出逻辑
-        return CompletableFuture.completedFuture(new java.util.HashMap<>());
     }
 }

@@ -401,7 +401,7 @@ public class MainCommand implements CommandExecutor, TabCompleter {
         plugin.getAsyncTaskManager().submitAsync(() -> {
             try {
                 plugin.getConfigsManager().reload();
-                variablesManager.reload();
+                variablesManager.reload().join(); // 等待异步重载完成
                 messagesManager.reload();
                 Bukkit.getScheduler().runTask(plugin, () -> {
                     messagesManager.sendMessage(sender, "success.reload", new HashMap<>());

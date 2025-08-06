@@ -13,6 +13,20 @@ messages:
     remove: "&a已从变量 &e{variable} &a中移除 &f{value}&a, 当前值: &f{new_value}"
     reset: "&a已重置变量 &e{variable}&a, 当前值: &f{value}"
     reload: "&a配置文件已重载完成！"
+    
+    # 全局变量操作
+    global-get: "&a全局变量 &e{variable} &a的值: &f{value}"
+    global-set: "&a已将全局变量 &e{variable} &a设置为: &f{value}"
+    global-add: "&a已将全局变量 &e{variable} &a增加 &f{value}&a, 当前值: &f{new_value}"
+    global-remove: "&a已从全局变量 &e{variable} &a中移除 &f{value}&a, 当前值: &f{new_value}"
+    global-reset: "&a已重置全局变量 &e{variable}&a, 当前值: &f{value}"
+    
+    # 玩家变量操作
+    player-get: "&a玩家 &e{player} &a的变量 &e{variable} &a值: &f{value}"
+    player-set: "&a已将玩家 &e{player} &a的变量 &e{variable} &a设置为: &f{value}"
+    player-add: "&a已将玩家 &e{player} &a的变量 &e{variable} &a增加 &f{value}&a, 当前值: &f{new_value}"
+    player-remove: "&a已从玩家 &e{player} &a的变量 &e{variable} &a中移除 &f{value}&a, 当前值: &f{new_value}"
+    player-reset: "&a已重置玩家 &e{player} &a的变量 &e{variable}&a, 当前值: &f{value}"
 
   # 错误消息
   error:
@@ -24,6 +38,28 @@ messages:
     internal: "&c内部错误，请联系管理员！"
     console-specify-player: "&c控制台必须指定玩家！使用 &f-p:玩家名 &c参数。"
     reload-failed: "&c重载配置失败，请检查控制台错误信息！"
+    
+    # 子命令错误
+    unknown-player-subcommand: "&c未知的玩家子命令: &e{command}&c，支持的命令: get, set, add, remove, reset"
+    unknown-global-subcommand: "&c未知的全局子命令: &e{command}&c，支持的命令: get, set, add, remove, reset"
+    
+    # 指令格式说明
+    usage-player-command: "&c用法: &f/vex player <get|set|add|remove|reset> ..."
+    usage-global-command: "&c用法: &f/vex global <get|set|add|remove|reset> ..."
+    
+    # 玩家变量用法
+    usage-player-get: "&c用法: &f/vex player get <玩家名> <变量名>"
+    usage-player-set: "&c用法: &f/vex player set <玩家名> <变量名> <值>"
+    usage-player-add: "&c用法: &f/vex player add <玩家名> <变量名> <值>"
+    usage-player-remove: "&c用法: &f/vex player remove <玩家名> <变量名> <值>"
+    usage-player-reset: "&c用法: &f/vex player reset <玩家名> <变量名>"
+    
+    # 全局变量用法
+    usage-global-get: "&c用法: &f/vex global get <变量名>"
+    usage-global-set: "&c用法: &f/vex global set <变量名> <值>"
+    usage-global-add: "&c用法: &f/vex global add <变量名> <值>"
+    usage-global-remove: "&c用法: &f/vex global remove <变量名> <值>"
+    usage-global-reset: "&c用法: &f/vex global reset <变量名>"
 
     # 使用说明
     usage-get: "&c用法: &f/vex get <变量名> [-p:玩家ID]"

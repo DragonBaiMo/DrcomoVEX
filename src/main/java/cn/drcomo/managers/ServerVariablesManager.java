@@ -5,9 +5,13 @@ import cn.drcomo.model.VariableResult;
 import cn.drcomo.model.structure.Variable;
 import cn.drcomo.database.HikariConnection;
 import cn.drcomo.corelib.util.DebugUtil;
+import org.bukkit.Bukkit;
 import org.bukkit.OfflinePlayer;
+import org.bukkit.entity.Player;
 
+import java.util.Collection;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ThreadLocalRandom;
 
 /**
  * 服务器变量管理器
@@ -20,13 +24,13 @@ public class ServerVariablesManager {
     
     private final DrcomoVEX plugin;
     private final DebugUtil logger;
-    private final VariablesManager variablesManager;
+    private final RefactoredVariablesManager variablesManager;
     private final HikariConnection database;
     
     public ServerVariablesManager(
             DrcomoVEX plugin,
             DebugUtil logger,
-            VariablesManager variablesManager,
+            RefactoredVariablesManager variablesManager,
             HikariConnection database
     ) {
         this.plugin = plugin;
@@ -44,10 +48,29 @@ public class ServerVariablesManager {
     }
     
     /**
+     * 获取用于占位符解析的玩家对象
+     * 对于全局变量，如果需要占位符解析，使用随机在线玩家
+     */
+    private OfflinePlayer getPlayerForPlaceholders() {
+        Collection<? extends Player> onlinePlayers = Bukkit.getOnlinePlayers();
+        if (onlinePlayers.isEmpty()) {
+            logger.debug("没有在线玩家可用于全局变量占位符解析");
+            return null;
+        }
+        
+        // 随机选择一个在线玩家用于占位符解析
+        Player[] players = onlinePlayers.toArray(new Player[0]);
+        Player randomPlayer = players[ThreadLocalRandom.current().nextInt(players.length)];
+        logger.debug("选择玩家用于全局变量占位符解析: " + randomPlayer.getName());
+        return randomPlayer;
+    }
+    
+    /**
      * 获取服务器变量值
      */
     public CompletableFuture<VariableResult> getServerVariable(String key) {
-        return variablesManager.getVariable(null, key)
+        OfflinePlayer playerForPlaceholders = getPlayerForPlaceholders();
+        return variablesManager.getVariable(playerForPlaceholders, key)
                 .thenApply(result -> {
                     if (result.isSuccess()) {
                         // 检查是否为全局变量
@@ -77,7 +100,8 @@ public class ServerVariablesManager {
             );
         }
         
-        return variablesManager.setVariable(null, key, value);
+        OfflinePlayer playerForPlaceholders = getPlayerForPlaceholders();
+        return variablesManager.setVariable(playerForPlaceholders, key, value);
     }
     
     /**
@@ -97,7 +121,8 @@ public class ServerVariablesManager {
             );
         }
         
-        return variablesManager.addVariable(null, key, addValue);
+        OfflinePlayer playerForPlaceholders = getPlayerForPlaceholders();
+        return variablesManager.addVariable(playerForPlaceholders, key, addValue);
     }
     
     /**
@@ -117,7 +142,8 @@ public class ServerVariablesManager {
             );
         }
         
-        return variablesManager.removeVariable(null, key, removeValue);
+        OfflinePlayer playerForPlaceholders = getPlayerForPlaceholders();
+        return variablesManager.removeVariable(playerForPlaceholders, key, removeValue);
     }
     
     /**
@@ -137,7 +163,8 @@ public class ServerVariablesManager {
             );
         }
         
-        return variablesManager.resetVariable(null, key);
+        OfflinePlayer playerForPlaceholders = getPlayerForPlaceholders();
+        return variablesManager.resetVariable(playerForPlaceholders, key);
     }
     
     /**
