@@ -20,6 +20,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 /**
@@ -36,6 +37,9 @@ import java.util.stream.Collectors;
  * 作者: BaiMo
  */
 public class MainCommand implements CommandExecutor, TabCompleter {
+
+    /** 异步回调超时时间（秒） */
+    private static final long TIMEOUT_SECONDS = 5L;
 
     // 插件核心引用
     private final DrcomoVEX plugin;
@@ -193,10 +197,16 @@ public class MainCommand implements CommandExecutor, TabCompleter {
             return;
         }
         playerVariablesManager.getPlayerVariable(target, args[3])
-                .thenAccept(r -> sendResult(sender, r,
-                        Map.of("variable", args[3], "player", target.getName(), "value", r.getValue() != null ? r.getValue() : ""),
-                        "success.player-get"))
-                .exceptionally(t -> handleException("获取玩家变量失败: " + args[3], t, sender));
+                .completeOnTimeout(VariableResult.failure("操作超时"), TIMEOUT_SECONDS, TimeUnit.SECONDS)
+                .whenComplete((r, t) -> {
+                    if (t != null) {
+                        handleException("获取玩家变量失败: " + args[3], t, sender);
+                    } else {
+                        sendResult(sender, r,
+                                Map.of("variable", args[3], "player", target.getName(), "value", r.getValue() != null ? r.getValue() : ""),
+                                "success.player-get");
+                    }
+                });
     }
 
     /**
@@ -215,10 +225,16 @@ public class MainCommand implements CommandExecutor, TabCompleter {
         }
         String key = args[3], val = args[4];
         playerVariablesManager.setPlayerVariable(target, key, val)
-                .thenAccept(r -> sendResult(sender, r,
-                        Map.of("variable", key, "player", target.getName(), "value", val),
-                        "success.player-set"))
-                .exceptionally(t -> handleException("设置玩家变量失败: " + key, t, sender));
+                .completeOnTimeout(VariableResult.failure("操作超时"), TIMEOUT_SECONDS, TimeUnit.SECONDS)
+                .whenComplete((r, t) -> {
+                    if (t != null) {
+                        handleException("设置玩家变量失败: " + key, t, sender);
+                    } else {
+                        sendResult(sender, r,
+                                Map.of("variable", key, "player", target.getName(), "value", val),
+                                "success.player-set");
+                    }
+                });
     }
 
     /**
@@ -237,10 +253,16 @@ public class MainCommand implements CommandExecutor, TabCompleter {
         }
         String key = args[3], val = args[4];
         playerVariablesManager.addPlayerVariable(target, key, val)
-                .thenAccept(r -> sendResult(sender, r,
-                        Map.of("variable", key, "player", target.getName(), "value", val, "new_value", r.getValue() != null ? r.getValue() : ""),
-                        "success.player-add"))
-                .exceptionally(t -> handleException("增加玩家变量失败: " + key, t, sender));
+                .completeOnTimeout(VariableResult.failure("操作超时"), TIMEOUT_SECONDS, TimeUnit.SECONDS)
+                .whenComplete((r, t) -> {
+                    if (t != null) {
+                        handleException("增加玩家变量失败: " + key, t, sender);
+                    } else {
+                        sendResult(sender, r,
+                                Map.of("variable", key, "player", target.getName(), "value", val, "new_value", r.getValue() != null ? r.getValue() : ""),
+                                "success.player-add");
+                    }
+                });
     }
 
     /**
@@ -259,10 +281,16 @@ public class MainCommand implements CommandExecutor, TabCompleter {
         }
         String key = args[3], val = args[4];
         playerVariablesManager.removePlayerVariable(target, key, val)
-                .thenAccept(r -> sendResult(sender, r,
-                        Map.of("variable", key, "player", target.getName(), "value", val, "new_value", r.getValue() != null ? r.getValue() : ""),
-                        "success.player-remove"))
-                .exceptionally(t -> handleException("移除玩家变量失败: " + key, t, sender));
+                .completeOnTimeout(VariableResult.failure("操作超时"), TIMEOUT_SECONDS, TimeUnit.SECONDS)
+                .whenComplete((r, t) -> {
+                    if (t != null) {
+                        handleException("移除玩家变量失败: " + key, t, sender);
+                    } else {
+                        sendResult(sender, r,
+                                Map.of("variable", key, "player", target.getName(), "value", val, "new_value", r.getValue() != null ? r.getValue() : ""),
+                                "success.player-remove");
+                    }
+                });
     }
 
     /**
@@ -280,10 +308,16 @@ public class MainCommand implements CommandExecutor, TabCompleter {
             return;
         }
         playerVariablesManager.resetPlayerVariable(target, args[3])
-                .thenAccept(r -> sendResult(sender, r,
-                        Map.of("variable", args[3], "player", target.getName(), "value", r.getValue() != null ? r.getValue() : ""),
-                        "success.player-reset"))
-                .exceptionally(t -> handleException("重置玩家变量失败: " + args[3], t, sender));
+                .completeOnTimeout(VariableResult.failure("操作超时"), TIMEOUT_SECONDS, TimeUnit.SECONDS)
+                .whenComplete((r, t) -> {
+                    if (t != null) {
+                        handleException("重置玩家变量失败: " + args[3], t, sender);
+                    } else {
+                        sendResult(sender, r,
+                                Map.of("variable", args[3], "player", target.getName(), "value", r.getValue() != null ? r.getValue() : ""),
+                                "success.player-reset");
+                    }
+                });
     }
 
     // ----------------- 全局指令实现 -----------------
@@ -454,6 +488,11 @@ public class MainCommand implements CommandExecutor, TabCompleter {
      */
     private void sendResult(CommandSender sender, VariableResult r, Map<String, String> params, String successKey) {
         if (r.isSuccess()) {
+            if (r.getValue() == null) {
+                logger.warn("变量操作成功但返回值为空");
+                messagesManager.sendMessage(sender, "error.operation-failed", Map.of("reason", "返回值为空"));
+                return;
+            }
             messagesManager.sendMessage(sender, successKey, params);
         } else {
             messagesManager.sendMessage(sender, "error.operation-failed", Map.of("reason", r.getErrorMessage()));

@@ -8,6 +8,7 @@ import cn.drcomo.corelib.util.DebugUtil;
 import org.bukkit.OfflinePlayer;
 
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 
 /**
  * 玩家变量管理器
@@ -17,6 +18,9 @@ import java.util.concurrent.CompletableFuture;
  * @author BaiMo
  */
 public class PlayerVariablesManager {
+
+    /** 异步操作超时时间（秒） */
+    private static final long TIMEOUT_SECONDS = 5L;
     
     private final DrcomoVEX plugin;
     private final DebugUtil logger;
@@ -47,7 +51,7 @@ public class PlayerVariablesManager {
      * 获取玩家变量值
      */
     public CompletableFuture<VariableResult> getPlayerVariable(OfflinePlayer player, String key) {
-        return variablesManager.getVariable(player, key)
+        return withTimeout(variablesManager.getVariable(player, key))
                 .thenApply(result -> {
                     if (result.isSuccess()) {
                         // 检查是否为玩家变量
@@ -77,7 +81,7 @@ public class PlayerVariablesManager {
             );
         }
         
-        return variablesManager.setVariable(player, key, value);
+        return withTimeout(variablesManager.setVariable(player, key, value));
     }
     
     /**
@@ -97,7 +101,7 @@ public class PlayerVariablesManager {
             );
         }
         
-        return variablesManager.addVariable(player, key, addValue);
+        return withTimeout(variablesManager.addVariable(player, key, addValue));
     }
     
     /**
@@ -117,7 +121,7 @@ public class PlayerVariablesManager {
             );
         }
         
-        return variablesManager.removeVariable(player, key, removeValue);
+        return withTimeout(variablesManager.removeVariable(player, key, removeValue));
     }
     
     /**
@@ -137,7 +141,7 @@ public class PlayerVariablesManager {
             );
         }
         
-        return variablesManager.resetVariable(player, key);
+        return withTimeout(variablesManager.resetVariable(player, key));
     }
     
     /**
@@ -146,5 +150,12 @@ public class PlayerVariablesManager {
     public boolean isPlayerVariable(String key) {
         Variable variable = variablesManager.getVariableDefinition(key);
         return variable != null && variable.isPlayerScoped();
+    }
+
+    /**
+     * 为异步操作添加超时，避免无反馈的悬挂
+     */
+    private CompletableFuture<VariableResult> withTimeout(CompletableFuture<VariableResult> future) {
+        return future.completeOnTimeout(VariableResult.failure("操作超时"), TIMEOUT_SECONDS, TimeUnit.SECONDS);
     }
 }
