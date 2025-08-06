@@ -5,297 +5,430 @@
 * **完整路径:** `cn.drcomo.corelib.message.MessageService`
 
 * **核心职责:**
-  MessageService 是插件内所有文本消息的“集中式大脑”。它解决了以下几个痛点：
+  MessageService 是插件内所有文本消息的集中式“大脑”，解决以下痛点：
 
-  1. **本地化与多语言支持**：从 YAML 语言文件加载键值对，可运行时热重载或切换语言。
-  2. **多层占位符解析**：支持标准 Java 格式化 (`String.format`)、用户自定义占位符、内部占位符（形如 `{key}` / `{key:args}`）、正则扩展规则、以及 PlaceholderAPI (%…% )。
-  3. **颜色处理**：统一通过 `ColorUtil.translateColors` 将 `&` 样式颜色替换成 Minecraft 可识别的 `§` 颜色码，保证所有对玩家输出都是彩色且一致的。
-  4. **多渠道发送**：聊天、ActionBar、Title/SubTitle、权限过滤广播、上下文批量缓存后分发。
-  5. **上下文消息聚合**：可以暂存一组消息关联某个上下文（如一个操作、一个玩家请求），再集中以指定方式发出（成功/失败、不同渠道）。
+  1. **本地化与多语言支持：** 从 YAML 语言文件加载键值（可热重载/切换），全量缓存在内存以提升性能。
+  2. **多层占位符解析：** 支持三类替换体系（顺序区分）：
 
-* **设计原则（隐含在实现中）：**
+     * **Java 格式化（`String.format` / `{}` 顺序占位符）：** 仅在显式调用含格式参数的接口（如 `get(key, args...)`、`sendChat`/`sendActionBar` 的 `{}` 替换）时生效；
+     * **自定义 / 内部 / 正则 / PlaceholderAPI 链式替换：** 由 `parseWithDelimiter` 系列驱动，按顺序依次处理，并最终执行颜色翻译。
+  3. **颜色统一转换：** 所有对玩家的输出路径都强制经过 `ColorUtil.translateColors`，外部不需要手动做颜色替换（`&` 会转为 `§`，已有 `§` 保留）。
+  4. **多渠道发送：** 聊天、ActionBar、Title/SubTitle、广播（含权限过滤）、上下文聚合后分发。
+  5. **上下文消息缓存与语义分流：** 支持暂存成功/失败/其它上下文相关消息，再按渠道集中发送并自动清理。
 
-  * 公共 API 稳定（方法签名不变），内部实现可重构。
-  * 解析链路明确可拓展（顺序固定、扩展点清晰）。
-  * 所有发送最终都走颜色翻译，不漏色。
-  * 日志充分用于调试，缺失/异常场景可追溯。
+* **设计准则（实现隐含体现）：**
 
-* **颜色说明:**
-  所有面向外部的发送（包括 `send`、`broadcast`、`sendRaw` 等）都会在底层强制调用 `ColorUtil.translateColors`，**外部不需要自己再做颜色替换**。如果传入的文本已经包含 `§` 也会原样保留；如果使用 `&` 语法会被转换为 `§`。
+  * 公共 API 保持稳定，内部实现可重构。
+  * 占位符链路分层清晰，扩展点明确（custom → internal → regex → PlaceholderAPI → 颜色）。
+  * 输出颜色覆盖无遗漏。
+  * 日志用于追踪与降级，不破坏调用流程。
+
+* **线程安全边界说明：**
+  当前使用的是非线程安全的数据结构（`HashMap` / `ArrayList`），因此：
+
+  * 语言文件刷新（`reloadLanguages` / `switchLanguage`）应在主线程执行。
+  * 并发读取（如异步发送）时要避免同时进行写操作（reload），调用方需自行同步或在调度层加锁。
+  * 若未来需要并发安全，可考虑替换为 `ConcurrentHashMap` 或加显式锁。
 
 ---
 
 **2. 如何实例化 (Initialization)**
 
-* **核心思想:**
-  MessageService 并非独立存在，它依赖日志、YAML 配置和占位符解析的上下游组件。必须先准备好 `DebugUtil`、`YamlUtil`、`PlaceholderAPIUtil`，再组合构造。
+#### 核心思想
 
-* **构造函数签名:**
-  `public MessageService(Plugin plugin, DebugUtil logger, YamlUtil yamlUtil, PlaceholderAPIUtil placeholderUtil, String langConfigPath, String keyPrefix)`
+MessageService 不是孤立组件，依赖日志、YAML 配置加载器和 PlaceholderAPI 封装，需按顺序准备后组合构造。
 
-* **参数详细说明:**
+#### 构造函数签名
 
-  * `plugin`：插件主类实例（当前实现未直接用到但保留以便未来扩展）。
-  * `logger`：用于输出调试/警告/错误日志的工具，必须已初始化。
-  * `yamlUtil`：负责加载 language 配置文件的辅助类。
-  * `placeholderUtil`：PlaceholderAPI 解析器接口封装，用于解析 `%plugin_placeholder%` 类占位符。
-  * `langConfigPath`：相对于插件数据目录的语言文件路径，**不包含 `.yml` 后缀**。如 `"languages/zh_CN"` 对应的是 `languages/zh_CN.yml`。
-  * `keyPrefix`：自动附加在所有查询键前的前缀，可以为空字符串；便于结构化、避免冲突。
+`public MessageService(Plugin plugin, DebugUtil logger, YamlUtil yamlUtil, PlaceholderAPIUtil placeholderUtil, String langConfigPath, String keyPrefix)`
 
-* **初始化流程:**
+#### 参数说明
 
-  1. 加载指定路径的 YAML 配置。
-  2. 遍历配置中所有字符串键（包含嵌套），缓存至内存 map `messages`。
-  3. 后续所有 `get`/`parse` 会基于此缓存并处理。
+* `plugin`：插件主类实例，当前未直接使用但保留以便未来扩展。
+* `logger`：用于输出 info/warn/error 供排查。
+* `yamlUtil`：语言文件加载与访问封装。
+* `placeholderUtil`：PlaceholderAPI 解析器接口封装（链尾替换 `%…%` 类型占位符）。
+* `langConfigPath`：语言文件路径，不包括 `.yml` 后缀（例如 `"languages/zh_CN"` 对应 `languages/zh_CN.yml`）。
+* `keyPrefix`：自动附加到查找 key 之前的前缀（`null` 会归一为空字符串）。如果传入的 key 已有该前缀，则不会重复拼接（见 `resolveKey` 逻辑）。
 
-* **代码示例:**
+#### 初始化流程
 
-  ```java
-  DebugUtil logger       = new DebugUtil(this, DebugUtil.LogLevel.INFO);
-  YamlUtil yamlUtil      = new YamlUtil(this, logger);
-  PlaceholderAPIUtil papi = new PlaceholderAPIUtil(this, "example");
+1. 通过 `yamlUtil.loadConfig(langConfigPath)` 载入文件。
+2. 遍历所有字符串键，将其缓存到 `messages`。
+3. 后续所有 `get`/`parse` 等操作基于内存缓存进行，避免每次 I/O。
 
-  MessageService messageService = new MessageService(
-      this,
-      logger,
-      yamlUtil,
-      papi,
-      "languages/zh_CN",
-      "messages.example."
-  );
+#### 示例代码
 
-  messageService.registerInternalPlaceholder("online", (player, args) ->
-      String.valueOf(Bukkit.getOnlinePlayers().size())
-  );
-  ```
+```java
+DebugUtil logger       = new DebugUtil(this, DebugUtil.LogLevel.INFO);
+YamlUtil yamlUtil      = new YamlUtil(this, logger);
+PlaceholderAPIUtil papi = new PlaceholderAPIUtil(this, "example");
 
-* **常见误用 & 注意点:**
+MessageService messageService = new MessageService(
+    this,
+    logger,
+    yamlUtil,
+    papi,
+    "languages/zh_CN",
+    "messages.example."
+);
 
-  * `langConfigPath` 传入时不要加 `.yml`。
-  * 若语言文件后续替换（编辑内容），必须调用 `reloadLanguages()` 才能生效。
-  * `keyPrefix` 与实际 YAML 定义的键位置要对齐，否则可能找不到键（内部会补全前缀，但如果已经带了前缀则不再重复添加）。
+messageService.registerInternalPlaceholder("online", (player, args) ->
+    String.valueOf(Bukkit.getOnlinePlayers().size())
+);
+```
+
+#### 常见误用 & 注意点
+
+* `langConfigPath` 不能带 `.yml` 后缀。
+* 修改语言文件后必须调用 `reloadLanguages()` 才生效；否则内存仍使用旧缓存。
+* `keyPrefix` 如果已存在于 key 中，则不会重复添加（例如 prefix=`"a."` 时 `getRaw("a.foo")` 实查 `"a.foo"`，`getRaw("foo")` 实查 `"a.foo"`）。
 
 ---
 
 **3. 占位符解析机制（内部细节）**
 
-* **完整链路（执行顺序）：**
+#### 总体区分
 
-  1. `String.format`（由 `get(String, Object...)` 提供，先处理 `%s` / `%d` 等标准格式）
-  2. **自定义占位符替换**（根据调用时传入的 prefix/suffix 与 custom map 替换，如 `{rank}`、`%foo%`）
-  3. **内部占位符**（注册的 `{key}` 或 `{key:args}` 会被匹配并调用对应 resolver）
-  4. **额外正则规则**（通过 `addPlaceholderRule` 增加的任意正则捕获与替换）
-  5. **PlaceholderAPI 解析**（对 `%player_name%` 这类依赖玩家上下文的占位符做最终替换）
-  6. **颜色翻译**（`ColorUtil.translateColors` 将 `&` 变成 `§`）
+有两套不同替换路径容易混淆：
 
-* **内部占位符注册:**
-  `registerInternalPlaceholder(String key, BiFunction<Player, String, String> resolver)`
+* **格式化替换（Java `String.format` / `{}` 占位符）：** 只在 `get(key, args...)`、`sendChat`、`sendActionBar` 等显式使用顺序占位符的方法里生效，不包括 `parseWithDelimiter` 默认链路。
+* **占位符链（custom → internal → regex → PlaceholderAPI → 颜色）：** 由 `parseWithDelimiter` 及其调用链处理，Java `%`/`{}` 不是自动发生，若需两者混合需显式组合。
 
-  * `key` 不带大括号，内部会转为小写做匹配（大小写不敏感）。
-  * `args` 是 `{key:args}` 中冒号后的部分。
-  * 示例：`{time:HH:mm}` 可通过 “time” 解析器拿到格式化时间。
+#### 完整替换链路（`processPlaceholdersWithDelimiter` 的实际顺序）
 
-* **扩展规则:**
-  `addPlaceholderRule(Pattern pattern, BiFunction<Player, Matcher, String> resolver)`
+1. **自定义占位符替换（prefix/suffix + custom map）**：例如传入前后缀 `%`，`%foo%` 会用 custom map 中 `foo` 替换。
+2. **内部占位符 `{key[:args]}`**：使用 `internalPlaceholderPattern`（默认 `\{([a-zA-Z0-9_]+)(?::([^}]*))?\}`）匹配，调用注册的 resolver（key 小写化）。
+3. **额外正则规则（extraPlaceholderRules）**：按注册顺序逐条替换，结果再给下一条规则使用（链式）。
+4. **PlaceholderAPI 替换**：最终替换 `%player_name%` 等依赖上下文的占位符。
+5. **颜色翻译**：调用方在输出前会统一走 `ColorUtil.translateColors`。
 
-  * 更自由的模式，比如捕获双大括号 `{{something}}` 或其他复杂逻辑。
-  * 每次匹配到时都会调用 resolver 生成替换值。
+> 注意：`String.format`（如 `%s`）不会在这条链上自动执行；若模板需要同时做 Java 格式化和占位符链，需手动前置进行格式化再给 parse 进一步处理。
 
-* **自定义前后缀控制:**
-  `parseWithDelimiter` 接受任意 prefix/suffix，例如用 `{}`、`%%`、甚至混合替换不同风格的变量。
-  默认弃用方法 `parse(...)` 等价于 `parseWithDelimiter(..., "%", "%")`。
+#### 内部占位符注册
 
-* **容错与日志:**
+* 方法：`registerInternalPlaceholder(String key, BiFunction<Player, String, String> resolver)`
+* 说明：
 
-  * 任何阶段未命中占位符不会抛异常，而是保留原样；
-  * 日志会记录格式化失败、缺失 key、解析后结果等，便于调试配置错误。
+  * key 不带大括号，内部统一小写匹配。
+  * resolver 接收玩家（可能为 null）和冒号后的 args。
+  * 例如：`{time:HH:mm}` 可用 key=`"time"`，resolver 负责按 args 格式化时间。
+
+#### 额外正则规则注册
+
+* 方法：`addPlaceholderRule(Pattern pattern, BiFunction<Player, Matcher, String> resolver)`
+* 说明：
+
+  * 支持任意复杂模式（如 `{{something}}`）。
+  * 替换按注册顺序进行，后续规则看到的是前一个规则替换后的内容。
+  * 冲突示例：规则 A 把 `{{x}}` 变成 `{{y}}`，规则 B 又匹配 `{{y}}` → 最终结果由 A+B 链式决定，注册顺序影响输出。
+
+#### 自定义前后缀
+
+* 方法：`parseWithDelimiter(...)`
+* 说明：可指定任意 prefix/suffix（如 `%`、`{}`、`<<>>` 等）控制 custom 替换语法。
+* 兼容旧接口：`parse(...)` 等价于 `parseWithDelimiter(..., "%", "%")`，已标记为 deprecated。
+
+#### 容错与降级
+
+* 缺失 key / 没注册的 internal placeholder / regex 没匹配到不会抛异常，而是保留原文。
+* 格式化失败、缺失内容会通过 logger 输出 warn/error，但不会中断上层逻辑。
 
 ---
 
 **4. 主要公共 API 方法**
 
-* #### `reloadLanguages()`
+#### 语言与前缀控制
 
-  * **返回类型:** `void`
-  * **功能描述:** 重新读取当前 `langConfigPath` 指向的 YAML 文件，刷新内存缓存（`messages`）。适用于管理员/指令热重载场景。
-  * **副作用:** 清空已有的 messages 缓存并重新填充。
-  * **日志:** 记录加载条数与路径。
+  * #### `reloadLanguages()`
 
-* #### `switchLanguage(String newPath)`
+      * **返回类型:** `void`
+      * **功能描述:** 从磁盘重新加载当前语言文件（由 `langConfigPath` 指定），并刷新内存中的消息缓存。此操作会先清空旧缓存，再从文件加载新内容。
+      * **调用建议:** 当语言文件在外部被修改后，或需要通过指令热重载配置时调用。建议在主线程执行以避免线程安全问题。
 
-  * **返回类型:** `void`
-  * **功能描述:** 切换语言文件路径到 `newPath`，并立即执行与 `reloadLanguages()` 等价的刷新操作。
-  * **使用场景:** 用户切换 UI 语言 / 配置动态切换多语言。
+  * #### `switchLanguage(String newPath)`
 
-* #### `setKeyPrefix(String newPrefix)`
+      * **返回类型:** `void`
+      * **功能描述:** 动态切换到另一个语言文件。该方法会更新内部的 `langConfigPath`，然后自动调用 `reloadLanguages()` 来加载新文件。
+      * **参数说明:**
+          * `newPath` (`String`): 新的语言文件路径，相对于插件数据文件夹，且**不**包含 `.yml` 后缀（例如 `"languages/en_US"`）。
 
-  * **返回类型:** `void`
-  * **功能描述:** 修改后续所有查找 key 时自动追加的前缀，支持传 `null` 清空。
-  * **影响:** `getRaw("foo")` 若 prefix 为 `bar.` 则实际查找的是 `bar.foo`（如果原本没加）。
+  * #### `setKeyPrefix(String newPrefix)`
 
-* #### `getRaw(String key)`
+      * **返回类型:** `void`
+      * **功能描述:** 动态设置或更改所有消息键（key）的统一前缀。在后续调用 `get`、`send` 等方法时，此前缀会自动拼接到传入的键之前（除非键本身已包含该前缀）。
+      * **参数说明:**
+          * `newPrefix` (`String`): 新的键前缀。如果传入 `null`，将被视为空字符串 `""`。
 
-  * **返回类型:** `String`
-  * **功能描述:** 返回未经占位符解析、格式化或颜色处理的原始配置字符串。
-  * **失败情况:** 如果对应键不存在，返回 `null` 并通过 logger.warn 报警。
+#### 获取与解析
 
-* #### `get(String key, Object... args)`
+  * #### `getRaw(String key)`
 
-  * **返回类型:** `String`
-  * **功能描述:** 先获取原始文本，再用 `String.format` 替换 `%s`/`%d` 等格式符。
-  * **容错:** 格式化异常会被捕获，返回原始文本并在日志记录错误。
+      * **返回类型:** `String`
+      * **功能描述:** 根据键名获取在语言文件中定义的、未经任何处理的原始字符串。此方法会经过 `resolveKey` 自动添加前缀。
+      * **参数说明:**
+          * `key` (`String`): 消息键。
+      * **返回值:** 找到则返回原始字符串，否则返回 `null` 并记录警告。
 
-* #### `parseWithDelimiter(String key, Player player, Map<String,String> custom, String prefix, String suffix)`
+  * #### `get(String key, Object... args)`
 
-  * **返回类型:** `String`
-  * **功能描述:** 逐层执行占位符替换（如前面所述完整链路），最后统一做颜色翻译并返回可直接发送的字符串。
-  * **注意:** 返回值已经包含颜色符 (`§`)，外部直接发给玩家即可。
-  * **null 情况:** 如果底层 `get(...)` 失败（键不存在），返回 `null`。
+      * **返回类型:** `String`
+      * **功能描述:** 获取原始字符串后，使用 `String.format` 进行 Java 风格的格式化（替换 `%s`, `%d` 等）。此方法**不**执行占位符链解析。
+      * **参数说明:**
+          * `key` (`String`): 消息键。
+          * `args` (`Object...`): 用于格式化字符串的可变参数。
+      * **返回值:** 格式化后的字符串。若原始消息未找到，返回错误提示；若格式化失败，返回原始字符串并记录错误。
 
-* #### `getList(String key)`
+  * #### `parseWithDelimiter(String key, Player player, Map<String, String> custom, String prefix, String suffix)`
 
-  * **返回类型:** `List<String>`
-  * **功能描述:** 直接从 YAML 中获取字符串列表（原始，不解析任何占位符）。
-  * **日志:** 若列表为空（可能是键错误或文件未定义），会 warn。
+      * **返回类型:** `String`
+      * **功能描述:** 获取指定键的消息，并执行完整的占位符解析链（自定义占位符 -> 内部占位符 -> 正则规则 -> PlaceholderAPI），最后进行颜色代码翻译。这是最核心的消息处理方法。
+      * **参数说明:**
+          * `key` (`String`): 消息键。
+          * `player` (`Player`): 消息接收者，用于 PlaceholderAPI 上下文。可为 `null`。
+          * `custom` (`Map<String, String>`): 自定义占位符的键值对。
+          * `prefix` (`String`): 自定义占位符的前缀，例如 `"%"`。
+          * `suffix` (`String`): 自定义占位符的后缀，例如 `"%"`。
+      * **返回值:** 完全处理好、可直接发送给玩家的最终字符串。若键不存在则返回 `null`。
 
-* #### `parseList(String key, Player player, Map<String,String> custom)`
+  * #### `getList(String key)`
 
-  * **返回类型:** `List<String>`
-  * **功能描述:** 遍历 `getList` 得到的每一行，逐行调用内部占位符解析（等价于 `processPlaceholders` + 颜色处理），返回完整的解析列表。
+      * **返回类型:** `List<String>`
+      * **功能描述:** 从语言文件中获取一个字符串列表，通常用于定义多行消息（如 Hologram、Lore 等）。
+      * **参数说明:**
+          * `key` (`String`): 消息列表的键。
+      * **返回值:** 原始的字符串列表。若键不存在或对应的值不是列表，返回空列表。
 
-* #### `registerInternalPlaceholder(String key, BiFunction<Player,String,String> resolver)`
+  * #### `parseList(String key, Player player, Map<String, String> custom)`
 
-  * **返回类型:** `void`
-  * **功能描述:** 注册一个内部占位符解析器，后续在文本中出现 `{key}` 或 `{key:args}` 时会由该 resolver 处理。
-  * **约定:** `key` 会被统一转为小写用于 lookup，resolver 接收玩家上下文与参数部分。
+      * **返回类型:** `List<String>`
+      * **功能描述:** 获取一个消息列表，并对其中的每一行字符串独立执行完整的占位符解析和颜色翻译。
+      * **参数说明:**
+          * `key` (`String`): 消息列表的键。
+          * `player` (`Player`): 消息接收者上下文。
+          * `custom` (`Map<String, String>`): 自定义占位符，作用于列表中的每一行。
+      * **返回值:** 解析完成的字符串列表，可直接逐行发送。
 
-* #### `setInternalPlaceholderPattern(Pattern pattern)`
+#### 发送接口（聊天 / ActionBar / Title）
 
-  * **返回类型:** `void`
-  * **功能描述:** 替换默认内部占位符正则匹配规则，适用于想用不同语法定义内部标记的场景。
+  * #### `send(CommandSender target, String key, Map<String, String> custom)`
 
-* #### `addPlaceholderRule(Pattern pattern, BiFunction<Player,Matcher,String> resolver)`
+      * **返回类型:** `void`
+      * **功能描述:** 解析语言文件中的消息并将其作为聊天消息发送给指定目标（玩家或控制台）。这是最常用的发送方法之一。
+      * **参数说明:**
+          * `target` (`CommandSender`): 消息接收者。
+          * `key` (`String`): 语言文件中的消息键。
+          * `custom` (`Map<String, String>`): 自定义占位符键值对。
 
-  * **返回类型:** `void`
-  * **功能描述:** 添加一条自定义正则级别的占位符替换规则，优先于 PlaceholderAPI 之前执行。
+  * #### `send(Player player, String template, Map<String, String> custom, String prefix, String suffix)`
 
-* #### `send(Player player, String key)`
+      * **返回类型:** `void`
+      * **功能描述:** 直接使用给定的字符串模板进行解析并发送，不经过语言文件查询。适用于动态生成的消息内容。
+      * **参数说明:**
+          * `player` (`Player`): 目标玩家。
+          * `template` (`String`): 消息模板原文。
+          * `custom` (`Map<String, String>`): 自定义占位符。
+          * `prefix` (`String`): 占位符前缀。
+          * `suffix` (`String`): 占位符后缀。
 
-  * **返回类型:** `void`
-  * **功能描述:** 对指定 key 解析（默认 `%...%` 样式、自定义为空），并发送给玩家（聊天）。
+  * #### `sendChat(Player player, String template, Object... args)`
 
-* #### `send(CommandSender target, String key, Map<String,String> custom)`
+      * **返回类型:** `void`
+      * **功能描述:** 使用 `{}` 作为顺序占位符，对模板进行快速替换后，作为聊天消息发送给玩家。
+      * **参数说明:**
+          * `player` (`Player`): 目标玩家。
+          * `template` (`String`): 含 `{}` 占位符的消息模板。
+          * `args` (`Object...`): 按顺序替换 `{}` 的参数。
 
-  * **返回类型:** `void`
-  * **功能描述:** 通用单行发送接口，支持玩家或控制台、支持自定义占位符。
+  * #### `sendActionBar(Player player, String template, ...)`
 
-* #### `sendList(CommandSender target, String key)`
+      * **返回类型:** `void`
+      * **功能描述:** 将解析后的消息通过 ActionBar 发送给玩家。提供多个重载版本，分别支持从语言键、直接模板+自定义占位符、直接模板+`{}`顺序占位符三种方式生成内容。
+      * **参数说明:** (以 `sendActionBar(Player, String, Map, String, String)` 为例)
+          * `player` (`Player`): 目标玩家。
+          * `template` (`String`): 消息模板。
+          * `custom` (`Map<String, String>`): 自定义占位符。
+          * `prefix` (`String`): 占位符前缀。
+          * `suffix` (`String`): 占位符后缀。
 
-  * **返回类型:** `void`
-  * **功能描述:** 发送一组解析后的多行消息（不含自定义占位符）。
+  * #### `sendTitle(Player player, String titleTemplate, String subTemplate, ...)`
 
-* #### `sendList(CommandSender target, String key, Map<String,String> custom)`
+      * **返回类型:** `void`
+      * **功能描述:** 将解析后的主标题和副标题通过 Title/SubTitle 的形式发送给玩家。同样提供多个重载版本，支持从语言键、直接模板+自定义占位符、直接模板+`{}`顺序占位符三种方式生成内容。
+      * **参数说明:** (以 `sendTitle(Player, String, String, Map, String, String)` 为例)
+          * `player` (`Player`): 目标玩家。
+          * `titleTemplate` (`String`): 主标题模板。
+          * `subTemplate` (`String`): 副标题模板。
+          * `custom` (`Map<String, String>`): 自定义占位符（同时作用于主副标题）。
+          * `prefix` (`String`): 占位符前缀。
+          * `suffix` (`String`): 占位符后缀。
 
-  * **返回类型:** `void`
-  * **功能描述:** 同上，含自定义占位符。
+#### 列表 / 批量发送
 
-* #### `broadcast(String key)`
+  * #### `sendList(CommandSender target, String key, Map<String, String> custom)`
 
-  * **返回类型:** `void`
-  * **功能描述:** 向所有在线玩家广播一条消息（不针对单个玩家解析 PlaceholderAPI）。
+      * **返回类型:** `void`
+      * **功能描述:** 解析语言文件中一个键对应的消息列表，并将每一行作为单独的聊天消息发送给目标。
+      * **参数说明:**
+          * `target` (`CommandSender`): 消息接收者。
+          * `key` (`String`): 语言文件中的消息列表键。
+          * `custom` (`Map<String, String>`): 自定义占位符，作用于列表中的每一行。
 
-* #### `broadcast(String key, Map<String,String> custom, String permission)`
+  * #### `sendList(CommandSender target, List<String> templates, Map<String, String> custom, String prefix, String suffix)`
 
-  * **返回类型:** `void`
-  * **功能描述:** 只对拥有指定权限的玩家广播，消息对每个目标会独立解析（可用 PAPI 等上下文相关占位符）。
+      * **返回类型:** `void`
+      * **功能描述:** 对一个给定的字符串模板列表进行逐行解析，并将结果作为多行聊天消息发送。
+      * **参数说明:**
+          * `target` (`CommandSender`): 消息接收者。
+          * `templates` (`List<String>`): 原始模板列表。
+          * `custom` (`Map<String, String>`): 自定义占位符。
+          * `prefix` (`String`): 占位符前缀。
+          * `suffix` (`String`): 占位符后缀。
 
-* #### `broadcastList(String key, Map<String,String> custom, String permission)`
+  * #### `sendRaw(CommandSender target, String rawMessage)`
 
-  * **返回类型:** `void`
-  * **功能描述:** 权限过滤的多行广播。
+      * **返回类型:** `void`
+      * **功能描述:** 发送一条未经任何占位符解析的原始字符串，但依然会进行颜色代码翻译。
+      * **参数说明:**
+          * `target` (`CommandSender`): 消息接收者。
+          * `rawMessage` (`String`): 要发送的原始消息。
 
-* #### `sendRaw(CommandSender target, String rawMessage)`
+  * #### `sendRawList(CommandSender target, List<String> rawMessages)`
 
-  * **返回类型:** `void`
-  * **功能描述:** 直接发送文本（未经键查找、占位符或格式化），但仍会做颜色翻译。
+      * **返回类型:** `void`
+      * **功能描述:** 发送一个原始字符串列表，对每行仅做颜色翻译后逐一发送。
+      * **参数说明:**
+          * `target` (`CommandSender`): 消息接收者。
+          * `rawMessages` (`List<String>`): 要发送的原始消息列表。
 
-* #### `sendRawList(CommandSender target, List<String> rawMessages)`
+#### 广播
 
-  * **返回类型:** `void`
-  * **功能描述:** 原样多行发送，每行自动颜色翻译。
+  * #### `broadcast(String key, Map<String, String> custom, String permission)`
 
-* #### `sendOptimizedChat(Player player, List<String> messages)`
+      * **返回类型:** `void`
+      * **功能描述:** 向服务器上的所有玩家（或拥有特定权限的玩家）广播一条消息。消息内容从语言文件获取并解析。
+      * **参数说明:**
+          * `key` (`String`): 语言文件中的消息键。
+          * `custom` (`Map<String, String>`): 自定义占位符。
+          * `permission` (`String`): 权限节点。如果提供，则只有拥有此权限的玩家才会收到广播。可为 `null`。
 
-  * **返回类型:** `void`
-  * **功能描述:** 批量聊天（本质调用逐行发送的封装），用于上下文一次性输出多条。
+  * #### `broadcast(String template, Map<String, String> custom, String prefix, String suffix, String permission)`
 
-* #### `sendActionBar(Player player, String key, Map<String,String> custom)`
+      * **返回类型:** `void`
+      * **功能描述:** 使用直接的模板向全服（或部分玩家）广播，不查询语言文件。
+      * **参数说明:**
+          * `template` (`String`): 消息模板。
+          * `custom` (`Map<String, String>`): 自定义占位符。
+          * `prefix` (`String`): 占位符前缀。
+          * `suffix` (`String`): 占位符后缀。
+          * `permission` (`String`): 可选的权限节点。
 
-  * **返回类型:** `void`
-  * **功能描述:** 解析并通过 ActionBar 显示短消息（会被后续覆盖）。
+  * #### `broadcastList(String key, Map<String, String> custom, String permission)`
 
-* #### `sendStagedActionBar(Player player, List<String> messages)`
+      * **返回类型:** `void`
+      * **功能描述:** 广播一个来自语言文件的多行消息列表，每行独立发送。
+      * **参数说明:**
+          * `key` (`String`): 消息列表的键。
+          * `custom` (`Map<String, String>`): 自定义占位符。
+          * `permission` (`String`): 可选的权限节点。
 
-  * **返回类型:** `void`
-  * **功能描述:** 依次快速推送多条 ActionBar 内容，适合短时间内连续提示。
+#### 上下文消息（聚合 / 分流）
 
-* #### `sendTitle(Player player, String titleKey, String subKey, Map<String,String> custom)`
+  * #### `storeMessage(Object context, String key, Map<String, String> custom)`
 
-  * **返回类型:** `void`
-  * **功能描述:** 同时发送主标题与副标题，均经过完整解析与颜色转换。
+      * **返回类型:** `void`
+      * **功能描述:** 将一条解析后的消息暂存到由 `context` 对象标识的缓存区中，而不是立即发送。用于聚合多个步骤产生的消息。
+      * **参数说明:**
+          * `context` (`Object`): 任意用作上下文标识符的对象（如 `Player` 实例、`UUID` 或自定义命令对象）。
+          * `key` (`String`): 消息键。
+          * `custom` (`Map<String, String>`): 自定义占位符。
 
-* #### `sendStagedTitle(Player player, List<String> titles, List<String> subtitles)`
+  * #### `storeMessageList(Object context, String key, Map<String, String> custom)`
 
-  * **返回类型:** `void`
-  * **功能描述:** 依次发送多组 Title/SubTitle 组合（两者数量取最小）。
+      * **返回类型:** `void`
+      * **功能描述:** 将一个解析后的多行消息列表暂存到上下文缓存中。
+      * **参数说明:**
+          * `context` (`Object`): 上下文标识符。
+          * `key` (`String`): 消息列表的键。
+          * `custom` (`Map<String, String>`): 自定义占位符。
 
-* #### `storeMessage(Object context, String key, Map<String,String> custom)`
+  * #### `hasMessages(Object context)`
 
-  * **返回类型:** `void`
-  * **功能描述:** 将单行解析后的消息暂存到某个上下文中，不立即发送。
+      * **返回类型:** `boolean`
+      * **功能描述:** 检查指定的上下文缓存中是否包含任何待发送的消息。
+      * **参数说明:**
+          * `context` (`Object`): 上下文标识符。
+      * **返回值:** 如果缓存中有消息，则为 `true`，否则为 `false`。
 
-* #### `storeMessageList(Object context, String key, Map<String,String> custom)`
+  * #### `countMessages(Object context)`
 
-  * **返回类型:** `void`
-  * **功能描述:** 将解析后的多行消息列表缓存到上下文。
+      * **返回类型:** `int`
+      * **功能描述:** 获取指定上下文缓存中的消息数量。
+      * **参数说明:**
+          * `context` (`Object`): 上下文标识符。
+      * **返回值:** 缓存的消息行数。
 
-* #### `hasMessages(Object context)`
+  * #### `sendContext(Object context, Player player, String channel)`
 
-  * **返回类型:** `boolean`
-  * **功能描述:** 判断该上下文是否存在未发送消息。
+      * **返回类型:** `void`
+      * **功能描述:** 将指定上下文缓存中的所有消息，通过特定渠道（如聊天、ActionBar）一次性发送给玩家，并清空该上下文的缓存。
+      * **参数说明:**
+          * `context` (`Object`): 上下文标识符。
+          * `player` (`Player`): 消息接收者。
+          * `channel` (`String`): 发送渠道，支持 `"chat"`, `"actionbar"`, `"title"`。
 
-* #### `countMessages(Object context)`
+  * #### `sendContextSuccesses(Object context, Player player)` / `sendContextFailures(Object context, Player player)`
 
-  * **返回类型:** `int`
-  * **功能描述:** 返回当前上下文缓存的消息数量。
-
-* #### `sendContext(Object context, Player player, String channel)`
-
-  * **返回类型:** `void`
-  * **功能描述:** 将该上下文的缓存按照指定渠道（"chat" / "actionbar" / "title"）发送后清空。
-
-* #### `sendContextFailures(Object context, Player player)` / `sendContextSuccesses(Object context, Player player)`
-
-  * **返回类型:** `void`
-  * **功能描述:** 语义分化的调用（实现上等同于 chat 发送），方便上层区分成功/失败流并复用同一上下文缓存。
+      * **返回类型:** `void`
+      * **功能描述:** `sendContext` 的语义化别名，用于在代码逻辑中清晰地标识发送的是成功反馈还是失败反馈。当前它们的实现与 `sendContext(context, player, "chat")` 等价，但为未来扩展不同渠道或样式提供了接口。
+      * **参数说明:**
+          * `context` (`Object`): 上下文标识符。
+          * `player` (`Player`): 消息接收者。
 
 ---
 
 **5. 行为细节与建议**
 
-* **前缀自动补全逻辑:** `resolveKey` 会判断传入 key 是否已包含前缀，避免重复拼接。
-* **日志策略:**
+#### 前缀自动补全逻辑
 
-  * 缺失 key / 空列表 / 格式化失败 均会写入 `logger.warn` 或 `logger.error`。
-  * 成功获取/格式化会在 debug 级别记录（可在调试时开启以追踪消息来源）。
-* **占位符冲突处理:**
-  自定义与内部、额外规则在顺序上有层次，内部冲突时后注册的不会覆盖已匹配区域（遵循正则替换顺序和查找匹配）。
-* **调用推荐:**
+`resolveKey` 会判断传入的 key 是否已经以 prefix 开头，避免重复拼接，从而稳健处理 `keyPrefix` 边界。
 
-  * 若消息模板包含变量建议用 `parseWithDelimiter` 明确 prefix/suffix 与 custom map。
-  * 多行消息用 `parseList` + `sendList` 组合，避免单条自己循环。
-  * 权限广播优先用带 permission 版本避免无意义的全服遍历。
-* **性能考量:**
+#### 日志策略
 
-  * 消息缓存是内存结构（`HashMap` + `List`），频繁调用时推荐复用 `Player` 上下文避免重复解析大量相同内容。
-  * 内部占位符/扩展规则中尽量避免做重 I/O、阻塞或复杂计算（可由占位符 resolver 侧做限流或缓存）。
+* 缺失 key：在 `getRaw` 中 `messages.get(...)` 失败会 `logger.warn("未找到原始消息，键: " + actual)` 并返回 null。
+* 格式化失败：`get(String, ...)` 捕获 `IllegalFormatException`，记录 error 并退回原始未格式化字符串。
+* 空列表：`getList` 返回空会 warn 提示可能是 key 写错或文件缺失。
+* 解析链路异常不会抛出，仅会在对应 resolver 内部导致结果保持原样（调用方安全无崩溃）。
+
+#### 占位符/规则冲突处理
+
+* 替换顺序为：custom → internal placeholder → extra regex → PlaceholderAPI → 颜色。
+* extra regex 是链式作用，后注册规则看到的输入包括前面规则替换后的内容，注册顺序决定最终覆盖路径，需谨慎设计避免意外叠加。
+* internal placeholder 与 regex 可能产生交叠，建议在复杂情况中在 resolver 里加防重逻辑或使用更精确 pattern。
+
+#### 调用推荐（语义用法区分）
+
+* 想用语言键直接消息：`send(player, key)`。
+* 需要自定义变量但不依赖 language file：`send(player, template, custom, prefix, suffix)`。
+* 简单格式化：`sendChat(player, "Hello {}!", name)`。
+* 多行权限化广播：`broadcastList(key, custom, permission)`。
+* 临时短提示：ActionBar 相关方法根据来源（key / template / `{}`）选用对应重载。
+* Title + SubTitle 复杂组合使用带 custom 或 `{}` 形式的重载。
+
+#### 性能考量
+
+* 语言内容全量缓存，读取 O(1)。
+* 占位符 resolver 本身如果执行昂贵计算（I/O / 大量逻辑）需要在 resolver 内做缓存或限流。
+* 上下文缓存避免外部重复 loop，优先用内置的 `storeMessage*` + `sendContext*` 组合。
+
+#### 容错语义汇总
+
+* `getRaw`：缺失返回 null。
+* `get`：格式化异常降级返回原始文本。
+* `parseWithDelimiter`：缺失 key 返回 null。
+* 发送接口遇到 null 结果大多数静默 skip（内部有 null 检查）。
+* 非 `Player` 传入需要 `Player` 上下文的方法时会传入 null，后续占位符解析会在尽量退化下执行（如 PlaceholderAPI 可能无法解析特定上下文占位符）。
+
+#### 上下文流别名说明
+
+`sendContextFailures` / `sendContextSuccesses` 是语义分化 alias，当前行为一致，用于上层逻辑区分错误/成功流，但保持同一实现以便未来在样式上差异化扩展而不改调用方。
