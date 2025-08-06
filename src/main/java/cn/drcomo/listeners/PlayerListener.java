@@ -52,6 +52,14 @@ public class PlayerListener implements Listener {
             plugin.getConfigsManager().getPlayerConfigsManager()
                     .setPlayerValue(event.getPlayer().getUniqueId(), "statistics.total-logins", currentLogins + 1);
             
+            // 预加载玩家变量数据到内存（高性能优化）
+            plugin.getVariablesManager().handlePlayerJoin(event.getPlayer())
+                    .thenRun(() -> logger.debug("玩家 " + event.getPlayer().getName() + " 变量数据预加载完成"))
+                    .exceptionally(throwable -> {
+                        logger.error("玩家变量数据预加载失败: " + event.getPlayer().getName(), throwable);
+                        return null;
+                    });
+            
             logger.debug("玩家 " + event.getPlayer().getName() + " 登入，数据已加载");
             
         } catch (Exception e) {
@@ -69,13 +77,21 @@ public class PlayerListener implements Listener {
             plugin.getConfigsManager().getPlayerConfigsManager()
                     .setPlayerValue(event.getPlayer().getUniqueId(), "last-seen", System.currentTimeMillis());
             
+            // 立即持久化玩家变量数据（高性能优化）
+            plugin.getVariablesManager().handlePlayerQuit(event.getPlayer())
+                    .thenRun(() -> logger.debug("玩家 " + event.getPlayer().getName() + " 变量数据持久化完成"))
+                    .exceptionally(throwable -> {
+                        logger.error("玩家变量数据持久化失败: " + event.getPlayer().getName(), throwable);
+                        return null;
+                    });
+            
             // 如果配置了退出时保存数据
             if (plugin.getConfigsManager().getMainConfig().getBoolean("data.save-on-player-quit", true)) {
                 // 保存玩家配置
                 plugin.getConfigsManager().getPlayerConfigsManager()
                         .savePlayerConfig(event.getPlayer().getUniqueId());
                 
-                logger.debug("玩家 " + event.getPlayer().getName() + " 退出，数据已保存");
+                logger.debug("玩家 " + event.getPlayer().getName() + " 退出，配置数据已保存");
             }
             
             // 卸载玩家配置（节省内存）

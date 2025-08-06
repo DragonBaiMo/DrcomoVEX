@@ -1,7 +1,7 @@
 package cn.drcomo.tasks;
 
 import cn.drcomo.DrcomoVEX;
-import cn.drcomo.managers.VariablesManager;
+import cn.drcomo.managers.RefactoredVariablesManager;
 import cn.drcomo.corelib.util.DebugUtil;
 import org.bukkit.Bukkit;
 import org.bukkit.configuration.file.FileConfiguration;
@@ -18,7 +18,7 @@ public class DataSaveTask {
     
     private final DrcomoVEX plugin;
     private final DebugUtil logger;
-    private final VariablesManager variablesManager;
+    private final RefactoredVariablesManager variablesManager;
     private final FileConfiguration config;
     
     private BukkitTask saveTask;
@@ -26,7 +26,7 @@ public class DataSaveTask {
     public DataSaveTask(
             DrcomoVEX plugin,
             DebugUtil logger,
-            VariablesManager variablesManager,
+            RefactoredVariablesManager variablesManager,
             FileConfiguration config
     ) {
         this.plugin = plugin;

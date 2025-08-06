@@ -37,7 +37,7 @@ public class DrcomoVEX extends JavaPlugin {
     
     // 业务管理器
     private ConfigsManager configsManager;
-    private VariablesManager variablesManager;
+    private RefactoredVariablesManager variablesManager;
     private ServerVariablesManager serverVariablesManager;
     private PlayerVariablesManager playerVariablesManager;
     private MessagesManager messagesManager;
@@ -98,9 +98,14 @@ public class DrcomoVEX extends JavaPlugin {
             variableCycleTask.stop();
         }
         
-        // 2. 保存所有数据
+        // 2. 关闭高性能变量管理器（会自动持久化所有数据）
         if (variablesManager != null) {
-            variablesManager.saveAllData();
+            try {
+                variablesManager.shutdown().get(30, java.util.concurrent.TimeUnit.SECONDS);
+                logger.info("变量管理器已安全关闭");
+            } catch (Exception e) {
+                logger.error("变量管理器关闭超时或异常", e);
+            }
         }
         
         // 3. 关闭数据库连接
@@ -127,8 +132,6 @@ public class DrcomoVEX extends JavaPlugin {
     private void initializeCoreTools() {
         // 日志工具
         logger = new DebugUtil(this, DebugUtil.LogLevel.INFO);
-        logger.setPrefix("&f[&6DrcomoVEX&f] ");
-        
         // 配置工具
         yamlUtil = new YamlUtil(this, logger);
         
@@ -170,8 +173,8 @@ public class DrcomoVEX extends JavaPlugin {
         // 消息管理器
         messagesManager = new MessagesManager(this, logger, messageService);
         
-        // 变量管理器 (核心)
-        variablesManager = new VariablesManager(
+        // 变量管理器 (核心) - 高性能重构版
+        variablesManager = new RefactoredVariablesManager(
                 this, logger, yamlUtil, asyncTaskManager, 
                 placeholderUtil, database
         );
@@ -193,7 +196,15 @@ public class DrcomoVEX extends JavaPlugin {
         
         // 初始化所有管理器
         messagesManager.initialize();
-        variablesManager.initialize();
+        
+        // 异步初始化变量管理器
+        variablesManager.initialize().thenRun(() -> {
+            logger.info("高性能变量管理器初始化完成！");
+        }).exceptionally(throwable -> {
+            logger.error("变量管理器初始化失败！", throwable);
+            return null;
+        });
+        
         serverVariablesManager.initialize();
         playerVariablesManager.initialize();
         updateCheckerManager.initialize();
@@ -284,7 +295,7 @@ public class DrcomoVEX extends JavaPlugin {
         return configsManager;
     }
     
-    public VariablesManager getVariablesManager() {
+    public RefactoredVariablesManager getVariablesManager() {
         return variablesManager;
     }
     

@@ -4,17 +4,14 @@ main: cn.drcomo.DrcomoVEX
 api-version: 1.16
 author: BaiMo
 description: "DrcomoVEX - 基于直觉设计的服务器变量管理系统"
-website: "https://github.com/DragonBaiMo/DrcomoVEX"
 
 # 前置依赖
-depend:
-  - DrcomoCoreLib
+depend: [DrcomoCoreLib]
 
 # 软依赖
-softdepend:
-  - PlaceholderAPI
-  - Vault
-  - PlayerPoints
+softdepend: [PlaceholderAPI, Vault, PlayerPoints]
+libraries:
+  - com.zaxxer:HikariCP:6.2.1
 
 # 主指令
 commands:

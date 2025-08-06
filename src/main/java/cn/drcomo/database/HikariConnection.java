@@ -15,6 +15,9 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.sql.Driver;
+import java.sql.DriverManager;
+import java.util.Enumeration;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
@@ -370,16 +373,30 @@ public class HikariConnection {
      */
     public void close() {
         logger.info("正在关闭数据库连接...");
-        
         try {
             if (sqliteDB != null) {
                 sqliteDB.disconnect();
                 logger.info("SQLite 数据库连接已关闭");
             }
-            
+
             if (dataSource != null && !dataSource.isClosed()) {
                 dataSource.close();
                 logger.info("MySQL 连接池已关闭");
+            }
+
+            // 注销当前插件 ClassLoader 注册的 JDBC 驱动，防止热重载导致的 ZipFile closed
+            ClassLoader cl = this.getClass().getClassLoader();
+            Enumeration<Driver> drivers = DriverManager.getDrivers();
+            while (drivers.hasMoreElements()) {
+                Driver driver = drivers.nextElement();
+                if (driver.getClass().getClassLoader() == cl) {
+                    try {
+                        DriverManager.deregisterDriver(driver);
+                        logger.debug("已注销 JDBC 驱动: " + driver);
+                    } catch (SQLException e) {
+                        logger.error("注销 JDBC 驱动失败: " + driver, e);
+                    }
+                }
             }
         } catch (Exception e) {
             logger.error("关闭数据库连接时发生异常", e);

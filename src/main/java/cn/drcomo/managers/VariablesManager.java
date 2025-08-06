@@ -319,13 +319,13 @@ public class VariablesManager {
         }
         
         variableRegistry.put(variable.getKey(), variable);
-        logger.info("已注册变量: " + variable.getKey() + " (" + variable.getTypeDescription() + ")");
+        logger.debug("已注册变量: " + variable.getKey() + " (" + variable.getTypeDescription() + ")");
         if (variable.getLimitations() != null) {
-            logger.info("  - 约束信息: " + variable.getLimitations());
-            logger.info("  - 最小值: " + variable.getLimitations().getMinValue());
-            logger.info("  - 最大值: " + variable.getLimitations().getMaxValue());
+            logger.debug("  - 约束信息: " + variable.getLimitations());
+            logger.debug("  - 最小值: " + variable.getLimitations().getMinValue());
+            logger.debug("  - 最大值: " + variable.getLimitations().getMaxValue());
         } else {
-            logger.info("  - 无约束");
+            logger.debug("  - 无约束");
         }
     }
     
@@ -1368,6 +1368,26 @@ public class VariablesManager {
      */
     public Set<String> getAllVariableKeys() {
         return new HashSet<>(variableRegistry.keySet());
+    }
+    
+    /**
+     * 获取玩家作用域变量键名
+     */
+    public Set<String> getPlayerVariableKeys() {
+        return variableRegistry.entrySet().stream()
+                .filter(entry -> entry.getValue().isPlayerScoped())
+                .map(Map.Entry::getKey)
+                .collect(Collectors.toSet());
+    }
+    
+    /**
+     * 获取全局作用域变量键名
+     */
+    public Set<String> getGlobalVariableKeys() {
+        return variableRegistry.entrySet().stream()
+                .filter(entry -> entry.getValue().isGlobal())
+                .map(Map.Entry::getKey)
+                .collect(Collectors.toSet());
     }
 
     /**

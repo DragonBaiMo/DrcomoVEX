@@ -106,6 +106,40 @@ security:
   # 是否允许循环引用
   allow-circular-references: false
 
+# 高性能重构配置
+performance:
+  memory-storage:
+    # 启用内存优先存储
+    enabled: true
+    # 最大内存使用量 (MB)
+    max-memory-mb: 256
+    # 玩家数据过期时间（分钟，玩家离线后）
+    player-data-expire-minutes: 30
+  
+  batch-persistence:
+    # 批量持久化间隔（秒）
+    batch-interval-seconds: 30
+    # 最大批次大小
+    max-batch-size: 1000
+    # 内存压力阈值触发持久化 (%)
+    memory-pressure-threshold: 80.0
+    # 最大重试次数
+    max-retries: 3
+  
+  async-queue:
+    # 异步写入队列大小
+    queue-size: 10000
+    # 工作线程数
+    worker-threads: 2
+  
+  cache:
+    l2-expression-cache:
+      expire-minutes: 5
+      maximum-size: 10000
+    l3-result-cache:
+      expire-minutes: 2
+      maximum-size: 5000
+
 # 未来扩展配置
 features:
   # 启用实验性功能

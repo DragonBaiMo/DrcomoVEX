@@ -3,7 +3,7 @@ package cn.drcomo.tasks;
 import cn.drcomo.DrcomoVEX;
 import cn.drcomo.config.ConfigsManager;
 import cn.drcomo.config.DataConfigManager;
-import cn.drcomo.managers.VariablesManager;
+import cn.drcomo.managers.RefactoredVariablesManager;
 import cn.drcomo.model.structure.Variable;
 import cn.drcomo.corelib.util.DebugUtil;
 
@@ -25,14 +25,14 @@ public class VariableCycleTask {
 
     private final DrcomoVEX plugin;
     private final DebugUtil logger;
-    private final VariablesManager variablesManager;
+    private final RefactoredVariablesManager variablesManager;
     private final ConfigsManager configsManager;
     private ScheduledFuture<?> task;
 
     public VariableCycleTask(
             DrcomoVEX plugin,
             DebugUtil logger,
-            VariablesManager variablesManager,
+            RefactoredVariablesManager variablesManager,
             ConfigsManager configsManager
     ) {
         this.plugin = plugin;
