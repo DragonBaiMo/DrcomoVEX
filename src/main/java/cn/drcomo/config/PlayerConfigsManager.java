@@ -176,9 +176,6 @@ public class PlayerConfigsManager {
         yamlUtil.getBoolean(configName, "settings.receive-notifications", true);
         yamlUtil.getString(configName, "settings.language", "zh_CN");
         
-        // 缓存设置
-        yamlUtil.getBoolean(configName, "cache.enabled", true);
-        yamlUtil.getLong(configName, "cache.last-cleared", 0L);
     }
     
     // 快捷访问方法

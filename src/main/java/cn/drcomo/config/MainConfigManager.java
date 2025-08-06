@@ -77,16 +77,6 @@ public class MainConfigManager {
         yamlUtil.getLong(CONFIG_FILE, "database.pool.idle-timeout", 600000L);
         yamlUtil.getLong(CONFIG_FILE, "database.pool.max-lifetime", 1800000L);
         
-        // 缓存配置
-        yamlUtil.getBoolean(CONFIG_FILE, "cache.enabled", true);
-        yamlUtil.getInt(CONFIG_FILE, "cache.expire-minutes", 10);
-        yamlUtil.getInt(CONFIG_FILE, "cache.maximum-size", 10000);
-        
-        // 解析缓存配置
-        yamlUtil.getBoolean(CONFIG_FILE, "cache.parse-cache.enabled", true);
-        yamlUtil.getInt(CONFIG_FILE, "cache.parse-cache.expire-minutes", 5);
-        yamlUtil.getInt(CONFIG_FILE, "cache.parse-cache.maximum-size", 5000);
-        
         // 数据保存配置
         yamlUtil.getBoolean(CONFIG_FILE, "data.auto-save", true);
         yamlUtil.getInt(CONFIG_FILE, "data.save-interval-minutes", 5);
@@ -97,9 +87,6 @@ public class MainConfigManager {
         yamlUtil.getInt(CONFIG_FILE, "cycle.check-interval-minutes", 1);
         yamlUtil.getString(CONFIG_FILE, "cycle.timezone", "Asia/Shanghai");
         
-        // 性能配置
-        yamlUtil.getInt(CONFIG_FILE, "performance.async-pool-size", 4);
-        yamlUtil.getBoolean(CONFIG_FILE, "performance.enable-metrics", true);
         
         // 更新检查配置
         yamlUtil.getBoolean(CONFIG_FILE, "settings.check-updates", true);
@@ -107,13 +94,7 @@ public class MainConfigManager {
         
         // 调试配置
         yamlUtil.getString(CONFIG_FILE, "debug.level", "INFO");
-        yamlUtil.getBoolean(CONFIG_FILE, "debug.log-to-file", false);
-        yamlUtil.getBoolean(CONFIG_FILE, "debug.log-sql", false);
         
-        // 安全配置
-        yamlUtil.getInt(CONFIG_FILE, "security.max-recursion-depth", 10);
-        yamlUtil.getInt(CONFIG_FILE, "security.max-expression-length", 1000);
-        yamlUtil.getBoolean(CONFIG_FILE, "security.allow-circular-references", false);
     }
     
     /**
