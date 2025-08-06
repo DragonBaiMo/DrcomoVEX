@@ -92,6 +92,21 @@ public class MessagesManager {
         
         logger.debug("已注册所有内部占位符");
     }
+
+    /**
+     * 发送降级提示消息
+     *
+     * <p>根据发送者类型处理颜色。</p>
+     */
+    private void sendDegradeMessage(CommandSender sender, String message) {
+        String colored = ColorUtil.translateColors(message);
+        if (sender instanceof Player) {
+            messageService.sendRaw((Player) sender, colored);
+        } else {
+            String plain = colored.replaceAll("§[0-9a-fk-or]", "");
+            sender.sendMessage(plain);
+        }
+    }
     
     /**
      * 发送单条消息
@@ -109,27 +124,40 @@ public class MessagesManager {
      */
     public void sendMessage(CommandSender sender, String messageKey, Map<String, String> placeholders) {
         try {
+            String rawMessage = messageService.getRaw(messageKey);
+            if (rawMessage == null) {
+                logger.warn("消息缺失: " + messageKey);
+                sendDegradeMessage(sender, "§c消息缺失: " + messageKey);
+                return;
+            }
+            if (rawMessage.trim().isEmpty()) {
+                logger.warn("消息配置错误: " + messageKey);
+                sendDegradeMessage(sender, "§c消息配置错误: " + messageKey);
+                return;
+            }
+
             if (sender instanceof Player) {
                 // 使用PlaceholderAPIUtil的parse方法来处理{}格式占位符
-                String rawMessage = messageService.getRaw(messageKey);
-                if (rawMessage != null) {
-                    // 先用PlaceholderAPIUtil处理{}占位符，再用MessageService处理内置占位符
-                    String message = ((DrcomoVEX) plugin).getPlaceholderUtil().parse((Player) sender, rawMessage, placeholders != null ? placeholders : new java.util.HashMap<>());
-                    message = ColorUtil.translateColors(message);
-                    messageService.sendRaw((Player) sender, message);
+                String message = ((DrcomoVEX) plugin).getPlaceholderUtil().parse((Player) sender, rawMessage, placeholders != null ? placeholders : new java.util.HashMap<>());
+                if (message == null || message.trim().isEmpty()) {
+                    logger.warn("消息配置错误: " + messageKey);
+                    sendDegradeMessage(sender, "§c消息配置错误: " + messageKey);
+                    return;
                 }
+                message = ColorUtil.translateColors(message);
+                messageService.sendRaw((Player) sender, message);
             } else {
                 // 对于控制台，获取原始消息并手动处理占位符
-                String rawMessage = messageService.getRaw(messageKey);
-                if (rawMessage != null) {
-                    String message = ((DrcomoVEX) plugin).getPlaceholderUtil().parse(null, rawMessage, placeholders != null ? placeholders : new java.util.HashMap<>());
-                    if (message != null && !message.trim().isEmpty()) {
-                        message = ColorUtil.translateColors(message);
-                        // 移除颜色码
-                        message = message.replaceAll("§[0-9a-fk-or]", "");
-                        sender.sendMessage(message);
-                    }
+                String message = ((DrcomoVEX) plugin).getPlaceholderUtil().parse(null, rawMessage, placeholders != null ? placeholders : new java.util.HashMap<>());
+                if (message == null || message.trim().isEmpty()) {
+                    logger.warn("消息配置错误: " + messageKey);
+                    sendDegradeMessage(sender, "§c消息配置错误: " + messageKey);
+                    return;
                 }
+                message = ColorUtil.translateColors(message);
+                // 移除颜色码
+                message = message.replaceAll("§[0-9a-fk-or]", "");
+                sender.sendMessage(message);
             }
         } catch (Exception e) {
             logger.error("发送消息失败: " + messageKey, e);
@@ -154,34 +182,52 @@ public class MessagesManager {
      */
     public void sendMessageList(CommandSender sender, String messageKey, Map<String, String> placeholders) {
         try {
-            if (sender instanceof Player) {
-                // 获取原始消息列表
-                List<String> rawMessages = messageService.getList(messageKey);
-                if (rawMessages != null && !rawMessages.isEmpty()) {
-                    for (String rawMessage : rawMessages) {
-                        if (rawMessage != null && !rawMessage.trim().isEmpty()) {
-                            // 对每条消息使用PlaceholderAPIUtil处理{}占位符
-                            String message = ((DrcomoVEX) plugin).getPlaceholderUtil().parse((Player) sender, rawMessage, placeholders != null ? placeholders : new java.util.HashMap<>());
-                            message = ColorUtil.translateColors(message);
-                            messageService.sendRaw((Player) sender, message);
-                        }
-                    }
+            List<String> rawMessages = messageService.getList(messageKey);
+            if (rawMessages == null) {
+                logger.warn("消息缺失: " + messageKey);
+                sendDegradeMessage(sender, "§c消息缺失: " + messageKey);
+                return;
+            }
+            if (rawMessages.isEmpty()) {
+                logger.warn("消息配置错误: " + messageKey);
+                sendDegradeMessage(sender, "§c消息配置错误: " + messageKey);
+                return;
+            }
+
+            for (int i = 0; i < rawMessages.size(); i++) {
+                String rawMessage = rawMessages.get(i);
+                if (rawMessage == null) {
+                    logger.warn("消息缺失: " + messageKey + " (第" + (i + 1) + "条)");
+                    sendDegradeMessage(sender, "§c消息缺失: " + messageKey);
+                    continue;
                 }
-            } else {
-                // 对于控制台，获取列表消息并逐条发送
-                List<String> rawMessages = messageService.getList(messageKey);
-                if (rawMessages != null && !rawMessages.isEmpty()) {
-                    for (String rawMessage : rawMessages) {
-                        if (rawMessage != null && !rawMessage.trim().isEmpty()) {
-                            String message = ((DrcomoVEX) plugin).getPlaceholderUtil().parse(null, rawMessage, placeholders != null ? placeholders : new java.util.HashMap<>());
-                            if (message != null) {
-                                message = ColorUtil.translateColors(message);
-                                // 移除颜色码
-                                message = message.replaceAll("§[0-9a-fk-or]", "");
-                                sender.sendMessage(message);
-                            }
-                        }
+                if (rawMessage.trim().isEmpty()) {
+                    logger.warn("消息配置错误: " + messageKey + " (第" + (i + 1) + "条)");
+                    sendDegradeMessage(sender, "§c消息配置错误: " + messageKey);
+                    continue;
+                }
+
+                if (sender instanceof Player) {
+                    // 对每条消息使用PlaceholderAPIUtil处理{}占位符
+                    String message = ((DrcomoVEX) plugin).getPlaceholderUtil().parse((Player) sender, rawMessage, placeholders != null ? placeholders : new java.util.HashMap<>());
+                    if (message == null || message.trim().isEmpty()) {
+                        logger.warn("消息配置错误: " + messageKey + " (第" + (i + 1) + "条)");
+                        sendDegradeMessage(sender, "§c消息配置错误: " + messageKey);
+                        continue;
                     }
+                    message = ColorUtil.translateColors(message);
+                    messageService.sendRaw((Player) sender, message);
+                } else {
+                    String message = ((DrcomoVEX) plugin).getPlaceholderUtil().parse(null, rawMessage, placeholders != null ? placeholders : new java.util.HashMap<>());
+                    if (message == null || message.trim().isEmpty()) {
+                        logger.warn("消息配置错误: " + messageKey + " (第" + (i + 1) + "条)");
+                        sendDegradeMessage(sender, "§c消息配置错误: " + messageKey);
+                        continue;
+                    }
+                    message = ColorUtil.translateColors(message);
+                    // 移除颜色码
+                    message = message.replaceAll("§[0-9a-fk-or]", "");
+                    sender.sendMessage(message);
                 }
             }
         } catch (Exception e) {
