@@ -169,7 +169,7 @@ public class ServerVariablesAPI {
     // -------------------- 私有通用方法 --------------------
 
     /**
-     * 通用占位符处理流程：日志输入 -> 非空校验 -> 参数解析 -> 业务逻辑 -> 日志输出 -> 结果校验
+     * 通用占位符处理流程：日志输入 -> 非空校验 -> 参数解析 -> 变量存在校验 -> 业务逻辑 -> 日志输出 -> 结果校验
      *
      * @param placeholder 占位符名称 (不含 %)
      * @param player      Bukkit 玩家对象（全局可传 null）
@@ -188,9 +188,12 @@ public class ServerVariablesAPI {
         if (rawArgs == null || rawArgs.trim().isEmpty()) {
             result = "变量名不能为空";
         } else {
+            String parsedKey;
             // 2. 参数解析，可抛出异常
             try {
-                util.splitArgs(rawArgs);
+                String[] args = util.splitArgs(rawArgs);
+                parsedKey = args.length > 0 ? args[0] : "";
+                parsedKey = parsedKey.replace(" ", "_");
             } catch (Exception e) {
                 logger.error("占位符 " + placeholder + " 参数解析失败，原始输入: " + rawArgs, e);
                 result = "错误";
@@ -202,8 +205,16 @@ public class ServerVariablesAPI {
                 }
                 return result;
             }
-            // 4. 执行业务逻辑
-            result = handler.apply(player, rawArgs);
+
+            if (parsedKey.isEmpty()) {
+                result = "变量名不能为空";
+            } else if (variablesManager.getVariableDefinition(parsedKey) == null) {
+                logger.info("占位符 " + placeholder + " 变量 " + parsedKey + " 不存在");
+                result = "变量不存在";
+            } else {
+                // 4. 执行业务逻辑
+                result = handler.apply(player, parsedKey);
+            }
         }
 
         // 5. 日志输出与结果校验
@@ -246,8 +257,8 @@ public class ServerVariablesAPI {
                 return e instanceof java.util.concurrent.TimeoutException ? "0" : "异常:" + e.getMessage();
             }
         } else if (var != null) {
-            logger.debug("占位符 drcomovex_global_var 变量 " + key + " 不是全局类型，返回空字符串");
-            return "";
+            logger.info("占位符 drcomovex_global_var 变量 " + key + " 不是全局类型");
+            return "类型不匹配";
         }
         return "变量不存在";
     }
@@ -271,8 +282,8 @@ public class ServerVariablesAPI {
                 return e instanceof java.util.concurrent.TimeoutException ? "0" : "异常:" + e.getMessage();
             }
         } else if (var != null) {
-            logger.debug("占位符 drcomovex_player_var 变量 " + key + " 不是玩家类型，返回空字符串");
-            return "";
+            logger.info("占位符 drcomovex_player_var 变量 " + key + " 不是玩家类型");
+            return "类型不匹配";
         }
         return "变量不存在";
     }
