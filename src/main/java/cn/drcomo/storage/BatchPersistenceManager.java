@@ -357,15 +357,26 @@ public class BatchPersistenceManager {
                 futures);
 
         totalPersistedVariables.addAndGet(futures.size());
-        // 等待完成并清除标记
+        // 异步等待完成并清除标记
+        CompletableFuture<Void> allComplete = CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]))
+            .orTimeout(15, TimeUnit.SECONDS)  // 减少单次操作超时时间
+            .thenRun(() -> {
+                clearDirtyFlags(allTasks);
+                logger.debug("SQLite 批量持久化完成，处理任务数: " + allTasks.size());
+            })
+            .exceptionally(throwable -> {
+                logger.error("SQLite 批量持久化执行失败", throwable);
+                // 发生异常时，部分数据可能已保存，但为安全起见不清除脏标记
+                handleRetriesOnFailure(allTasks, new RuntimeException("批量持久化异常", throwable));
+                return null;
+            });
+        
+        // 同步等待 - 但时间更短，避免长时间阻塞
         try {
-            CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]))
-                    .get(30, TimeUnit.SECONDS);
-            clearDirtyFlags(allTasks);
-            logger.debug("SQLite 批量持久化完成，处理任务数: " + allTasks.size());
+            allComplete.get(20, TimeUnit.SECONDS);
         } catch (Exception e) {
-            logger.error("SQLite 批量持久化执行失败", e);
-            throw new RuntimeException("SQLite 批量持久化执行失败", e);
+            logger.error("SQLite 批量持久化最终等待失败", e);
+            throw new RuntimeException("SQLite 批量持久化最终等待失败", e);
         }
     }
 
@@ -588,11 +599,11 @@ public class BatchPersistenceManager {
     // --- 嵌套类：配置 ---
     public static class PersistenceConfig {
         private int batchIntervalSeconds = 30;
-        private int maxBatchSize = 1000;
+        private int maxBatchSize = 200;  // 减少批次大小，避免单次操作时间过长
         private double memoryPressureThreshold = 80.0;
         private int maxRetries = 3;
         private int queueSize = 10000;
-        private int workerThreads = 2;
+        private int workerThreads = 4;  // 增加到4个工作线程，提升持久化并发能力
 
         public int getBatchIntervalSeconds() { return batchIntervalSeconds; }
         public PersistenceConfig setBatchIntervalSeconds(int seconds) {

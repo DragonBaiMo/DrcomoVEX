@@ -189,25 +189,41 @@ public class RefactoredVariablesManager {
      * 保存所有数据
      */
     public CompletableFuture<Void> saveAllData() {
+        return saveAllData(false); // 正常保存时不强制刷新
+    }
+    
+    /**
+     * 保存所有数据
+     * @param forceFlush 是否强制刷新数据库到磁盘
+     */
+    public CompletableFuture<Void> saveAllData(boolean forceFlush) {
         logger.info("正在保存所有变量数据...");
-        return CompletableFuture.runAsync(() -> {
-            try {
-                persistenceManager.flushAllDirtyData().get(10, TimeUnit.SECONDS);
+        CompletableFuture<Void> saveTask = persistenceManager.flushAllDirtyData();
+        
+        if (forceFlush) {
+            // 关闭时或特殊情况下强制刷新数据库
+            saveTask = saveTask.thenCompose(result -> {
+                logger.debug("执行数据库强制刷新...");
+                return database.flushDatabase();
+            });
+        }
+        
+        return saveTask.thenRun(() -> {
                 logger.info("所有变量数据保存完成！");
-            } catch (TimeoutException e) {
-                logger.warn("持久化数据超时，部分数据可能未保存", e);
-                throw new RuntimeException("持久化数据超时", e);
-            } catch (Exception e) {
-                logger.error("保存变量数据失败！", e);
-                throw new RuntimeException("保存变量数据失败", e);
-            }
-
-            try {
-                cacheManager.clearAllCaches();
-            } catch (Exception e) {
-                logger.debug("缓存清理跳过: " + e.getMessage());
-            }
-        }, asyncTaskManager.getExecutor());
+                try {
+                    cacheManager.clearAllCaches();
+                } catch (Exception e) {
+                    logger.debug("缓存清理跳过: " + e.getMessage());
+                }
+            })
+            .exceptionally(throwable -> {
+                if (throwable.getCause() instanceof TimeoutException) {
+                    logger.warn("持久化数据超时，部分数据可能未保存");
+                } else {
+                    logger.error("保存变量数据失败！", throwable);
+                }
+                throw new RuntimeException("保存变量数据失败", throwable);
+            });
     }
 
     // ======================== 公共 API 方法 ========================

@@ -21,21 +21,21 @@ database:
     password: "password"
     useSSL: false
   
-  # 连接池配置 (已根据性能分析报告优化)
+  # 连接池配置 (针对持久化超时问题优化)
   pool:
-    minimum-idle: 5              # 增加最小空闲连接，提升基础性能
-    maximum-pool-size: 20        # 增加最大连接数，适应高并发场景
-    connection-timeout: 30000    # 30秒连接超时
-    idle-timeout: 600000         # 10分钟空闲超时
-    max-lifetime: 1800000        # 30分钟最大生命周期
+    minimum-idle: 3              # 适中的最小连接数，节约资源
+    maximum-pool-size: 12        # 适中的最大连接数，避免过度竞争
+    connection-timeout: 15000    # 15秒连接超时，更快失败反馈
+    idle-timeout: 300000         # 5分钟空闲超时，及时释放资源
+    max-lifetime: 900000         # 15分钟最大生命周期，保持连接新鲜
 
 # 数据保存配置
 data:
   # 是否启用自动保存
   auto-save: true
   
-  # 保存间隔（分钟）
-  save-interval-minutes: 5
+  # 保存间隔（分钟） - 优化：减少频率避免频繁I/O
+  save-interval-minutes: 3
   
   # 玩家退出时是否保存数据
   save-on-player-quit: true

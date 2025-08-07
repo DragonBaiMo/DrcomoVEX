@@ -73,21 +73,21 @@ public class DataSaveTask {
             logger.info("数据自动保存任务已停止");
         }
 
-        CompletableFuture<Void> future = variablesManager.saveAllData();
+        // 关闭时必须同步等待数据保存完成，防止数据丢失
+        logger.info("关闭前执行最终数据保存...");
         try {
-            plugin.getAsyncTaskManager().submitAsync(() -> {
-                try {
-                    future.get(10, TimeUnit.SECONDS);
-                } catch (TimeoutException e) {
-                    logger.warn("关闭前数据保存超时，已忽略未完成的保存", e);
-                } catch (Exception e) {
-                    logger.error("关闭前数据保存失败", e);
-                }
-            }).get(10, TimeUnit.SECONDS);
+            long startTime = System.currentTimeMillis();
+            
+            // 关闭时强制刷新数据库，确保数据真实写入磁盘
+            variablesManager.saveAllData(true).get(30, TimeUnit.SECONDS);
+            
+            long duration = System.currentTimeMillis() - startTime;
+            logger.info("关闭前数据保存完成，耗时: " + duration + "ms");
+            
         } catch (TimeoutException e) {
-            logger.warn("等待保存任务完成超时，继续关闭插件", e);
+            logger.error("关闭前数据保存超时！可能存在数据丢失风险", e);
         } catch (Exception e) {
-            logger.error("关闭插件时等待保存任务异常", e);
+            logger.error("关闭前数据保存失败！", e);
         }
     }
     
@@ -95,18 +95,18 @@ public class DataSaveTask {
      * 执行数据保存
      */
     private void performSave() {
-        try {
-            long startTime = System.currentTimeMillis();
-            
-            // 保存所有变量数据并等待完成，避免任务提前结束
-            variablesManager.saveAllData().join();
-            
-            long duration = System.currentTimeMillis() - startTime;
-            logger.debug("数据保存完成，耗时: " + duration + "ms");
-            
-        } catch (Exception e) {
-            logger.error("数据保存任务异常", e);
-        }
+        long startTime = System.currentTimeMillis();
+        
+        // 异步保存数据，避免阻塞定时任务线程
+        variablesManager.saveAllData()
+            .thenRun(() -> {
+                long duration = System.currentTimeMillis() - startTime;
+                logger.debug("数据保存完成，耗时: " + duration + "ms");
+            })
+            .exceptionally(throwable -> {
+                logger.error("数据保存任务异常", throwable);
+                return null;
+            });
     }
     
     /**

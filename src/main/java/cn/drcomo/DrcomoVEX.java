@@ -134,7 +134,7 @@ public class DrcomoVEX extends JavaPlugin {
         
         // 异步任务管理器
         asyncTaskManager = AsyncTaskManager.newBuilder(this, logger)
-                .poolSize(4)
+                .poolSize(8)  // 增加到8个线程，提升并发处理能力
                 .build();
         
         // PlaceholderAPI工具

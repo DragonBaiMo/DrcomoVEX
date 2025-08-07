@@ -22,6 +22,7 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 /**
@@ -282,41 +283,37 @@ public class HikariConnection {
     /**
      * 异步执行 UPSERT 操作
      */
-    public CompletableFuture<Void> upsertAsync(String table, String keyColumn, String valueColumn, 
+    public CompletableFuture<Void> upsertAsync(String table, String keyColumn, String valueColumn,
                                                Object keyValue, Object valueValue) {
+        if ("sqlite".equals(databaseType)) {
+            String sql = String.format(
+                "INSERT OR REPLACE INTO %s (%s, %s, updated_at) VALUES (?, ?, ?)",
+                table, keyColumn, valueColumn
+            );
+            return sqliteDB.executeUpdateAsync(sql, keyValue, valueValue, System.currentTimeMillis())
+                           .thenApply(v -> null); // 转换 CompletableFuture<Integer> to CompletableFuture<Void>
+        }
+        
         return CompletableFuture.runAsync(() -> {
-            if ("sqlite".equals(databaseType)) {
-                String sql = String.format(
-                    "INSERT OR REPLACE INTO %s (%s, %s, updated_at) VALUES (?, ?, ?)",
-                    table, keyColumn, valueColumn
-                );
-                try {
-                    sqliteDB.executeUpdate(sql, keyValue, valueValue, System.currentTimeMillis());
-                } catch (Exception e) {
-                    logger.error("SQLite UPSERT 失败", e);
-                    throw new RuntimeException("UPSERT 操作失败", e);
-                }
-            } else {
-                String sql = String.format(
-                    "INSERT INTO %s (%s, %s, created_at, updated_at) VALUES (?, ?, ?, ?) " +
-                    "ON DUPLICATE KEY UPDATE %s = VALUES(%s), updated_at = VALUES(updated_at)",
-                    table, keyColumn, valueColumn, valueColumn, valueColumn
-                );
+            String sql = String.format(
+                "INSERT INTO %s (%s, %s, created_at, updated_at) VALUES (?, ?, ?, ?) " +
+                "ON DUPLICATE KEY UPDATE %s = VALUES(%s), updated_at = VALUES(updated_at)",
+                table, keyColumn, valueColumn, valueColumn, valueColumn
+            );
+            
+            long now = System.currentTimeMillis();
+            try (Connection conn = getConnection();
+                 PreparedStatement stmt = conn.prepareStatement(sql)) {
                 
-                long now = System.currentTimeMillis();
-                try (Connection conn = getConnection();
-                     PreparedStatement stmt = conn.prepareStatement(sql)) {
-                    
-                    stmt.setObject(1, keyValue);
-                    stmt.setObject(2, valueValue);
-                    stmt.setLong(3, now);
-                    stmt.setLong(4, now);
-                    
-                    stmt.executeUpdate();
-                } catch (SQLException e) {
-                    logger.error("MySQL UPSERT 失败", e);
-                    throw new RuntimeException("UPSERT 操作失败", e);
-                }
+                stmt.setObject(1, keyValue);
+                stmt.setObject(2, valueValue);
+                stmt.setLong(3, now);
+                stmt.setLong(4, now);
+                
+                stmt.executeUpdate();
+            } catch (SQLException e) {
+                logger.error("MySQL UPSERT 失败", e);
+                throw new RuntimeException("UPSERT 操作失败", e);
             }
         });
     }
@@ -368,6 +365,24 @@ public class HikariConnection {
         return "未知数据库类型";
     }
     
+    /**
+     * 强制刷新SQLite数据到磁盘
+     */
+    public CompletableFuture<Void> flushDatabase() {
+        if ("sqlite".equals(databaseType) && sqliteDB != null) {
+            logger.info("强制刷新SQLite数据到磁盘...");
+            // 使用查询方法执行PRAGMA命令，因为这些命令会返回结果
+            return queryValueAsync("PRAGMA synchronous=FULL")
+                .thenCompose(result -> queryValueAsync("PRAGMA wal_checkpoint(FULL)"))
+                .thenRun(() -> logger.info("SQLite数据强制刷新完成"))
+                .exceptionally(throwable -> {
+                    logger.warn("SQLite数据刷新失败，但继续进行: " + throwable.getMessage());
+                    return null;
+                });
+        }
+        return CompletableFuture.completedFuture(null);
+    }
+
     /**
      * 关闭数据库连接
      */
