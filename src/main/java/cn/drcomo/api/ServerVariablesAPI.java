@@ -146,6 +146,9 @@ public class ServerVariablesAPI {
      * 注册 PlaceholderAPI 占位符
      */
     public void registerPlaceholders(PlaceholderAPIUtil placeholderUtil) {
+        // 通用参数非空验证函数
+        java.util.function.Function<String, Boolean> isBlank = s -> s == null || s.trim().isEmpty();
+
         // =============== %drcomovex_[var]_<key>% ===============
         // 返回变量的默认值(initial)
         placeholderUtil.register("[var]", (player, rawArgs) ->
