@@ -55,7 +55,7 @@ public class RefactoredVariablesManager {
 
     // ======================== 核心存储和缓存组件 ========================
     private final VariableMemoryStorage memoryStorage;
-    private final BatchPersistenceManager persistenceManager;
+    private BatchPersistenceManager persistenceManager;
     private final MultiLevelCacheManager cacheManager;
 
     // 变量定义注册表
@@ -160,29 +160,6 @@ public class RefactoredVariablesManager {
         }, asyncTaskManager.getExecutor());
     }
 
-    /**
-     * 重载所有变量定义
-     */
-    public CompletableFuture<Void> reload() {
-        logger.info("正在重载变量定义...");
-        return CompletableFuture.runAsync(() -> {
-            try {
-                cacheManager.clearAllCaches();
-            } catch (Exception e) {
-                logger.debug("缓存清理跳过: " + e.getMessage());
-            }
-
-            try {
-                variableRegistry.clear();
-                loadAllVariableDefinitions();
-                validateVariableDefinitions();
-                logger.info("变量定义重载完成！已加载 " + variableRegistry.size() + " 个变量定义");
-            } catch (Exception e) {
-                logger.error("变量定义重载失败", e);
-                throw new RuntimeException("变量定义重载失败", e);
-            }
-        }, asyncTaskManager.getExecutor());
-    }
 
     /**
      * 保存所有数据

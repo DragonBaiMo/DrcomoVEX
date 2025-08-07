@@ -45,8 +45,8 @@ cycle:
   # 是否启用周期性重置
   enabled: true
   
-  # 检查间隔（分钟）
-  check-interval-minutes: 1
+  # 检查间隔（秒）- 设为1秒以确保不错过任何重置时间点
+  check-interval-seconds: 1
   
   # 时区设置
   timezone: "Asia/Shanghai"

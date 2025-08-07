@@ -218,6 +218,9 @@ public class HikariConnection {
      */
     public Connection getConnection() throws SQLException {
         if ("mysql".equals(databaseType)) {
+            if (dataSource == null) {
+                throw new SQLException("MySQL连接池未初始化或已关闭，无法获取连接");
+            }
             return dataSource.getConnection();
         }
         throw new UnsupportedOperationException("SQLite 不提供直接连接获取，请使用异步API");
@@ -371,8 +374,8 @@ public class HikariConnection {
     public CompletableFuture<Void> flushDatabase() {
         if ("sqlite".equals(databaseType) && sqliteDB != null) {
             logger.info("强制刷新SQLite数据到磁盘...");
-            // 使用查询方法执行PRAGMA命令，因为这些命令会返回结果
-            return queryValueAsync("PRAGMA synchronous=FULL")
+            // 使用executeUpdateAsync执行设置命令，使用queryValueAsync执行检查点命令
+            return executeUpdateAsync("PRAGMA synchronous=FULL")
                 .thenCompose(result -> queryValueAsync("PRAGMA wal_checkpoint(FULL)"))
                 .thenRun(() -> logger.info("SQLite数据强制刷新完成"))
                 .exceptionally(throwable -> {

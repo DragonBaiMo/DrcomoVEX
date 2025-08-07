@@ -342,7 +342,7 @@ memory:
 # 时间周期配置
 cycle:
   enabled: true
-  check-interval-minutes: 1  # 保持默认检查频率
+  check-interval-seconds: 60  # 保持默认检查频率（60秒）
   timezone: "Asia/Shanghai"  # 确保时区配置正确
 ```
 

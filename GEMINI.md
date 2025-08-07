@@ -85,7 +85,7 @@ DrcomoVEX 是一个基于直觉设计的 Minecraft 服务器变量管理系统�
 ### 智能变量系统特性
 - **智能类型推断**: 根据 `initial` 值自动推断变量类型
 - **动态表达式**: 支持 PlaceholderAPI 占位符和内部变量引用
-- **周期性重置**: 支持 DAILY、WEEKLY、MONTHLY、YEARLY 和 Cron 表达式
+- **周期性重置**: 支持 minute、daily、weekly、monthly、yearly 和 Cron 表达式
 - **全能指令**: `/vex add` 支持数值运算、列表追加、文本拼接
 
 ### 异步编程模式

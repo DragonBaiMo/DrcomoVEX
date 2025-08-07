@@ -440,19 +440,23 @@ public class MainCommand implements CommandExecutor, TabCompleter {
             messagesManager.sendMessage(sender, "error.no-permission", new HashMap<>());
             return;
         }
-        plugin.getAsyncTaskManager().submitAsync(() -> {
+        
+        // 必须在主线程执行，因为 PlaceholderAPI 等插件的注销事件要求同步执行
+        Bukkit.getScheduler().runTask(plugin, () -> {
             try {
-                plugin.getConfigsManager().reload();
-                variablesManager.reload().join(); // 等待异步重载完成
-                messagesManager.reload();
-                Bukkit.getScheduler().runTask(plugin, () -> {
-                    messagesManager.sendMessage(sender, "success.reload", new HashMap<>());
-                    logger.info("配置已重载，执行者: " + sender.getName());
-                });
+                logger.info("开始执行完全重载（onDisable + onEnable）...");
+                
+                // 1. 完全关闭插件（照搬 onDisable）
+                plugin.onDisable();
+                
+                // 2. 完全启动插件（照搬 onEnable）  
+                plugin.onEnable();
+                
+                messagesManager.sendMessage(sender, "success.reload", new HashMap<>());
+                logger.info("完全重载成功，执行者: " + sender.getName());
             } catch (Exception e) {
-                logger.error("重载配置失败", e);
-                Bukkit.getScheduler().runTask(plugin, () ->
-                        messagesManager.sendMessage(sender, "error.reload-failed", new HashMap<>()));
+                logger.error("重载失败", e);
+                messagesManager.sendMessage(sender, "error.reload-failed", new HashMap<>());
             }
         });
     }

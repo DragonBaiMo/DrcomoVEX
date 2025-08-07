@@ -4,7 +4,7 @@
 # 
 # 支持的类型: INT, DOUBLE, STRING, LIST
 # 支持的作用域: player, global
-# 支持的周期: DAILY, WEEKLY, MONTHLY, YEARLY, Cron表达式
+# 支持的周期: minute, daily, weekly, monthly, yearly, Cron表达式
 # ================================================================
 
 variables:
@@ -55,13 +55,21 @@ variables:
   
   # ======================== 周期性变量示例 ========================
   
+  # 临时状态 - 每分钟重置
+  temp_status:
+    name: "临时状态"
+    scope: "player"
+    type: "STRING"
+    initial: "idle"
+    cycle: "minute"
+  
   # 每日登入奖励领取状态 - 每日重置
   daily_reward_claimed:
     name: "每日奖励领取状态"
     scope: "player"
     type: "STRING"
     initial: "false"
-    cycle: "DAILY"
+    cycle: "daily"
   
   # 每日任务进度 - 每日重置
   daily_task_progress:
@@ -71,7 +79,7 @@ variables:
     initial: 0
     min: 0
     max: 100
-    cycle: "DAILY"
+    cycle: "daily"
   
   # 周排行榜积分 - 每周重置
   weekly_score:
@@ -80,7 +88,7 @@ variables:
     type: "INT"
     initial: 0
     min: 0
-    cycle: "WEEKLY"
+    cycle: "weekly"
   
   # 月度活跃度 - 每月重置
   monthly_activity:
@@ -89,7 +97,7 @@ variables:
     type: "INT"
     initial: 0
     min: 0
-    cycle: "MONTHLY"
+    cycle: "monthly"
   
   # ======================== 动态变量示例 ========================
   
@@ -168,7 +176,7 @@ variables:
     type: "DOUBLE"
     initial: "50 + ${player_level} * 10"
     min: 50
-    cycle: "DAILY"
+    cycle: "daily"
   
   # 复合周期变量 - 每天中午0点重置
   complex_daily_reset:

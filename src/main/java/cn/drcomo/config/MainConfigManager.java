@@ -83,7 +83,7 @@ public class MainConfigManager {
         
         // 周期性重置配置
         yamlUtil.getBoolean(CONFIG_FILE, "cycle.enabled", true);
-        yamlUtil.getInt(CONFIG_FILE, "cycle.check-interval-minutes", 1);
+        yamlUtil.getInt(CONFIG_FILE, "cycle.check-interval-seconds", 60);
         yamlUtil.getString(CONFIG_FILE, "cycle.timezone", "Asia/Shanghai");
         
         

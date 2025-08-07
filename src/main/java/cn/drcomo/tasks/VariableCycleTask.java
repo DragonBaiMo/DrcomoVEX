@@ -25,7 +25,7 @@ import java.util.concurrent.TimeUnit;
  * 周期变量检测任务
  *
  * 定期检查带有 cycle 配置的变量，按需重置其值。
- * 支持标准周期（DAILY, WEEKLY, MONTHLY, YEARLY）和Cron表达式。
+ * 支持标准周期（daily, weekly, monthly, yearly）和自定义Cron表达式。
  *
  * 优化说明：
  * 1. 提取重复逻辑到私有方法，如数据库删除、配置保存等。
@@ -65,8 +65,8 @@ public class VariableCycleTask {
         }
         int interval = getCheckInterval();
         task = plugin.getAsyncTaskManager().scheduleAtFixedRate(
-                this::checkCycles, 0, interval, TimeUnit.MINUTES);
-        logger.info("已启动周期变量检测任务，间隔: " + interval + " 分钟");
+                this::checkCycles, 0, interval, TimeUnit.SECONDS);
+        logger.info("已启动周期变量检测任务，间隔: " + interval + " 秒");
     }
 
     /** 停止周期检测任务 */
@@ -82,6 +82,7 @@ public class VariableCycleTask {
         ZoneId zone = getValidatedTimeZone();
         ZonedDateTime now = ZonedDateTime.now(zone);
         try {
+            runSafeReset("minute", calculateMinuteCycleStart(now));
             runSafeReset("daily", calculateDailyCycleStart(now));
             runSafeReset("weekly", calculateWeeklyCycleStart(now));
             runSafeReset("monthly", calculateMonthlyCycleStart(now));
@@ -154,21 +155,49 @@ public class VariableCycleTask {
             return true;
         }
 
-        /** 执行具体重置 */
+        /** 执行具体重置 - 基于正确的时间对比逻辑 */
         private void performResets() {
             Set<String> keys = variablesManager.getAllVariableKeys();
-            long now = System.currentTimeMillis();
-            long threshold = getCycleDuration(cycleType);
+            ZonedDateTime now = ZonedDateTime.now(getValidatedTimeZone());
+            
             for (String key : keys) {
                 Variable var = variablesManager.getVariableDefinition(key);
                 if (var != null && cycleType.equalsIgnoreCase(var.getCycle())) {
-                    Long first = variablesManager.getFirstModifiedAt(var.isGlobal(), key);
-                    if (first != null && now - first < threshold) {
-                        logger.debug("跳过重置(未达周期阈值): " + key);
+                    
+                    // 1. 获取变量首次修改时间
+                    Long firstModified = variablesManager.getFirstModifiedAt(var.isGlobal(), key);
+                    if (firstModified == null) {
+                        logger.debug("跳过重置(变量未曾修改): " + key);
                         continue;
                     }
+                    
+                    ZonedDateTime firstTime = Instant.ofEpochMilli(firstModified).atZone(now.getZone());
+                    
+                    // 2. 获取最后重置时间，如果没有则使用首次修改时间作为基准
+                    Long lastResetTimeMillis = getLastResetTime(key);
+                    ZonedDateTime baseTime = lastResetTimeMillis != null ? 
+                        Instant.ofEpochMilli(lastResetTimeMillis).atZone(now.getZone()) : firstTime;
+                    
+                    // 3. 基于基准时间计算下次重置时间
+                    ZonedDateTime nextResetTime = calculateNextResetTime(baseTime, cycleType);
+                    
+                    // 4. 检查是否到了重置时间
+                    if (now.isBefore(nextResetTime)) {
+                        logger.debug("跳过重置(未到重置时间): " + key + 
+                                  " 基准时间: " + baseTime + 
+                                  " 下次重置: " + nextResetTime + 
+                                  " 当前: " + now);
+                        continue;
+                    }
+                    
+                    // 5. 执行重置
                     if (resetSingleVariableSafe(var, key)) {
+                        updateVariableResetTime(key, nextResetTime.toInstant().toEpochMilli());
                         resetList.add(key);
+                        logger.info("重置变量: " + key + 
+                                  " (基准时间: " + baseTime + 
+                                  " → 重置时间: " + nextResetTime + 
+                                  " 当前: " + now + ")");
                     }
                 }
             }
@@ -223,18 +252,36 @@ public class VariableCycleTask {
         private boolean resetSingleVariableSafe(Variable var, String key) {
             for (int i = 1; i <= 3; i++) {
                 if (deleteVariableFromDb(var.isGlobal(), key)) {
+                    // 强化缓存清理：多步骤彻底清理
+                    logger.info("正在重置变量: " + key + " (第" + i + "次尝试)");
+                    
+                    // 1. 清理内存和缓存
                     variablesManager.removeVariableFromMemoryAndCache(key);
-                    logger.debug("重置变量成功: " + key + " (尝试 " + i + "/3)");
+                    
+                    // 2. 额外的全缓存清理
+                    variablesManager.invalidateAllCaches(key);
+                    
+                    // 3. 强制等待，确保异步清理完成
+                    try {
+                        Thread.sleep(50); // 短暂等待确保缓存清理完成
+                    } catch (InterruptedException ie) {
+                        Thread.currentThread().interrupt();
+                    }
+                    
+                    // 4. 验证重置是否成功（调试用）
+                    logger.info("变量 " + key + " 重置完成，数据库记录已删除，所有缓存已清理");
                     return true;
                 }
                 sleepMillis(100 * i);
             }
+            logger.warn("变量 " + key + " 重置失败，已重试3次");
             return false;
         }
 
         /** 获取长时间关闭阈值 */
         private long getDangerousThreshold(String type) {
             switch (type.toLowerCase()) {
+                case "minute":  return 60L * 60_000; // 60分钟
                 case "daily":   return 7L * 24 * 3600_000;
                 case "weekly":  return 28L * 24 * 3600_000;
                 case "monthly": return 180L * 24 * 3600_000;
@@ -246,6 +293,7 @@ public class VariableCycleTask {
         /** 获取一个周期的毫秒数 */
         private long getCycleDuration(String type) {
             switch (type.toLowerCase()) {
+                case "minute":  return 60_000; // 1分钟
                 case "daily":   return 24L * 3600_000;
                 case "weekly":  return 7L * 24 * 3600_000;
                 case "monthly": return 30L * 24 * 3600_000;
@@ -266,69 +314,97 @@ public class VariableCycleTask {
     /** 重置所有Cron表达式变量 */
     private void resetCronVariables(ZonedDateTime now) {
         Set<String> keys = variablesManager.getAllVariableKeys();
-        int count = 0;
+        List<String> resetList = new ArrayList<>();
+        
         for (String key : keys) {
             Variable var = variablesManager.getVariableDefinition(key);
             String expr = var == null ? null : var.getCycle();
-            if (expr != null && expr.contains(" ") && shouldResetCron(expr, key, now, var)) {
-                if (resetSingleVariable(var, key)) {
-                    updateLastResetTime(key, now.toInstant().toEpochMilli());
-                    count++;
+            if (expr != null && expr.contains(" ")) {
+                
+                // 获取下次重置时间用于记录
+                ZonedDateTime nextResetTime = getCronNextResetTime(expr, key, now, var);
+                if (nextResetTime != null && shouldResetCron(expr, key, now, var)) {
+                    if (resetSingleVariable(var, key)) {
+                        updateVariableResetTime(key, nextResetTime.toInstant().toEpochMilli());
+                        resetList.add(key);
+                    }
                 }
             }
         }
-        if (count > 0) {
-            logger.info("已完成 Cron表达式 周期变量重置，共重置 " + count + " 个变量");
+        if (!resetList.isEmpty()) {
+            logger.info("已完成 Cron表达式 周期变量重置，共重置 " + resetList.size() + " 个变量");
         }
     }
 
-    /** 判断Cron表达式变量是否应重置 */
+    /** 获取Cron表达式的下次重置时间 */
+    private ZonedDateTime getCronNextResetTime(String expr, String key, ZonedDateTime now, Variable var) {
+        try {
+            Cron cron = cronParser.parse(expr);
+            ExecutionTime et = ExecutionTime.forCron(cron);
+            
+            Long firstModified = variablesManager.getFirstModifiedAt(var.isGlobal(), key);
+            if (firstModified == null) return null;
+            
+            ZonedDateTime firstTime = Instant.ofEpochMilli(firstModified).atZone(now.getZone());
+            Long lastResetTimeMillis = getLastResetTime(key);
+            ZonedDateTime baseTime = lastResetTimeMillis != null ? 
+                Instant.ofEpochMilli(lastResetTimeMillis).atZone(now.getZone()) : firstTime;
+            
+            return et.nextExecution(baseTime).orElse(null);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /** 判断Cron表达式变量是否应重置 - 基于正确的时间对比逻辑 */
     private boolean shouldResetCron(String expr, String key, ZonedDateTime now, Variable var) {
         try {
             Cron cron = cronParser.parse(expr);
             ExecutionTime et = ExecutionTime.forCron(cron);
-            DataConfigManager dataConfig = configsManager.getDataConfigManager();
-            long last = synchronizedGetLong(dataConfig, "cycle.cron." + key + ".last-reset", 0L);
-            ZonedDateTime lastTime = Instant.ofEpochMilli(last).atZone(now.getZone());
-            Optional<ZonedDateTime> next = et.nextExecution(lastTime);
-            if (!(next.isPresent() && !next.get().isAfter(now))) {
-                return false;
+            
+            // 1. 获取变量的首次修改时间
+            Long firstModified = variablesManager.getFirstModifiedAt(var.isGlobal(), key);
+            if (firstModified == null) {
+                logger.debug("跳过Cron重置(变量未曾修改): " + key);
+                return false; // 变量从未被修改过
             }
-            Long first = variablesManager.getFirstModifiedAt(var.isGlobal(), key);
-            if (first != null) {
-                ZonedDateTime firstTime = Instant.ofEpochMilli(first).atZone(now.getZone());
-                Optional<ZonedDateTime> nextAfterFirst = et.nextExecution(firstTime);
-                if (nextAfterFirst.isPresent() && nextAfterFirst.get().isAfter(now)) {
-                    return false;
-                }
+            
+            ZonedDateTime firstTime = Instant.ofEpochMilli(firstModified).atZone(now.getZone());
+            
+            // 2. 获取最后重置时间，如果没有则使用首次修改时间作为基准
+            Long lastResetTimeMillis = getLastResetTime(key);
+            ZonedDateTime baseTime = lastResetTimeMillis != null ? 
+                Instant.ofEpochMilli(lastResetTimeMillis).atZone(now.getZone()) : firstTime;
+            
+            // 3. 基于基准时间计算下一个Cron触发时间
+            Optional<ZonedDateTime> nextResetTime = et.nextExecution(baseTime);
+            if (!nextResetTime.isPresent()) {
+                logger.debug("跳过Cron重置(无法计算下次执行时间): " + key);
+                return false; // 无法计算下次执行时间
             }
+            
+            // 4. 检查是否已经到了重置时间
+            if (now.isBefore(nextResetTime.get())) {
+                logger.debug("跳过Cron重置(未到重置时间): " + key + 
+                          " 基准时间: " + baseTime +
+                          " 下次重置时间: " + nextResetTime.get() + 
+                          " 当前时间: " + now);
+                return false; // 还未到重置时间
+            }
+            
+            logger.info("Cron变量需要重置: " + key + 
+                       " 基准时间: " + baseTime + 
+                       " 应重置时间: " + nextResetTime.get() + 
+                       " 当前时间: " + now + 
+                       " (" + expr + ")");
             return true;
+            
         } catch (Exception e) {
             logger.error("解析Cron表达式失败: " + expr + " (变量: " + key + ")", e);
             return false;
         }
     }
 
-    /** 更新Cron变量最后重置时间 */
-    private void updateLastResetTime(String key, long time) {
-        DataConfigManager dataConfig = configsManager.getDataConfigManager();
-        synchronized (dataConfig) {
-            dataConfig.getConfig().set("cycle.cron." + key + ".last-reset", time);
-            plugin.getAsyncTaskManager().submitAsync(() ->
-                saveDataConfigAsync(dataConfig, "更新Cron变量重置时间记录: " + key + " -> " + time)
-            );
-        }
-    }
-
-    /** 私有：异步保存DataConfig */
-    private void saveDataConfigAsync(DataConfigManager dataConfig, String action) {
-        try {
-            dataConfig.getConfig().save(plugin.getDataFolder().toPath().resolve("data.yml").toFile());
-            logger.debug(action);
-        } catch (Exception e) {
-            logger.error("更新Cron变量重置时间失败: " + action + ", 错误: " + e.getMessage());
-        }
-    }
 
     // ============ 公共工具方法 ============
 
@@ -351,27 +427,36 @@ public class VariableCycleTask {
         if (var == null) return false;
         boolean ok = deleteVariableFromDb(var.isGlobal(), key);
         if (ok) {
+            // 强化缓存清理：与标准周期重置保持一致
+            logger.info("正在重置Cron变量: " + key);
+            
+            // 1. 清理内存和缓存
+            variablesManager.removeVariableFromMemoryAndCache(key);
+            
+            // 2. 额外的全缓存清理
             variablesManager.invalidateAllCaches(key);
-            logger.debug("已重置变量: " + key);
+            
+            // 3. 强制等待，确保异步清理完成
+            try {
+                Thread.sleep(50); // 短暂等待确保缓存清理完成
+            } catch (InterruptedException ie) {
+                Thread.currentThread().interrupt();
+            }
+            
+            logger.info("Cron变量 " + key + " 重置完成，数据库记录已删除，所有缓存已清理");
         }
         return ok;
     }
 
-    /** 安全获取配置值 */
-    private long synchronizedGetLong(DataConfigManager cfg, String path, long def) {
-        synchronized (cfg) {
-            return cfg.getLong(path, def);
-        }
-    }
 
     /** 检查功能开关 */
     private boolean isCycleEnabled() {
         return configsManager.getMainConfig().getBoolean("cycle.enabled", true);
     }
 
-    /** 获取检查间隔 */
+    /** 获取检查间隔（秒） */
     private int getCheckInterval() {
-        return configsManager.getMainConfig().getInt("cycle.check-interval-minutes", 1);
+        return configsManager.getMainConfig().getInt("cycle.check-interval-seconds", 60);
     }
 
     /** 校验并返回时区 */
@@ -387,6 +472,11 @@ public class VariableCycleTask {
                 return ZoneId.systemDefault();
             }
         }
+    }
+
+    /** 每分钟周期开始 */
+    private ZonedDateTime calculateMinuteCycleStart(ZonedDateTime now) {
+        return now.truncatedTo(ChronoUnit.MINUTES);
     }
 
     /** 每日周期开始 */
@@ -440,6 +530,66 @@ public class VariableCycleTask {
             logger.info("========================");
         } catch (Exception e) {
             logger.error("记录边界条件信息失败", e);
+        }
+    }
+
+    // ============ 时间对比逻辑的辅助方法 ============
+
+    /** 计算变量下次应该重置的时间 */
+    private ZonedDateTime calculateNextResetTime(ZonedDateTime firstTime, String cycleType) {
+        switch (cycleType.toLowerCase()) {
+            case "minute":
+                // 下一个整分钟
+                return firstTime.truncatedTo(ChronoUnit.MINUTES).plusMinutes(1);
+            case "daily":
+                // 下一天的00:00
+                return firstTime.truncatedTo(ChronoUnit.DAYS).plusDays(1);
+            case "weekly":
+                // 下周一的00:00
+                return firstTime.with(TemporalAdjusters.next(DayOfWeek.MONDAY))
+                              .truncatedTo(ChronoUnit.DAYS);
+            case "monthly":
+                // 下个月1号的00:00
+                return firstTime.with(TemporalAdjusters.firstDayOfNextMonth())
+                              .truncatedTo(ChronoUnit.DAYS);
+            case "yearly":
+                // 下一年1月1号的00:00
+                return firstTime.with(TemporalAdjusters.firstDayOfNextYear())
+                              .truncatedTo(ChronoUnit.DAYS);
+            default:
+                logger.warn("未知的周期类型: " + cycleType + ", 返回一天后");
+                return firstTime.plusDays(1);
+        }
+    }
+
+
+    /** 更新变量的重置时间记录 */
+    private void updateVariableResetTime(String key, long resetTime) {
+        DataConfigManager dataConfig = configsManager.getDataConfigManager();
+        String resetKey = "cycle.variable." + key + ".last-reset-time";
+        
+        synchronized (dataConfig) {
+            dataConfig.getConfig().set(resetKey, resetTime);
+            plugin.getAsyncTaskManager().submitAsync(() -> {
+                try {
+                    dataConfig.getConfig().save(plugin.getDataFolder().toPath().resolve("data.yml").toFile());
+                    logger.debug("更新变量重置时间记录: " + key + " -> " + 
+                               Instant.ofEpochMilli(resetTime));
+                } catch (Exception e) {
+                    logger.error("保存变量重置时间失败: " + key, e);
+                }
+            });
+        }
+    }
+
+    /** 获取变量的最后重置时间 */
+    private Long getLastResetTime(String key) {
+        DataConfigManager dataConfig = configsManager.getDataConfigManager();
+        String resetKey = "cycle.variable." + key + ".last-reset-time";
+        
+        synchronized (dataConfig) {
+            long time = dataConfig.getLong(resetKey, 0L);
+            return time > 0 ? time : null;
         }
     }
 }
