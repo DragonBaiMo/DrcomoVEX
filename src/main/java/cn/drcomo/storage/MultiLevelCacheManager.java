@@ -93,6 +93,8 @@ public class MultiLevelCacheManager {
             l1Hits.incrementAndGet();
             String rawValue = l1Value.getValue();
             String cacheKey = buildCacheKey(player, key);
+            boolean hasExpr = containsExpressions(rawValue);
+            boolean hasPlaceholder = containsPlaceholders(rawValue);
             
             // L3缓存查找（最终结果） - 带版本验证
             CacheEntry l3Entry = l3ResultCache.getIfPresent(cacheKey);
@@ -108,7 +110,7 @@ public class MultiLevelCacheManager {
             }
             
             // L2表达式缓存查找（跳过PlaceholderAPI占位符）
-            if (containsExpressions(rawValue) && !containsPlaceholders(rawValue)) {
+            if (hasExpr && !hasPlaceholder) {
                 String expressionKey = buildExpressionKey(rawValue, player);
                 String l2Result = l2ExpressionCache.getIfPresent(expressionKey);
                 
@@ -118,12 +120,12 @@ public class MultiLevelCacheManager {
                     l3ResultCache.put(cacheKey, new CacheEntry(rawValue, l2Result, l1Value.getVersion()));
                     return CacheResult.hit("L2", l2Result);
                 }
-            } else if (containsPlaceholders(rawValue)) {
+            } else if (hasPlaceholder) {
                 logger.debug("跳过L2缓存（包含PlaceholderAPI占位符）: " + buildPlayerKey(player, key));
             }
-            
+
             // 所有缓存未命中，返回L1的原始值用于进一步处理
-            if (containsPlaceholders(rawValue)) {
+            if (hasPlaceholder) {
                 logger.debug("多级缓存未命中（包含占位符，将及时解析），版本" + l1Value.getVersion() + ": " + cacheKey);
             } else {
                 logger.debug("多级缓存未命中，返回L1原始值（版本" + l1Value.getVersion() + "): " + cacheKey);
