@@ -22,6 +22,8 @@ public class VariableValue {
     // 时间戳
     private volatile long lastModified;
     private volatile long lastAccessed;
+    // 首次修改时间
+    private volatile long firstModifiedAt;
     private final long createdAt;
     
     // 脏数据标记
@@ -46,6 +48,7 @@ public class VariableValue {
         long currentTime = System.currentTimeMillis();
         this.createdAt = currentTime;
         this.lastModified = currentTime;
+        this.firstModifiedAt = currentTime;
         this.lastAccessed = currentTime;
         this.isDirty = false; // 新创建的值认为与数据库同步
         updateMemoryUsage();
@@ -55,10 +58,18 @@ public class VariableValue {
      * 从数据库加载的构造函数
      */
     public VariableValue(String value, long lastModified) {
+        this(value, lastModified, lastModified);
+    }
+
+    /**
+     * 从数据库加载的构造函数（带首次修改时间）
+     */
+    public VariableValue(String value, long lastModified, long firstModifiedAt) {
         this.value = value;
         this.originalValue = value;
         this.createdAt = System.currentTimeMillis();
         this.lastModified = lastModified;
+        this.firstModifiedAt = firstModifiedAt;
         this.lastAccessed = System.currentTimeMillis();
         this.isDirty = false; // 从数据库加载的值认为已同步
         updateMemoryUsage();
@@ -181,6 +192,13 @@ public class VariableValue {
     public long getLastAccessed() {
         return lastAccessed;
     }
+
+    /**
+     * 获取首次修改时间
+     */
+    public long getFirstModifiedAt() {
+        return firstModifiedAt;
+    }
     
     /**
      * 获取创建时间
@@ -267,7 +285,7 @@ public class VariableValue {
      * 克隆对象（用于快照）
      */
     public VariableValue clone() {
-        VariableValue cloned = new VariableValue(this.value, this.lastModified);
+        VariableValue cloned = new VariableValue(this.value, this.lastModified, this.firstModifiedAt);
         cloned.originalValue = this.originalValue;
         cloned.isDirty = this.isDirty;
         cloned.accessCount.set(this.accessCount.get());

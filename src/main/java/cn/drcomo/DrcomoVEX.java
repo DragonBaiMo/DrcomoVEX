@@ -192,6 +192,7 @@ public class DrcomoVEX extends JavaPlugin {
         // 异步初始化变量管理器
         variablesManager.initialize().thenRun(() -> {
             logger.info("高性能变量管理器初始化完成！");
+            loadPersistedData();
         }).exceptionally(throwable -> {
             logger.error("变量管理器初始化失败！", throwable);
             return null;
@@ -199,6 +200,15 @@ public class DrcomoVEX extends JavaPlugin {
         
         serverVariablesManager.initialize();
         playerVariablesManager.initialize();
+    }
+
+    /**
+     * 从数据库加载持久化变量数据到内存
+     */
+    private void loadPersistedData() {
+        if (variablesManager != null) {
+            variablesManager.loadPersistedData();
+        }
     }
     
     /**

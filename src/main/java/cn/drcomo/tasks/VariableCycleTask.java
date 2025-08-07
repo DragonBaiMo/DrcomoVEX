@@ -157,11 +157,19 @@ public class VariableCycleTask {
         /** 执行具体重置 */
         private void performResets() {
             Set<String> keys = variablesManager.getAllVariableKeys();
+            long now = System.currentTimeMillis();
+            long threshold = getCycleDuration(cycleType);
             for (String key : keys) {
                 Variable var = variablesManager.getVariableDefinition(key);
-                if (var != null && cycleType.equalsIgnoreCase(var.getCycle())
-                        && resetSingleVariableSafe(var, key)) {
-                    resetList.add(key);
+                if (var != null && cycleType.equalsIgnoreCase(var.getCycle())) {
+                    Long first = variablesManager.getFirstModifiedAt(var.isGlobal(), key);
+                    if (first != null && now - first < threshold) {
+                        logger.debug("跳过重置(未达周期阈值): " + key);
+                        continue;
+                    }
+                    if (resetSingleVariableSafe(var, key)) {
+                        resetList.add(key);
+                    }
                 }
             }
         }
@@ -235,6 +243,17 @@ public class VariableCycleTask {
             }
         }
 
+        /** 获取一个周期的毫秒数 */
+        private long getCycleDuration(String type) {
+            switch (type.toLowerCase()) {
+                case "daily":   return 24L * 3600_000;
+                case "weekly":  return 7L * 24 * 3600_000;
+                case "monthly": return 30L * 24 * 3600_000;
+                case "yearly":  return 365L * 24 * 3600_000;
+                default:        return Long.MAX_VALUE;
+            }
+        }
+
         /** 线程睡眠工具 */
         private void sleepMillis(long ms) {
             try { Thread.sleep(ms); }
@@ -251,7 +270,7 @@ public class VariableCycleTask {
         for (String key : keys) {
             Variable var = variablesManager.getVariableDefinition(key);
             String expr = var == null ? null : var.getCycle();
-            if (expr != null && expr.contains(" ") && shouldResetCron(expr, key, now)) {
+            if (expr != null && expr.contains(" ") && shouldResetCron(expr, key, now, var)) {
                 if (resetSingleVariable(var, key)) {
                     updateLastResetTime(key, now.toInstant().toEpochMilli());
                     count++;
@@ -264,7 +283,7 @@ public class VariableCycleTask {
     }
 
     /** 判断Cron表达式变量是否应重置 */
-    private boolean shouldResetCron(String expr, String key, ZonedDateTime now) {
+    private boolean shouldResetCron(String expr, String key, ZonedDateTime now, Variable var) {
         try {
             Cron cron = cronParser.parse(expr);
             ExecutionTime et = ExecutionTime.forCron(cron);
@@ -272,7 +291,18 @@ public class VariableCycleTask {
             long last = synchronizedGetLong(dataConfig, "cycle.cron." + key + ".last-reset", 0L);
             ZonedDateTime lastTime = Instant.ofEpochMilli(last).atZone(now.getZone());
             Optional<ZonedDateTime> next = et.nextExecution(lastTime);
-            return next.isPresent() && !next.get().isAfter(now);
+            if (!(next.isPresent() && !next.get().isAfter(now))) {
+                return false;
+            }
+            Long first = variablesManager.getFirstModifiedAt(var.isGlobal(), key);
+            if (first != null) {
+                ZonedDateTime firstTime = Instant.ofEpochMilli(first).atZone(now.getZone());
+                Optional<ZonedDateTime> nextAfterFirst = et.nextExecution(firstTime);
+                if (nextAfterFirst.isPresent() && nextAfterFirst.get().isAfter(now)) {
+                    return false;
+                }
+            }
+            return true;
         } catch (Exception e) {
             logger.error("解析Cron表达式失败: " + expr + " (变量: " + key + ")", e);
             return false;
