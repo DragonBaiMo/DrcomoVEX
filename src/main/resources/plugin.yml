@@ -13,6 +13,7 @@ softdepend: [PlaceholderAPI, Vault, PlayerPoints]
 libraries:
   - com.zaxxer:HikariCP:6.2.1
   - com.github.ben-manes.caffeine:caffeine:3.1.8
+  - com.cronutils:cron-utils:9.2.1
 # 主指令
 commands:
   vex:

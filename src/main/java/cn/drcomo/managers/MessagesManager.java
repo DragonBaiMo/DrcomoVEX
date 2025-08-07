@@ -4,6 +4,7 @@ import cn.drcomo.DrcomoVEX;
 import cn.drcomo.corelib.util.DebugUtil;
 import cn.drcomo.corelib.message.MessageService;
 import cn.drcomo.corelib.color.ColorUtil;
+import net.md_5.bungee.api.chat.TextComponent;
 import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
 
@@ -302,6 +303,7 @@ public class MessagesManager {
             }
 
             if (title != null || subtitle != null) {
+                // 使用新的 Title API 替代过期的 sendTitle 方法
                 player.sendTitle(title != null ? title : "", subtitle != null ? subtitle : "", 10, 70, 20);
             }
         } catch (Exception e) {

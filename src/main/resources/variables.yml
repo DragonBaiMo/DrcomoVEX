@@ -197,8 +197,7 @@ variables:
     initial: ""
     limitations:
       persistable: false
-      max-cache-time: 300000  # 5分钟缓存
-  
+
   # 安全限制变量 - 限制表达式复杂度
   secure_calculation:
     name: "安全计算"
@@ -206,6 +205,3 @@ variables:
     type: "DOUBLE"
     initial: "${player_level} + ${player_exp}"
     limitations:
-      max-recursion-depth: 5
-      max-expression-length: 100
-      allow-circular-references: false
