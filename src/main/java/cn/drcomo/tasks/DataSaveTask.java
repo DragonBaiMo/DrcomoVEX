@@ -7,6 +7,10 @@ import org.bukkit.Bukkit;
 import org.bukkit.configuration.file.FileConfiguration;
 import org.bukkit.scheduler.BukkitTask;
 
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+
 /**
  * 数据保存任务
  * 
@@ -68,9 +72,23 @@ public class DataSaveTask {
             saveTask.cancel();
             logger.info("数据自动保存任务已停止");
         }
-        
-        // 最后保存一次
-        performSave();
+
+        CompletableFuture<Void> future = variablesManager.saveAllData();
+        try {
+            plugin.getAsyncTaskManager().submitAsync(() -> {
+                try {
+                    future.get(10, TimeUnit.SECONDS);
+                } catch (TimeoutException e) {
+                    logger.warn("关闭前数据保存超时，已忽略未完成的保存", e);
+                } catch (Exception e) {
+                    logger.error("关闭前数据保存失败", e);
+                }
+            }).get(10, TimeUnit.SECONDS);
+        } catch (TimeoutException e) {
+            logger.warn("等待保存任务完成超时，继续关闭插件", e);
+        } catch (Exception e) {
+            logger.error("关闭插件时等待保存任务异常", e);
+        }
     }
     
     /**
