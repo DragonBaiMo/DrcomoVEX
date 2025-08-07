@@ -2,6 +2,7 @@ package cn.drcomo.managers;
 
 import cn.drcomo.DrcomoVEX;
 import cn.drcomo.model.VariableResult;
+import cn.drcomo.model.structure.ScopeType;
 import cn.drcomo.model.structure.Variable;
 import cn.drcomo.database.HikariConnection;
 import cn.drcomo.corelib.util.DebugUtil;
@@ -9,6 +10,7 @@ import org.bukkit.OfflinePlayer;
 
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.Optional;
 
 /**
  * 玩家变量管理器
@@ -68,19 +70,10 @@ public class PlayerVariablesManager {
      * 设置玩家变量值
      */
     public CompletableFuture<VariableResult> setPlayerVariable(OfflinePlayer player, String key, String value) {
-        Variable variable = variablesManager.getVariableDefinition(key);
-        if (variable == null) {
-            return CompletableFuture.completedFuture(
-                    VariableResult.failure("变量不存在: " + key)
-            );
+        Optional<VariableResult> validation = variablesManager.validateScope(key, ScopeType.PLAYER);
+        if (validation.isPresent()) {
+            return CompletableFuture.completedFuture(validation.get());
         }
-        
-        if (!variable.isPlayerScoped()) {
-            return CompletableFuture.completedFuture(
-                    VariableResult.failure("变量不是玩家作用域: " + key)
-            );
-        }
-        
         return withTimeout(variablesManager.setVariable(player, key, value));
     }
     
@@ -89,23 +82,11 @@ public class PlayerVariablesManager {
      */
     public CompletableFuture<VariableResult> addPlayerVariable(OfflinePlayer player, String key, String addValue) {
         logger.debug("玩家变量管理器：开始添加变量 " + key + " 对玩家 " + player.getName() + "，值：" + addValue);
-        
-        Variable variable = variablesManager.getVariableDefinition(key);
-        if (variable == null) {
-            logger.debug("变量定义不存在: " + key);
-            return CompletableFuture.completedFuture(
-                    VariableResult.failure("变量不存在: " + key)
-            );
+        Optional<VariableResult> validation = variablesManager.validateScope(key, ScopeType.PLAYER);
+        if (validation.isPresent()) {
+            logger.debug("变量校验失败: " + validation.get().getErrorMessage());
+            return CompletableFuture.completedFuture(validation.get());
         }
-        
-        if (!variable.isPlayerScoped()) {
-            logger.debug("变量不是玩家作用域: " + key + ", 实际作用域: " + (variable.isPlayerScoped() ? "player" : "server"));
-            return CompletableFuture.completedFuture(
-                    VariableResult.failure("变量不是玩家作用域: " + key)
-            );
-        }
-        
-        logger.debug("变量校验通过，委托给 RefactoredVariablesManager");
         return withTimeout(variablesManager.addVariable(player, key, addValue));
     }
     
@@ -113,19 +94,10 @@ public class PlayerVariablesManager {
      * 移除玩家变量值
      */
     public CompletableFuture<VariableResult> removePlayerVariable(OfflinePlayer player, String key, String removeValue) {
-        Variable variable = variablesManager.getVariableDefinition(key);
-        if (variable == null) {
-            return CompletableFuture.completedFuture(
-                    VariableResult.failure("变量不存在: " + key)
-            );
+        Optional<VariableResult> validation = variablesManager.validateScope(key, ScopeType.PLAYER);
+        if (validation.isPresent()) {
+            return CompletableFuture.completedFuture(validation.get());
         }
-        
-        if (!variable.isPlayerScoped()) {
-            return CompletableFuture.completedFuture(
-                    VariableResult.failure("变量不是玩家作用域: " + key)
-            );
-        }
-        
         return withTimeout(variablesManager.removeVariable(player, key, removeValue));
     }
     
@@ -133,19 +105,10 @@ public class PlayerVariablesManager {
      * 重置玩家变量
      */
     public CompletableFuture<VariableResult> resetPlayerVariable(OfflinePlayer player, String key) {
-        Variable variable = variablesManager.getVariableDefinition(key);
-        if (variable == null) {
-            return CompletableFuture.completedFuture(
-                    VariableResult.failure("变量不存在: " + key)
-            );
+        Optional<VariableResult> validation = variablesManager.validateScope(key, ScopeType.PLAYER);
+        if (validation.isPresent()) {
+            return CompletableFuture.completedFuture(validation.get());
         }
-        
-        if (!variable.isPlayerScoped()) {
-            return CompletableFuture.completedFuture(
-                    VariableResult.failure("变量不是玩家作用域: " + key)
-            );
-        }
-        
         return withTimeout(variablesManager.resetVariable(player, key));
     }
     
