@@ -6,6 +6,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 DrcomoVEX 是一个基于直觉设计的 Minecraft 服务器变量管理系统，使用 Java 17 开发。它提供智能类型推断、动态表达式计算、周期性重置和全能指令操作功能。
 
+## Dependencies
+插件以 DrcomoCoreLib 为核心依赖，所有方法应优先调用其API： @DrcomoCoreLib\README.md 。
+
 ## 构建和开发命令
 
 ### Maven 构建

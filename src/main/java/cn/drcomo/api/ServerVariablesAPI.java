@@ -208,7 +208,7 @@ public class ServerVariablesAPI {
         }
 
         String parsedDomain = matcher.group(1);
-        String parsedKey = matcher.group(2).replace(" ", "_");
+        String parsedKey = matcher.group(2).replace(" ", "_").replace("[", "").replace("]", "");
         String logPlaceholder = "drcomovex_[" + parsedDomain + "]_" + parsedKey;
         logger.info("占位符 " + logPlaceholder + " 输入参数: " + rawArgs);
 

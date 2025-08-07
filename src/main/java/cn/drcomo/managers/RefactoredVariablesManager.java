@@ -14,6 +14,7 @@ import org.bukkit.Bukkit;
 import org.bukkit.OfflinePlayer;
 import org.bukkit.configuration.ConfigurationSection;
 import org.bukkit.configuration.file.FileConfiguration;
+import org.bukkit.configuration.file.YamlConfiguration;
 
 import java.io.File;
 import java.util.*;
@@ -128,10 +129,27 @@ public class RefactoredVariablesManager {
         logger.info("正在关闭变量管理系统...");
         return CompletableFuture.runAsync(() -> {
             try {
+                // 1. 首先关闭持久化管理器，确保所有数据写入完成
                 persistenceManager.shutdown();
+                logger.info("持久化管理器关闭完成");
+                
+                // 2. 持久化完成后，关闭数据库连接
+                if (database != null) {
+                    database.close();
+                    logger.info("数据库连接关闭完成");
+                }
+                
                 logger.info("变量管理系统关闭完成");
             } catch (Exception e) {
                 logger.error("关闭变量管理系统失败", e);
+                // 即使出现异常也要尝试关闭数据库
+                if (database != null) {
+                    try {
+                        database.close();
+                    } catch (Exception dbException) {
+                        logger.error("强制关闭数据库时发生异常", dbException);
+                    }
+                }
                 throw new RuntimeException("关闭变量管理系统失败", e);
             }
             
@@ -398,50 +416,6 @@ public class RefactoredVariablesManager {
                 .collect(Collectors.toSet());
     }
 
-    /**
-     * 获取系统统计信息
-     */
-    public SystemStats getSystemStats() {
-        VariableMemoryStorage.MemoryStats memStats = memoryStorage.getMemoryStats();
-        MultiLevelCacheManager.CacheStatistics cacheStats = cacheManager.getCacheStats();
-        BatchPersistenceManager.PersistenceStats perStats = persistenceManager.getPersistenceStats();
-        return new SystemStats(memStats, cacheStats, perStats);
-    }
-
-    // ======================== 系统统计信息类 ========================
-
-    public static class SystemStats {
-        private final VariableMemoryStorage.MemoryStats memoryStats;
-        private final MultiLevelCacheManager.CacheStatistics cacheStats;
-        private final BatchPersistenceManager.PersistenceStats persistenceStats;
-
-        public SystemStats(VariableMemoryStorage.MemoryStats memoryStats,
-                          MultiLevelCacheManager.CacheStatistics cacheStats,
-                          BatchPersistenceManager.PersistenceStats persistenceStats) {
-            this.memoryStats = memoryStats;
-            this.cacheStats = cacheStats;
-            this.persistenceStats = persistenceStats;
-        }
-
-        public VariableMemoryStorage.MemoryStats getMemoryStats() {
-            return memoryStats;
-        }
-
-        public MultiLevelCacheManager.CacheStatistics getCacheStats() {
-            return cacheStats;
-        }
-
-        public BatchPersistenceManager.PersistenceStats getPersistenceStats() {
-            return persistenceStats;
-        }
-
-        @Override
-        public String toString() {
-            return String.format("SystemStats{\n  内存: %s\n  缓存: %s\n  持久化: %s\n}",
-                    memoryStats, cacheStats, persistenceStats);
-        }
-    }
-
     // ======================== 私有辅助方法 ========================
 
     /** 获取玩家名，若为空则返回 "SERVER" */
@@ -691,23 +665,20 @@ public class RefactoredVariablesManager {
 
     /** 加载所有变量定义 */
     private void loadAllVariableDefinitions() {
-        loadVariableDefinitionsFromFile("variables");
-        File dir = new File(plugin.getDataFolder(), "variables");
-        if (dir.exists() && dir.isDirectory()) {
-            File[] files = dir.listFiles((d, n) -> n.endsWith(".yml"));
-            if (files != null) {
-                for (File f : files) {
-                    String name = f.getName();
-                    String cfg = "variables/" + name.substring(0, name.length() - 4);
-                    try {
-                        yamlUtil.loadConfig(cfg);
-                        loadVariableDefinitionsFromFile(cfg);
-                        logger.debug("已加载变量文件: " + cfg);
-                    } catch (Exception e) {
-                        logger.error("加载变量文件失败: " + cfg, e);
-                    }
+        // 使用 YamlUtil 递归加载 variables 目录下的所有配置文件
+        try {
+            Map<String, YamlConfiguration> variableConfigs = yamlUtil.loadAllConfigsInFolder("variables");
+            for (String configName : variableConfigs.keySet()) {
+                try {
+                    loadVariableDefinitionsFromFile(configName);
+                    logger.debug("已加载变量文件: " + configName);
+                } catch (Exception e) {
+                    logger.error("加载变量文件失败: " + configName, e);
                 }
             }
+            logger.info("变量目录扫描完成，共加载 " + variableConfigs.size() + " 个配置文件");
+        } catch (Exception e) {
+            logger.error("扫描变量目录失败", e);
         }
     }
 

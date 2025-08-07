@@ -93,129 +93,26 @@ public class MessagesManager {
     }
 
     /**
-     * 发送单条消息
-     */
-    public void sendMessage(CommandSender sender, String messageKey) {
-        sendMessage(sender, messageKey, null);
-    }
-
-    /**
      * 发送单条消息并替换占位符
      */
     public void sendMessage(CommandSender sender, String messageKey, Map<String, String> placeholders) {
-        messageService.send(sender, messageKey, placeholders);
-    }
-
-    /**
-     * 发送多条消息
-     */
-    public void sendMessageList(CommandSender sender, String messageKey) {
-        sendMessageList(sender, messageKey, null);
+        Player player = sender instanceof Player ? (Player) sender : null;
+        // 使用 parseWithDelimiter 并指定 { 和 } 作为占位符分界符
+        String parsedMessage = messageService.parseWithDelimiter(messageKey, player, placeholders, "{", "}");
+        if (parsedMessage != null && !parsedMessage.isEmpty()) {
+            sender.sendMessage(parsedMessage);
+        }
     }
 
     /**
      * 发送多条消息并替换占位符
      */
     public void sendMessageList(CommandSender sender, String messageKey, Map<String, String> placeholders) {
-        messageService.sendList(sender, messageKey, placeholders);
-    }
-    
-    /**
-     * 发送 ActionBar 消息
-     */
-    public void sendActionBar(Player player, String messageKey) {
-        sendActionBar(player, messageKey, null);
-    }
-
-    /**
-     * 发送 ActionBar 消息并替换占位符
-     */
-    public void sendActionBar(Player player, String messageKey, Map<String, String> placeholders) {
-        messageService.sendActionBar(player, messageKey, placeholders);
-    }
-
-    /**
-     * 发送 Title 消息
-     */
-    public void sendTitle(Player player, String titleKey, String subtitleKey) {
-        sendTitle(player, titleKey, subtitleKey, null);
-    }
-
-    /**
-     * 发送 Title 消息并替换占位符
-     */
-    public void sendTitle(Player player, String titleKey, String subtitleKey, Map<String, String> placeholders) {
-        messageService.sendTitle(player, titleKey, subtitleKey, placeholders);
-    }
-
-    /**
-     * 只解析消息不发送
-     */
-    public String parseMessage(Player player, String messageKey) {
-        return parseMessage(player, messageKey, null);
-    }
-
-    /**
-     * 只解析消息不发送并替换占位符
-     */
-    public String parseMessage(Player player, String messageKey, Map<String, String> placeholders) {
-        return messageService.parse(messageKey, player, placeholders);
-    }
-
-    /**
-     * 解析消息列表
-     */
-    public List<String> parseMessageList(Player player, String messageKey) {
-        return parseMessageList(player, messageKey, null);
-    }
-
-    /**
-     * 解析消息列表并替换占位符
-     */
-    public List<String> parseMessageList(Player player, String messageKey, Map<String, String> placeholders) {
-        return messageService.parseList(messageKey, player, placeholders);
-    }
-
-    /**
-     * 检查消息是否存在
-     */
-    public boolean hasMessage(String messageKey) {
-        String raw = messageService.getRaw(messageKey);
-        return raw != null && !raw.trim().isEmpty();
-    }
-
-    /**
-     * 向所有在线玩家广播消息
-     */
-    public void broadcast(String messageKey) {
-        broadcast(messageKey, null);
-    }
-
-    /**
-     * 向所有在线玩家广播消息并替换占位符
-     */
-    public void broadcast(String messageKey, Map<String, String> placeholders) {
-        messageService.broadcast(messageKey, placeholders, null);
-    }
-
-    /**
-     * 向有权限的玩家广播消息
-     */
-    public void broadcastToPermission(String permission, String messageKey) {
-        broadcastToPermission(permission, messageKey, null);
-    }
-
-    /**
-     * 向有权限的玩家广播消息并替换占位符
-     */
-    public void broadcastToPermission(String permission, String messageKey, Map<String, String> placeholders) {
-        messageService.broadcast(messageKey, placeholders, permission);
-    }
-
-    /**
-     * 获取 MessageService 实例
-     */
-    public MessageService getMessageService() {
-        return messageService;
+        // 首先获取原始的消息列表
+        List<String> templates = messageService.getList(messageKey);
+        if (templates != null && !templates.isEmpty()) {
+            // 然后调用 sendList 的重载方法，该方法接受一个模板列表并允许指定分界符
+            messageService.sendList(sender, templates, placeholders, "{", "}");
+        }
     }
 }

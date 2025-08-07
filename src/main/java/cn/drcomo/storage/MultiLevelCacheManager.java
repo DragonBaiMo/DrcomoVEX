@@ -154,50 +154,6 @@ public class MultiLevelCacheManager {
     }
     
     /**
-     * 注册变量依赖关系
-     */
-    public void registerVariableDependencies(OfflinePlayer player, String variableKey, String expression) {
-        if (expression == null || expression.isEmpty()) return;
-        
-        try {
-            String fullKey = buildCacheKey(player, variableKey);
-            Set<String> dependencies = extractDependencies(expression);
-            
-            if (!dependencies.isEmpty()) {
-                dependencyGraph.put(fullKey, dependencies);
-                logger.debug("注册变量依赖: " + fullKey + " -> " + dependencies);
-            }
-        } catch (Exception e) {
-            logger.error("注册变量依赖失败", e);
-        }
-    }
-    
-    /**
-     * 提取表达式中的变量依赖
-     */
-    private Set<String> extractDependencies(String expression) {
-        Set<String> dependencies = new HashSet<>();
-        
-        // 提取 ${variable} 形式的内部变量引用
-        Matcher variableMatcher = variablePattern.matcher(expression);
-        while (variableMatcher.find()) {
-            dependencies.add(variableMatcher.group(1));
-        }
-        
-        // 提取 %placeholder% 形式的占位符（这些可能也是变量）
-        Matcher placeholderMatcher = placeholderPattern.matcher(expression);
-        while (placeholderMatcher.find()) {
-            String placeholder = placeholderMatcher.group(1);
-            // 如果占位符看起来像我们的变量格式，也添加为依赖
-            if (placeholder.matches("^[a-zA-Z][a-zA-Z0-9_]*$")) {
-                dependencies.add(placeholder);
-            }
-        }
-        
-        return dependencies;
-    }
-    
-    /**
      * 精确清除L2缓存中与特定变量相关的项
      */
     private void invalidateL2CacheForVariable(OfflinePlayer player, String key) {
@@ -298,22 +254,6 @@ public class MultiLevelCacheManager {
     }
     
     /**
-     * 批量预热缓存
-     */
-    public void batchPreloadCache(OfflinePlayer player, Iterable<String> keys) {
-        int preloadCount = 0;
-        for (String key : keys) {
-            try {
-                // 这里可以实现更高效的批量预加载逻辑
-                preloadCount++;
-            } catch (Exception e) {
-                logger.error("批量预热缓存失败: " + key, e);
-            }
-        }
-        logger.debug("批量预热缓存完成，数量: " + preloadCount);
-    }
-    
-    /**
      * 从L1缓存获取数据
      */
     private VariableValue getFromL1Cache(OfflinePlayer player, String key, Variable variable) {
@@ -369,35 +309,6 @@ public class MultiLevelCacheManager {
     }
     
     /**
-     * 获取缓存统计信息
-     */
-    public CacheStatistics getCacheStats() {
-        try {
-            long total = totalRequests.get();
-            long l1HitCount = l1Hits.get();
-            long l1MissCount = l1Misses.get();
-            
-            CacheStats l2Stats = l2ExpressionCache.stats();
-            CacheStats l3Stats = l3ResultCache.stats();
-            
-            double overallHitRate = total > 0 ? 
-                ((double) l1HitCount + l2Stats.hitCount() + l3Stats.hitCount()) / total * 100 : 0.0;
-            
-            return new CacheStatistics(
-                total, 
-                l1HitCount, l1MissCount,
-                l2Stats.hitCount(), l2Stats.missCount(), l2ExpressionCache.estimatedSize(),
-                l3Stats.hitCount(), l3Stats.missCount(), l3ResultCache.estimatedSize(),
-                overallHitRate
-            );
-            
-        } catch (Exception e) {
-            logger.error("获取缓存统计失败", e);
-            return new CacheStatistics(0, 0, 0, 0, 0, 0, 0, 0, 0, 0.0);
-        }
-    }
-    
-    /**
      * 清空所有缓存
      */
     public void clearAllCaches() {
@@ -434,13 +345,6 @@ public class MultiLevelCacheManager {
         } catch (Exception e) {
             logger.error("清空缓存失败", e);
         }
-    }
-    
-    /**
-     * 获取变量依赖关系统计
-     */
-    public int getDependencyCount() {
-        return dependencyGraph.size();
     }
     
     /**
@@ -544,71 +448,6 @@ public class MultiLevelCacheManager {
         public String toString() {
             return String.format("CacheResult{hit=%b, level=%s, reason='%s'}", 
                     isHit, level, reason);
-        }
-    }
-    
-    /**
-     * 缓存统计信息类
-     */
-    public static class CacheStatistics {
-        private final long totalRequests;
-        private final long l1Hits, l1Misses;
-        private final long l2Hits, l2Misses, l2Size;
-        private final long l3Hits, l3Misses, l3Size;
-        private final double overallHitRate;
-        
-        public CacheStatistics(long totalRequests, 
-                              long l1Hits, long l1Misses,
-                              long l2Hits, long l2Misses, long l2Size,
-                              long l3Hits, long l3Misses, long l3Size,
-                              double overallHitRate) {
-            this.totalRequests = totalRequests;
-            this.l1Hits = l1Hits;
-            this.l1Misses = l1Misses;
-            this.l2Hits = l2Hits;
-            this.l2Misses = l2Misses;
-            this.l2Size = l2Size;
-            this.l3Hits = l3Hits;
-            this.l3Misses = l3Misses;
-            this.l3Size = l3Size;
-            this.overallHitRate = overallHitRate;
-        }
-        
-        // Getters
-        public long getTotalRequests() { return totalRequests; }
-        public long getL1Hits() { return l1Hits; }
-        public long getL1Misses() { return l1Misses; }
-        public long getL2Hits() { return l2Hits; }
-        public long getL2Misses() { return l2Misses; }
-        public long getL2Size() { return l2Size; }
-        public long getL3Hits() { return l3Hits; }
-        public long getL3Misses() { return l3Misses; }
-        public long getL3Size() { return l3Size; }
-        public double getOverallHitRate() { return overallHitRate; }
-        
-        public double getL1HitRate() {
-            long total = l1Hits + l1Misses;
-            return total > 0 ? (double) l1Hits / total * 100 : 0.0;
-        }
-        
-        public double getL2HitRate() {
-            long total = l2Hits + l2Misses;
-            return total > 0 ? (double) l2Hits / total * 100 : 0.0;
-        }
-        
-        public double getL3HitRate() {
-            long total = l3Hits + l3Misses;
-            return total > 0 ? (double) l3Hits / total * 100 : 0.0;
-        }
-        
-        @Override
-        public String toString() {
-            return String.format("CacheStats{total=%d, overall=%.1f%%, " +
-                               "L1=%.1f%%(%d/%d), L2=%.1f%%(%d/%d)[%d], L3=%.1f%%(%d/%d)[%d]}",
-                    totalRequests, overallHitRate,
-                    getL1HitRate(), l1Hits, l1Hits + l1Misses,
-                    getL2HitRate(), l2Hits, l2Hits + l2Misses, l2Size,
-                    getL3HitRate(), l3Hits, l3Hits + l3Misses, l3Size);
         }
     }
     

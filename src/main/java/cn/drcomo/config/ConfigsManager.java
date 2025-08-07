@@ -23,7 +23,6 @@ public class ConfigsManager {
     
     private MainConfigManager mainConfigManager;
     private DataConfigManager dataConfigManager;
-    private PlayerConfigsManager playerConfigsManager;
     
     public ConfigsManager(DrcomoVEX plugin, DebugUtil logger, YamlUtil yamlUtil) {
         this.plugin = plugin;
@@ -43,12 +42,10 @@ public class ConfigsManager {
         // 初始化各个配置管理器
         mainConfigManager = new MainConfigManager(plugin, logger, yamlUtil);
         dataConfigManager = new DataConfigManager(plugin, logger, yamlUtil);
-        playerConfigsManager = new PlayerConfigsManager(plugin, logger, yamlUtil);
         
         // 初始化配置
         mainConfigManager.initialize();
         dataConfigManager.initialize();
-        playerConfigsManager.initialize();
         
         logger.info("配置管理系统初始化完成！");
     }
@@ -61,13 +58,12 @@ public class ConfigsManager {
         
         mainConfigManager.reload();
         dataConfigManager.reload();
-        playerConfigsManager.reload();
         
         logger.info("所有配置已重载完成！");
     }
     
     /**
-     * 创建需要的目录
+     * 创建需要的目录并初始化默认文件
      */
     private void createDirectories() {
         // 主目录
@@ -76,16 +72,13 @@ public class ConfigsManager {
             dataFolder.mkdirs();
         }
         
-        // 变量配置目录
+        // 变量配置目录 - 动态判断是否需要拷贝默认文件
         File variablesFolder = new File(dataFolder, "variables");
         if (!variablesFolder.exists()) {
-            variablesFolder.mkdirs();
-        }
-        
-        // 玩家数据目录
-        File playersFolder = new File(dataFolder, "players");
-        if (!playersFolder.exists()) {
-            playersFolder.mkdirs();
+            logger.info("首次运行，正在初始化变量配置目录...");
+            // 从 JAR 包拷贝整个 variables 目录的内容, ensureFolderAndCopyDefaults 会自动创建目录
+            yamlUtil.ensureFolderAndCopyDefaults("variables", "variables");
+            logger.info("默认变量配置文件已拷贝完成！");
         }
     }
     
@@ -96,10 +89,6 @@ public class ConfigsManager {
     
     public DataConfigManager getDataConfigManager() {
         return dataConfigManager;
-    }
-    
-    public PlayerConfigsManager getPlayerConfigsManager() {
-        return playerConfigsManager;
     }
     
     // 快捷访问方法
