@@ -13,6 +13,7 @@ import org.bukkit.command.CommandExecutor;
 import org.bukkit.command.CommandSender;
 import org.bukkit.command.TabCompleter;
 import org.bukkit.entity.Player;
+import org.bukkit.util.StringUtil;
 
 import java.util.*;
 import java.util.concurrent.CompletionStage;
@@ -39,6 +40,10 @@ public class MainCommand implements CommandExecutor, TabCompleter {
     private static final long TIMEOUT_SECONDS = 5L;
     /** 空参数常量，减少重复 new HashMap<>() */
     private static final Map<String, String> EMPTY_PARAMS = Collections.emptyMap();
+    /** 根子指令列表 */
+    private static final List<String> ROOT_SUBS = List.of("player", "global", "reload", "help");
+    /** 变量操作列表 */
+    private static final List<String> VAR_OPS = List.of("get", "set", "add", "remove", "reset");
 
     // 插件核心引用
     private final DrcomoVEX plugin;
@@ -99,16 +104,12 @@ public class MainCommand implements CommandExecutor, TabCompleter {
     @Override
     public List<String> onTabComplete(CommandSender sender, Command command, String alias, String[] args) {
         if (args.length == 1) {
-            return Arrays.asList("player", "global", "reload", "help").stream()
-                    .filter(cmd -> cmd.startsWith(args[0].toLowerCase()))
-                    .collect(Collectors.toList());
+            return StringUtil.copyPartialMatches(args[0], ROOT_SUBS, new ArrayList<>());
         }
         if (args.length == 2) {
             String scope = args[0].toLowerCase();
             if ("player".equals(scope) || "global".equals(scope)) {
-                return Arrays.asList("get", "set", "add", "remove", "reset").stream()
-                        .filter(cmd -> cmd.startsWith(args[1].toLowerCase()))
-                        .collect(Collectors.toList());
+                return StringUtil.copyPartialMatches(args[1], VAR_OPS, new ArrayList<>());
             }
             return Collections.emptyList();
         }
