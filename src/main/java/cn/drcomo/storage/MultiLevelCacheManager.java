@@ -10,6 +10,7 @@ import org.bukkit.OfflinePlayer;
 import java.time.Duration;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.Map;
 import java.util.Set;
 import java.util.HashSet;
 import java.util.regex.Pattern;
@@ -39,6 +40,9 @@ public class MultiLevelCacheManager {
     
     // 变量依赖关系追踪
     private final ConcurrentHashMap<String, Set<String>> dependencyGraph = new ConcurrentHashMap<>();
+
+    // 反向依赖映射：变量 -> 依赖它的缓存键集合
+    private final Map<String, Set<String>> reverseDependencyMap = new ConcurrentHashMap<>();
     
     // 表达式模式匹配器
     private final Pattern variablePattern = Pattern.compile("\\$\\{([^}]+)\\}");
@@ -169,35 +173,7 @@ public class MultiLevelCacheManager {
             return false;
         });
     }
-    
-    /**
-     * 递归清除依赖变量的缓存
-     */
-    private void invalidateDependentCaches(OfflinePlayer player, String key) {
-        // 寻找所有依赖此变量的其他变量
-        String targetKey = key;
-        
-        dependencyGraph.entrySet().removeIf(entry -> {
-            if (entry.getValue().contains(targetKey)) {
-                String dependentCacheKey = entry.getKey();
-                
-                // 清除依赖变量的L3缓存
-                l3ResultCache.invalidate(dependentCacheKey);
-                
-                // 解析出依赖变量的信息进行递归清理
-                String[] keyParts = dependentCacheKey.split(":", 2);
-                if (keyParts.length == 2) {
-                    String dependentKey = keyParts[1];
-                    invalidateL2CacheForVariable(player, dependentKey);
-                }
-                
-                logger.debug("清除依赖变量缓存: " + dependentCacheKey);
-                return true; // 移除已处理的依赖关系
-            }
-            return false;
-        });
-    }
-    
+
     /**
      * 缓存最终结果到L3缓存
      */
@@ -206,12 +182,106 @@ public class MultiLevelCacheManager {
             if (originalValue != null && result != null && !containsPlaceholders(originalValue)) {
                 String cacheKey = buildCacheKey(player, key);
                 l3ResultCache.put(cacheKey, new CacheEntry(originalValue, result));
+                // 登记依赖关系
+                registerDependencies(cacheKey, extractDependencies(originalValue));
                 logger.debug("L3缓存结果: " + cacheKey);
             } else if (containsPlaceholders(originalValue)) {
                 logger.debug("跳过L3缓存（包含占位符，及时解析）: " + originalValue);
             }
         } catch (Exception e) {
             logger.error("缓存结果失败", e);
+        }
+    }
+
+    /**
+     * 登记变量依赖关系
+     */
+    private void registerDependencies(String cacheKey, Set<String> dependencies) {
+        // 如果没有依赖，移除旧记录
+        if (dependencies == null || dependencies.isEmpty()) {
+            Set<String> oldDeps = dependencyGraph.remove(cacheKey);
+            if (oldDeps != null) {
+                for (String dep : oldDeps) {
+                    reverseDependencyMap.computeIfPresent(dep, (k, v) -> {
+                        v.remove(cacheKey);
+                        return v.isEmpty() ? null : v;
+                    });
+                }
+            }
+            return;
+        }
+
+        // 移除旧依赖并更新反向映射
+        Set<String> oldDeps = dependencyGraph.put(cacheKey, dependencies);
+        if (oldDeps != null) {
+            for (String dep : oldDeps) {
+                reverseDependencyMap.computeIfPresent(dep, (k, v) -> {
+                    v.remove(cacheKey);
+                    return v.isEmpty() ? null : v;
+                });
+            }
+        }
+
+        // 记录新依赖
+        for (String dep : dependencies) {
+            reverseDependencyMap.compute(dep, (k, v) -> {
+                if (v == null) {
+                    v = ConcurrentHashMap.newKeySet();
+                }
+                v.add(cacheKey);
+                return v;
+            });
+        }
+    }
+
+    /**
+     * 从表达式中提取变量依赖
+     */
+    private Set<String> extractDependencies(String value) {
+        Set<String> dependencies = new HashSet<>();
+        if (value == null) {
+            return dependencies;
+        }
+        Matcher matcher = variablePattern.matcher(value);
+        while (matcher.find()) {
+            dependencies.add(matcher.group(1));
+        }
+        return dependencies;
+    }
+
+    /**
+     * 递归清除依赖变量的缓存
+     */
+    private void invalidateDependentCaches(OfflinePlayer player, String key) {
+        Set<String> dependentCacheKeys = reverseDependencyMap.remove(key);
+        if (dependentCacheKeys == null || dependentCacheKeys.isEmpty()) {
+            return;
+        }
+
+        for (String dependentCacheKey : dependentCacheKeys) {
+            // 清除依赖变量的L3缓存
+            l3ResultCache.invalidate(dependentCacheKey);
+
+            // 同步更新映射
+            Set<String> deps = dependencyGraph.remove(dependentCacheKey);
+            if (deps != null) {
+                for (String dep : deps) {
+                    reverseDependencyMap.computeIfPresent(dep, (k, v) -> {
+                        v.remove(dependentCacheKey);
+                        return v.isEmpty() ? null : v;
+                    });
+                }
+            }
+
+            // 解析出依赖变量的信息进行递归清理
+            String[] keyParts = dependentCacheKey.split(":", 2);
+            if (keyParts.length == 2) {
+                String dependentKey = keyParts[1];
+                invalidateL2CacheForVariable(player, dependentKey);
+                invalidateDependentCaches(player, dependentKey);
+            }
+
+            logger.debug("清除依赖变量缓存: " + dependentCacheKey);
         }
     }
     
@@ -224,10 +294,21 @@ public class MultiLevelCacheManager {
             
             // 清除L3缓存
             l3ResultCache.invalidate(cacheKey);
-            
+
             // 精确清除相关的L2表达式缓存
             invalidateL2CacheForVariable(player, key);
-            
+
+            // 移除自身依赖记录
+            Set<String> deps = dependencyGraph.remove(cacheKey);
+            if (deps != null) {
+                for (String dep : deps) {
+                    reverseDependencyMap.computeIfPresent(dep, (k, v) -> {
+                        v.remove(cacheKey);
+                        return v.isEmpty() ? null : v;
+                    });
+                }
+            }
+
             // 递归清除依赖此变量的其他变量缓存
             invalidateDependentCaches(player, key);
             
@@ -329,10 +410,12 @@ public class MultiLevelCacheManager {
                 l3ResultCache.invalidateAll();
                 logger.debug("L3结果缓存已清空");
             }
-            
-            // 清空依赖关系图
+
+            // 清空依赖关系图及反向映射
             dependencyGraph.clear();
+            reverseDependencyMap.clear();
             logger.debug("变量依赖关系图已清空");
+            logger.debug("变量反向依赖映射已清空");
             
             logger.info("清空所有多级缓存完成（含L1/L2/L3缓存和占位符优化）");
         } catch (IllegalStateException e) {
