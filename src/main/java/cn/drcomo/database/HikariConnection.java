@@ -373,33 +373,40 @@ public class HikariConnection {
      */
     public void close() {
         logger.info("正在关闭数据库连接...");
-        try {
-            if (sqliteDB != null) {
-                sqliteDB.disconnect();
-                logger.info("SQLite 数据库连接已关闭");
-            }
+        
+        // 异步关闭避免阻塞主线程
+        CompletableFuture.runAsync(() -> {
+            try {
+                if (sqliteDB != null) {
+                    sqliteDB.disconnect();
+                    logger.info("SQLite 数据库连接已关闭");
+                }
 
-            if (dataSource != null && !dataSource.isClosed()) {
-                dataSource.close();
-                logger.info("MySQL 连接池已关闭");
-            }
+                if (dataSource != null && !dataSource.isClosed()) {
+                    dataSource.close();
+                    logger.info("MySQL 连接池已关闭");
+                }
 
-            // 注销当前插件 ClassLoader 注册的 JDBC 驱动，防止热重载导致的 ZipFile closed
-            ClassLoader cl = this.getClass().getClassLoader();
-            Enumeration<Driver> drivers = DriverManager.getDrivers();
-            while (drivers.hasMoreElements()) {
-                Driver driver = drivers.nextElement();
-                if (driver.getClass().getClassLoader() == cl) {
-                    try {
-                        DriverManager.deregisterDriver(driver);
-                        logger.debug("已注销 JDBC 驱动: " + driver);
-                    } catch (SQLException e) {
-                        logger.error("注销 JDBC 驱动失败: " + driver, e);
+                // 注销当前插件 ClassLoader 注册的 JDBC 驱动，防止热重载导致的 ZipFile closed
+                ClassLoader cl = this.getClass().getClassLoader();
+                Enumeration<Driver> drivers = DriverManager.getDrivers();
+                while (drivers.hasMoreElements()) {
+                    Driver driver = drivers.nextElement();
+                    if (driver.getClass().getClassLoader() == cl) {
+                        try {
+                            DriverManager.deregisterDriver(driver);
+                            logger.debug("已注销 JDBC 驱动: " + driver);
+                        } catch (SQLException e) {
+                            logger.error("注销 JDBC 驱动失败: " + driver, e);
+                        }
                     }
                 }
+            } catch (Exception e) {
+                logger.error("关闭数据库连接时发生异常", e);
             }
-        } catch (Exception e) {
-            logger.error("关闭数据库连接时发生异常", e);
-        }
+        }).exceptionally(throwable -> {
+            logger.error("异步关闭数据库连接失败", throwable);
+            return null;
+        });
     }
 }

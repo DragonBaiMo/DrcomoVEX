@@ -275,9 +275,25 @@ public class MultiLevelCacheManager {
      */
     public void clearAllCaches() {
         try {
-            l2ExpressionCache.invalidateAll();
-            l3ResultCache.invalidateAll();
+            // 检查缓存对象是否还可用
+            if (l2ExpressionCache != null) {
+                l2ExpressionCache.invalidateAll();
+                logger.debug("L2表达式缓存已清空");
+            }
+            
+            if (l3ResultCache != null) {
+                l3ResultCache.invalidateAll();
+                logger.debug("L3结果缓存已清空");
+            }
+            
             logger.info("清空所有多级缓存完成");
+        } catch (IllegalStateException e) {
+            // 插件关闭时可能发生的类加载器关闭异常
+            if (e.getMessage() != null && e.getMessage().contains("zip file closed")) {
+                logger.debug("插件正在关闭，跳过缓存清理操作");
+            } else {
+                logger.error("清空缓存失败: " + e.getMessage());
+            }
         } catch (Exception e) {
             logger.error("清空缓存失败", e);
         }

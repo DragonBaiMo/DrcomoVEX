@@ -129,11 +129,17 @@ public class RefactoredVariablesManager {
         return CompletableFuture.runAsync(() -> {
             try {
                 persistenceManager.shutdown();
-                cacheManager.clearAllCaches();
                 logger.info("变量管理系统关闭完成");
             } catch (Exception e) {
                 logger.error("关闭变量管理系统失败", e);
                 throw new RuntimeException("关闭变量管理系统失败", e);
+            }
+            
+            // 缓存清理放在单独的try块中，避免影响主要关闭流程
+            try {
+                cacheManager.clearAllCaches();
+            } catch (Exception e) {
+                logger.debug("缓存清理跳过: " + e.getMessage());
             }
         }, asyncTaskManager.getExecutor());
     }
@@ -144,8 +150,14 @@ public class RefactoredVariablesManager {
     public CompletableFuture<Void> reload() {
         logger.info("正在重载变量定义...");
         return CompletableFuture.runAsync(() -> {
+            // 先尝试清空缓存，但不让异常影响主要重载流程
             try {
                 cacheManager.clearAllCaches();
+            } catch (Exception e) {
+                logger.debug("缓存清理跳过: " + e.getMessage());
+            }
+            
+            try {
                 variableRegistry.clear();
                 loadAllVariableDefinitions();
                 validateVariableDefinitions();
@@ -165,11 +177,17 @@ public class RefactoredVariablesManager {
         return CompletableFuture.runAsync(() -> {
             try {
                 persistenceManager.flushAllDirtyData().join();
-                cacheManager.clearAllCaches();
                 logger.info("所有变量数据保存完成！");
             } catch (Exception e) {
                 logger.error("保存变量数据失败！", e);
                 throw new RuntimeException("保存变量数据失败", e);
+            }
+            
+            // 缓存清理放在单独的try块中，避免影响主要保存流程
+            try {
+                cacheManager.clearAllCaches();
+            } catch (Exception e) {
+                logger.debug("缓存清理跳过: " + e.getMessage());
             }
         }, asyncTaskManager.getExecutor());
     }
