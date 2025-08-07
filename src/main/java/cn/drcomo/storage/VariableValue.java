@@ -27,6 +27,9 @@ public class VariableValue {
     // 脏数据标记
     private volatile boolean isDirty;
     
+    // 版本号控制（用于缓存验证）
+    private final AtomicLong version = new AtomicLong(1);
+    
     // 访问统计
     private final AtomicInteger accessCount = new AtomicInteger(0);
     private final AtomicLong totalAccessTime = new AtomicLong(0);
@@ -93,6 +96,8 @@ public class VariableValue {
         if (!this.isDirty) {
             this.isDirty = true;
             this.lastModified = System.currentTimeMillis();
+            // 增加版本号
+            this.version.incrementAndGet();
         }
     }
     
@@ -102,6 +107,28 @@ public class VariableValue {
     public void clearDirty() {
         this.isDirty = false;
         this.originalValue = this.value;
+    }
+    
+    /**
+     * 获取当前版本号
+     */
+    public long getVersion() {
+        return version.get();
+    }
+    
+    /**
+     * 检查版本号是否匹配（用于缓存验证）
+     */
+    public boolean isVersionValid(long expectedVersion) {
+        return version.get() == expectedVersion;
+    }
+    
+    /**
+     * 强制递增版本号（用于外部触发的变更）
+     */
+    public long incrementVersion() {
+        this.lastModified = System.currentTimeMillis();
+        return version.incrementAndGet();
     }
     
     /**
@@ -244,12 +271,13 @@ public class VariableValue {
         cloned.originalValue = this.originalValue;
         cloned.isDirty = this.isDirty;
         cloned.accessCount.set(this.accessCount.get());
+        cloned.version.set(this.version.get());
         return cloned;
     }
     
     @Override
     public String toString() {
-        return String.format("VariableValue{value='%s', isDirty=%b, accessCount=%d, lifecycle=%s}", 
-                value, isDirty, accessCount.get(), getLifecycleStage());
+        return String.format("VariableValue{value='%s', version=%d, isDirty=%b, accessCount=%d, lifecycle=%s}", 
+                value, version.get(), isDirty, accessCount.get(), getLifecycleStage());
     }
 }

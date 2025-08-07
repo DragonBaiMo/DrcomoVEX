@@ -91,39 +91,8 @@ public class DataConfigManager {
     public FileConfiguration getConfig() {
         return yamlUtil.getConfig(CONFIG_FILE);
     }
-    
-    /**
-     * 增加启动次数
-     */
-    public void incrementStartupCount() {
-        int currentCount = yamlUtil.getInt(CONFIG_FILE, "statistics.total-startups", 0);
-        yamlUtil.setValue(CONFIG_FILE, "statistics.total-startups", currentCount + 1);
-        yamlUtil.setValue(CONFIG_FILE, "last-startup", System.currentTimeMillis());
-    }
-    
-    /**
-     * 增加玩家数量
-     */
-    public void incrementPlayerCount() {
-        int currentCount = yamlUtil.getInt(CONFIG_FILE, "statistics.total-players", 0);
-        yamlUtil.setValue(CONFIG_FILE, "statistics.total-players", currentCount + 1);
-    }
-    
-    /**
-     * 增加变量创建数量
-     */
-    public void incrementVariableCount() {
-        int currentCount = yamlUtil.getInt(CONFIG_FILE, "statistics.total-variables-created", 0);
-        yamlUtil.setValue(CONFIG_FILE, "statistics.total-variables-created", currentCount + 1);
-    }
-    
-    /**
-     * 增加操作次数
-     */
-    public void incrementOperationCount() {
-        long currentCount = yamlUtil.getLong(CONFIG_FILE, "statistics.total-operations", 0L);
-        yamlUtil.setValue(CONFIG_FILE, "statistics.total-operations", currentCount + 1);
-    }
+
+
     
     /**
      * 更新周期重置时间
@@ -131,24 +100,8 @@ public class DataConfigManager {
     public void updateCycleResetTime(String cycleType, long timestamp) {
         yamlUtil.setValue(CONFIG_FILE, "cycle.last-" + cycleType.toLowerCase() + "-reset", timestamp);
     }
-    
-    /**
-     * 更新性能统计
-     */
-    public void updatePerformanceStats(double averageQueryTime, int cacheHits, int cacheMisses) {
-        yamlUtil.setValue(CONFIG_FILE, "performance.average-query-time", averageQueryTime);
-        yamlUtil.setValue(CONFIG_FILE, "performance.cache-hit-count", cacheHits);
-        yamlUtil.setValue(CONFIG_FILE, "performance.cache-miss-count", cacheMisses);
-    }
-    
-    /**
-     * 更新更新信息
-     */
-    public void updateVersionInfo(String latestVersion, boolean updateAvailable) {
-        yamlUtil.setValue(CONFIG_FILE, "update.last-check", System.currentTimeMillis());
-        yamlUtil.setValue(CONFIG_FILE, "update.latest-version", latestVersion);
-        yamlUtil.setValue(CONFIG_FILE, "update.update-available", updateAvailable);
-    }
+
+
     
     // 快捷访问方法
     public String getString(String path, String def) {

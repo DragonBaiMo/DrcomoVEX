@@ -480,6 +480,40 @@ public class VariableMemoryStorage {
     }
     
     /**
+     * 清空所有缓存数据（配置重载时使用）
+     */
+    public void clearAllCaches() {
+        memoryLock.writeLock().lock();
+        try {
+            int playerCount = playerVariables.size();
+            int playerVarCount = playerVariables.values().stream()
+                    .mapToInt(map -> map.size()).sum();
+            int serverVarCount = serverVariables.size();
+            int dirtyCount = dirtyTracker.size();
+            
+            // 清空所有数据
+            playerVariables.clear();
+            serverVariables.clear();
+            dirtyTracker.clear();
+            memoryUsage.set(0);
+            
+            // 重置统计信息
+            totalOperations.set(0);
+            cacheHits.set(0);
+            cacheMisses.set(0);
+            
+            logger.info("清空L1内存缓存完成: " + 
+                       playerCount + "个玩家, " +
+                       playerVarCount + "个玩家变量, " + 
+                       serverVarCount + "个服务器变量, " +
+                       dirtyCount + "个脏数据标记");
+                       
+        } finally {
+            memoryLock.writeLock().unlock();
+        }
+    }
+    
+    /**
      * 内存统计信息类
      */
     public static class MemoryStats {

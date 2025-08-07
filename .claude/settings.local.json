@@ -9,7 +9,10 @@
       "Bash(do echo \"Processing $file\")",
       "Bash(done)",
       "Bash(rg:*)",
-      "Bash(cat:*)"
+      "Bash(cat:*)",
+      "Bash(move:*)",
+      "Bash(mv:*)",
+      "Bash(wc:*)"
     ],
     "deny": []
   }

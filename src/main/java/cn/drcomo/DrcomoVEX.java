@@ -41,8 +41,7 @@ public class DrcomoVEX extends JavaPlugin {
     private ServerVariablesManager serverVariablesManager;
     private PlayerVariablesManager playerVariablesManager;
     private MessagesManager messagesManager;
-    private UpdateCheckerManager updateCheckerManager;
-    
+
     // 数据库连接
     private HikariConnection database;
     
@@ -77,10 +76,7 @@ public class DrcomoVEX extends JavaPlugin {
         
         // 8. 注册API接口
         registerAPI();
-        
-        // 9. 检查更新
-        checkForUpdates();
-        
+
         logger.info("DrcomoVEX 变量扩展系统已成功启动！");
         logger.info("版本: 1.0.0 (代号: 直觉)");
         logger.info("感谢使用 DrcomoVEX - 让变量管理变得直观而强大！");
@@ -189,11 +185,6 @@ public class DrcomoVEX extends JavaPlugin {
                 this, logger, variablesManager, database
         );
         
-        // 更新检查管理器
-        updateCheckerManager = new UpdateCheckerManager(
-                this, logger, asyncTaskManager
-        );
-        
         // 初始化所有管理器
         messagesManager.initialize();
         
@@ -207,7 +198,6 @@ public class DrcomoVEX extends JavaPlugin {
         
         serverVariablesManager.initialize();
         playerVariablesManager.initialize();
-        updateCheckerManager.initialize();
     }
     
     /**
@@ -258,15 +248,6 @@ public class DrcomoVEX extends JavaPlugin {
         
         // 注册 PlaceholderAPI 扩展（PlaceholderAPIUtil 已自行处理 PAPI 是否可用）
         api.registerPlaceholders(placeholderUtil);
-    }
-    
-    /**
-     * 检查更新
-     */
-    private void checkForUpdates() {
-        if (configsManager.getMainConfig().getBoolean("settings.check-updates", true)) {
-            updateCheckerManager.checkForUpdates();
-        }
     }
     
     // Getter方法
