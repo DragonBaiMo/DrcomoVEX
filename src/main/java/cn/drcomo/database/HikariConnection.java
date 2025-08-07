@@ -4,6 +4,7 @@ import cn.drcomo.DrcomoVEX;
 import cn.drcomo.config.ConfigsManager;
 import cn.drcomo.corelib.util.DebugUtil;
 import cn.drcomo.corelib.database.SQLiteDB;
+import cn.drcomo.corelib.async.AsyncTaskManager;
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 import org.bukkit.configuration.file.FileConfiguration;
@@ -38,6 +39,8 @@ public class HikariConnection {
     private final DrcomoVEX plugin;
     private final DebugUtil logger;
     private final ConfigsManager configsManager;
+    // 异步任务管理器，用于统一线程池
+    private final AsyncTaskManager asyncTaskManager;
     
     private HikariDataSource dataSource;
     private SQLiteDB sqliteDB;
@@ -47,10 +50,20 @@ public class HikariConnection {
     // 初始化脚本列表，仅包含 schema.sql
     private static final List<String> INIT_SCRIPTS = Collections.singletonList("schema.sql");
     
-    public HikariConnection(DrcomoVEX plugin, DebugUtil logger, ConfigsManager configsManager) {
+    /**
+     * 构造数据库连接管理器
+     *
+     * @param plugin            插件实例
+     * @param logger            日志工具
+     * @param configsManager    配置管理器
+     * @param asyncTaskManager  异步任务管理器
+     */
+    public HikariConnection(DrcomoVEX plugin, DebugUtil logger, ConfigsManager configsManager,
+                            AsyncTaskManager asyncTaskManager) {
         this.plugin = plugin;
         this.logger = logger;
         this.configsManager = configsManager;
+        this.asyncTaskManager = asyncTaskManager;
     }
     
     /**
@@ -234,7 +247,7 @@ public class HikariConnection {
             return sqliteDB.queryOneAsync(sql, rs -> rs.getString(1), params);
         }
         
-        return CompletableFuture.supplyAsync(() -> {
+        return asyncTaskManager.supplyAsync(() -> {
             try (Connection conn = getConnection();
                  PreparedStatement stmt = conn.prepareStatement(sql)) {
                 
@@ -265,7 +278,7 @@ public class HikariConnection {
             return sqliteDB.executeUpdateAsync(sql, params);
         }
         
-        return CompletableFuture.supplyAsync(() -> {
+        return asyncTaskManager.supplyAsync(() -> {
             try (Connection conn = getConnection();
                  PreparedStatement stmt = conn.prepareStatement(sql)) {
                 
@@ -297,7 +310,7 @@ public class HikariConnection {
                            .thenApply(v -> null); // 转换 CompletableFuture<Integer> to CompletableFuture<Void>
         }
         
-        return CompletableFuture.runAsync(() -> {
+        return asyncTaskManager.runAsync(() -> {
             String sql = String.format(
                 "INSERT INTO %s (%s, %s, created_at, updated_at) VALUES (?, ?, ?, ?) " +
                 "ON DUPLICATE KEY UPDATE %s = VALUES(%s), updated_at = VALUES(updated_at)",
@@ -393,7 +406,7 @@ public class HikariConnection {
         logger.info("正在关闭数据库连接...");
         
         // 异步关闭避免阻塞主线程
-        CompletableFuture.runAsync(() -> {
+        asyncTaskManager.runAsync(() -> {
             try {
                 if (sqliteDB != null) {
                     sqliteDB.disconnect();
