@@ -96,11 +96,22 @@ public class MessagesManager {
      * 发送单条消息并替换占位符
      */
     public void sendMessage(CommandSender sender, String messageKey, Map<String, String> placeholders) {
-        Player player = sender instanceof Player ? (Player) sender : null;
-        // 使用 parseWithDelimiter 并指定 { 和 } 作为占位符分界符
-        String parsedMessage = messageService.parseWithDelimiter(messageKey, player, placeholders, "{", "}");
-        if (parsedMessage != null && !parsedMessage.isEmpty()) {
-            sender.sendMessage(parsedMessage);
+        try {
+            Player player = sender instanceof Player ? (Player) sender : null;
+            // 使用 parseWithDelimiter 并指定 { 和 } 作为占位符分界符
+            String parsedMessage = messageService.parseWithDelimiter(messageKey, player, placeholders, "{", "}");
+            if (parsedMessage != null && !parsedMessage.isEmpty()) {
+                sender.sendMessage(parsedMessage);
+            }
+        } catch (Exception e) {
+            logger.error("发送消息失败: " + messageKey + " - " + e.getMessage());
+            // 降级处理：发送原始消息键
+            String fallbackMessage = messageService.getRaw(messageKey);
+            if (fallbackMessage != null) {
+                sender.sendMessage(fallbackMessage);
+            } else {
+                sender.sendMessage("§c消息发送失败: " + messageKey);
+            }
         }
     }
 
@@ -108,11 +119,24 @@ public class MessagesManager {
      * 发送多条消息并替换占位符
      */
     public void sendMessageList(CommandSender sender, String messageKey, Map<String, String> placeholders) {
-        // 首先获取原始的消息列表
-        List<String> templates = messageService.getList(messageKey);
-        if (templates != null && !templates.isEmpty()) {
-            // 然后调用 sendList 的重载方法，该方法接受一个模板列表并允许指定分界符
-            messageService.sendList(sender, templates, placeholders, "{", "}");
+        try {
+            // 首先获取原始的消息列表
+            List<String> templates = messageService.getList(messageKey);
+            if (templates != null && !templates.isEmpty()) {
+                // 然后调用 sendList 的重载方法，该方法接受一个模板列表并允许指定分界符
+                messageService.sendList(sender, templates, placeholders, "{", "}");
+            }
+        } catch (Exception e) {
+            logger.error("发送消息列表失败: " + messageKey + " - " + e.getMessage());
+            // 降级处理：发送原始消息列表
+            List<String> fallbackMessages = messageService.getList(messageKey);
+            if (fallbackMessages != null && !fallbackMessages.isEmpty()) {
+                for (String message : fallbackMessages) {
+                    sender.sendMessage(message);
+                }
+            } else {
+                sender.sendMessage("§c消息发送失败: " + messageKey);
+            }
         }
     }
 }

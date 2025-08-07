@@ -150,10 +150,10 @@ public class ServerVariablesAPI {
         java.util.function.Function<String, Boolean> isBlank = s -> s == null || s.trim().isEmpty();
 
         // =============== %drcomovex_[var]_<key>% ===============
-        // 返回变量的默认值(initial)
+        // 返回变量的计算后最终值
         placeholderUtil.register("[var]", (player, rawArgs) ->
                 processPlaceholder("[var]", player, rawArgs,
-                        (pl, key) -> getDefaultInitial(key)));
+                        (pl, key) -> getCalculatedValue(pl, key)));
 
         // ========= %drcomovex_[global_var]_<key>% =========
         // 强制以全局身份获取变量值
@@ -230,6 +230,50 @@ public class ServerVariablesAPI {
                     + " 解析结果异常，原始输入: " + rawArgs + ", 输出: " + result);
         }
         return result;
+    }
+
+    /**
+     * 获取变量的计算后最终值，智能判断变量类型并调用相应方法
+     */
+    private String getCalculatedValue(OfflinePlayer player, String key) {
+        if (!hasVariable(key)) {
+            return "变量不存在";
+        }
+        
+        Variable var = variablesManager.getVariableDefinition(key);
+        if (var == null) {
+            return "变量不存在";
+        }
+        
+        try {
+            CompletableFuture<VariableResult> future;
+            
+            // 智能判断变量类型并调用相应方法
+            if (var.isGlobal()) {
+                // 全局变量，不需要玩家参数
+                future = variablesManager.getVariable(null, key);
+            } else if (var.isPlayerScoped()) {
+                // 玩家变量，需要玩家参数
+                if (player == null) {
+                    logger.info("占位符 drcomovex_[var] 玩家变量 " + key + " 需要玩家参数");
+                    return "需要玩家参数";
+                }
+                future = variablesManager.getVariable(player, key);
+            } else {
+                // 未知类型，尝试使用传入的玩家参数
+                future = variablesManager.getVariable(player, key);
+            }
+            
+            VariableResult result = future.get(500, TimeUnit.MILLISECONDS);
+            return result.isSuccess() ? result.getValue() : "0";
+            
+        } catch (Exception e) {
+            logger.error("占位符 drcomovex_[var] 获取变量 " + key + " 计算值异常", e);
+            if (e instanceof java.util.concurrent.TimeoutException) {
+                return "0";
+            }
+            return "异常:" + e.getMessage();
+        }
     }
 
     /**

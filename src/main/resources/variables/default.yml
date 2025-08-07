@@ -205,3 +205,13 @@ variables:
     type: "DOUBLE"
     initial: "${player_level} + ${player_exp}"
     limitations:
+
+  # ======================== 每分钟重置示例 ========================
+
+  # 每分钟重置变量 - 用于测试
+  minute_reset_variable:
+    name: "每分钟重置变量"
+    scope: "global"
+    type: "INT"
+    initial: 0
+    cycle: "0 * * * * ?" # Cron表达式: 每分钟重置

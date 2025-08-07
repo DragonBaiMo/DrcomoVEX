@@ -88,19 +88,24 @@ public class PlayerVariablesManager {
      * 增加玩家变量值
      */
     public CompletableFuture<VariableResult> addPlayerVariable(OfflinePlayer player, String key, String addValue) {
+        logger.debug("玩家变量管理器：开始添加变量 " + key + " 对玩家 " + player.getName() + "，值：" + addValue);
+        
         Variable variable = variablesManager.getVariableDefinition(key);
         if (variable == null) {
+            logger.debug("变量定义不存在: " + key);
             return CompletableFuture.completedFuture(
                     VariableResult.failure("变量不存在: " + key)
             );
         }
         
         if (!variable.isPlayerScoped()) {
+            logger.debug("变量不是玩家作用域: " + key + ", 实际作用域: " + (variable.isPlayerScoped() ? "player" : "server"));
             return CompletableFuture.completedFuture(
                     VariableResult.failure("变量不是玩家作用域: " + key)
             );
         }
         
+        logger.debug("变量校验通过，委托给 RefactoredVariablesManager");
         return withTimeout(variablesManager.addVariable(player, key, addValue));
     }
     

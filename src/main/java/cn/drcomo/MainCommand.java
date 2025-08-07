@@ -252,17 +252,25 @@ public class MainCommand implements CommandExecutor, TabCompleter {
             return;
         }
         String key = args[3], val = args[4];
+        logger.debug("开始执行玩家变量添加操作: player=" + target.getName() + ", key=" + key + ", value=" + val);
+        
         playerVariablesManager.addPlayerVariable(target, key, val)
                 .completeOnTimeout(VariableResult.failure("操作超时"), TIMEOUT_SECONDS, TimeUnit.SECONDS)
                 .whenComplete((r, t) -> {
+                    logger.debug("玩家变量添加操作完成: result=" + (r != null ? r.isSuccess() : "null") + ", throwable=" + (t != null ? t.getMessage() : "null"));
+                    
                     if (t != null) {
+                        logger.debug("异步操作异常，准备发送错误消息");
                         handleException("增加玩家变量失败: " + key, t, sender);
                     } else {
+                        logger.debug("异步操作成功，准备发送结果消息: success=" + r.isSuccess());
                         sendResult(sender, r,
                                 Map.of("variable", key, "player", target.getName(), "value", val, "new_value", r.getValue() != null ? r.getValue() : ""),
                                 "success.player-add");
                     }
                 });
+        
+        logger.debug("异步操作已提交，等待回调");
     }
 
     /**
@@ -487,14 +495,18 @@ public class MainCommand implements CommandExecutor, TabCompleter {
      * 统一处理异步结果：成功发送指定消息，失败发送 error.operation-failed
      */
     private void sendResult(CommandSender sender, VariableResult r, Map<String, String> params, String successKey) {
+        logger.debug("准备发送结果消息: success=" + r.isSuccess() + ", value=" + r.getValue() + ", error=" + r.getErrorMessage());
+        
         if (r.isSuccess()) {
             if (r.getValue() == null) {
                 logger.warn("变量操作成功但返回值为空");
                 messagesManager.sendMessage(sender, "error.operation-failed", Map.of("reason", "返回值为空"));
                 return;
             }
+            logger.debug("发送成功消息: key=" + successKey + ", params=" + params);
             messagesManager.sendMessage(sender, successKey, params);
         } else {
+            logger.debug("发送失败消息: reason=" + r.getErrorMessage());
             messagesManager.sendMessage(sender, "error.operation-failed", Map.of("reason", r.getErrorMessage()));
         }
     }

@@ -35,7 +35,6 @@ public class MainConfigManager {
         // 复制默认配置文件到插件数据文件夹根目录
         yamlUtil.copyYamlFile("config.yml", "");
         yamlUtil.copyYamlFile("messages.yml", "");
-        yamlUtil.copyYamlFile("variables.yml", "");
         
         // 加载配置
         yamlUtil.loadConfig(CONFIG_FILE);
