@@ -13,7 +13,6 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.Set;
 import java.util.HashSet;
 import java.util.regex.Pattern;
-import java.util.regex.Matcher;
 
 /**
  * 多级缓存管理器
@@ -43,6 +42,8 @@ public class MultiLevelCacheManager {
     // 表达式模式匹配器
     private final Pattern variablePattern = Pattern.compile("\\$\\{([^}]+)\\}");
     private final Pattern placeholderPattern = Pattern.compile("%([^%]+)%");
+    // 解析算术表达式所需的数字与运算符模式
+    private static final Pattern EXPRESSION_PATTERN = Pattern.compile("(?=.*\\d)(?=.*[+\\-*/()^])");
     
     // 缓存统计
     private final AtomicLong l1Hits = new AtomicLong(0);
@@ -270,8 +271,8 @@ public class MultiLevelCacheManager {
      */
     private boolean containsExpressions(String value) {
         if (value == null) return false;
-        return value.contains("%") || value.contains("${") || 
-               value.matches(".*[+\\-*/()^].*") && value.matches(".*\\d.*");
+        return value.contains("%") || value.contains("${") ||
+               EXPRESSION_PATTERN.matcher(value).find();
     }
     
     /**
