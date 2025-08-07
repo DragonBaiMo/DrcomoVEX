@@ -223,7 +223,7 @@ public class VariableCycleTask {
         private boolean resetSingleVariableSafe(Variable var, String key) {
             for (int i = 1; i <= 3; i++) {
                 if (deleteVariableFromDb(var.isGlobal(), key)) {
-                    variablesManager.invalidateAllCaches(key);
+                    variablesManager.removeVariableFromMemoryAndCache(key);
                     logger.debug("重置变量成功: " + key + " (尝试 " + i + "/3)");
                     return true;
                 }
