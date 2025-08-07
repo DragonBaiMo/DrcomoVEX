@@ -6,6 +6,8 @@ import cn.drcomo.corelib.message.MessageService;
 import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
 
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.List;
 import java.util.Map;
 
@@ -17,7 +19,13 @@ import java.util.Map;
  * @author BaiMo
  */
 public class MessagesManager {
-    
+
+    /**
+     * 时间格式器
+     */
+    private static final DateTimeFormatter FORMATTER =
+            DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
+
     private final DrcomoVEX plugin;
     private final DebugUtil logger;
     private final MessageService messageService;
@@ -84,10 +92,10 @@ public class MessagesManager {
                 plugin.getDatabase().isConnectionValid() ? "正常" : "异常");
         
         // 时间信息
-        messageService.registerInternalPlaceholder("current_time", (player, args) -> 
+        messageService.registerInternalPlaceholder("current_time", (player, args) ->
                 String.valueOf(System.currentTimeMillis()));
-        messageService.registerInternalPlaceholder("formatted_time", (player, args) -> 
-                new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss").format(new java.util.Date()));
+        messageService.registerInternalPlaceholder("formatted_time", (player, args) ->
+                LocalDateTime.now().format(FORMATTER));
         
         logger.debug("已注册所有内部占位符");
     }
