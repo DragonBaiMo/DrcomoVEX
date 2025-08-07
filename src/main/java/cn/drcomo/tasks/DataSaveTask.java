@@ -80,8 +80,8 @@ public class DataSaveTask {
         try {
             long startTime = System.currentTimeMillis();
             
-            // 保存所有变量数据
-            variablesManager.saveAllData();
+            // 保存所有变量数据并等待完成，避免任务提前结束
+            variablesManager.saveAllData().join();
             
             long duration = System.currentTimeMillis() - startTime;
             logger.debug("数据保存完成，耗时: " + duration + "ms");
