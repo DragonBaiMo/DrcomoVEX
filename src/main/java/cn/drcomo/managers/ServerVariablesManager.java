@@ -10,11 +10,11 @@ import org.bukkit.Bukkit;
 import org.bukkit.OfflinePlayer;
 import org.bukkit.entity.Player;
 
-import java.util.List;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.concurrent.ThreadLocalRandom;
 import java.util.Optional;
+import java.util.Set;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ThreadLocalRandom;
 
 /**
  * 服务器变量管理器
@@ -31,9 +31,9 @@ public class ServerVariablesManager {
     private final HikariConnection database;
 
     /**
-     * 在线玩家缓存列表，用于快速获取随机玩家
+     * 在线玩家缓存集合，用于快速获取随机玩家
      */
-    private final List<Player> onlinePlayerCache = new CopyOnWriteArrayList<>();
+    private final Set<Player> onlinePlayerCache = ConcurrentHashMap.newKeySet();
     
     public ServerVariablesManager(
             DrcomoVEX plugin,
@@ -85,7 +85,14 @@ public class ServerVariablesManager {
         }
 
         int randomIndex = ThreadLocalRandom.current().nextInt(onlinePlayerCache.size());
-        Player randomPlayer = onlinePlayerCache.get(randomIndex);
+        Player randomPlayer = onlinePlayerCache.stream()
+                .skip(randomIndex)
+                .findFirst()
+                .orElse(null);
+        if (randomPlayer == null) {
+            logger.debug("没有可用的在线玩家用于全局变量占位符解析");
+            return null;
+        }
         logger.debug("选择玩家用于全局变量占位符解析: " + randomPlayer.getName());
         return randomPlayer;
     }
