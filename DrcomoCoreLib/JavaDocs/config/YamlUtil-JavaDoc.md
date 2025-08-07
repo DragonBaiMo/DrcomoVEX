@@ -40,13 +40,14 @@
 
 **3. 公共API方法 (Public API Methods)**
 
-  * #### `ensureFolderAndCopyDefaults(String resourceFolder, String relativePath)`
+  * #### `ensureFolderAndCopyDefaults(String resourceFolder, String relativePath, String... excludedNames)`
 
       * **返回类型:** `void`
-      * **功能描述:** 若插件数据文件夹内某目标目录不存在，则创建该目录，并从 JAR 内指定资源文件夹复制其全部文件及层级结构到该目录，实现一次性批量初始化。此方法会动态判断目标文件夹是否存在：若不存在，则拷贝整个文件夹内容；若已存在，则保持不变。这个流程主要用于插件的首次加载。
+      * **功能描述:** 若插件数据文件夹内某目标目录不存在，则创建该目录，并从 JAR 内指定资源文件夹复制其全部文件及层级结构到该目录，实现一次性批量初始化。此方法会动态判断目标文件夹是否存在：若不存在，则拷贝整个文件夹内容；若已存在，则保持不变。默认会跳过 `plugin.yml` 与所有 `.sql` 文件，可通过 `excludedNames` 追加排除项。通常用于插件首次加载时的资源初始化。
       * **参数说明:**
           * `resourceFolder` (`String`): JAR 内资源文件夹路径，例如 `"templates"` 或 `"assets/lang"`。
           * `relativePath` (`String`): 数据文件夹内目标目录，相对插件根目录，空字符串表示根目录。
+          * `excludedNames` (`String...`): 额外需要排除的文件名。
 
   * #### `ensureDirectory(String relativePath)`
 

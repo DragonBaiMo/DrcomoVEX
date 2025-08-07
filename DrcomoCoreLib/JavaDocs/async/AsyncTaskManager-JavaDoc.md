@@ -51,6 +51,9 @@
   * #### `TaskQueueStatus getQueueStatus()`
       * **返回类型:** `TaskQueueStatus`
       * **功能描述:** 获取当前优先级任务队列中各优先级的任务数量。
+  * #### `boolean cancelTask(Future<?> future)`
+      * **返回类型:** `boolean`
+      * **功能描述:** 取消尚未执行或正在执行的任务。若任务已完成或无法取消，则返回 `false`。
   * #### `<T> CompletableFuture<T> supplyAsync(Supplier<T> supplier)`
       * **返回类型:** `CompletableFuture<T>`
       * **功能描述:** 使用 `CompletableFuture` 异步执行 `Supplier`，便于链式调用。

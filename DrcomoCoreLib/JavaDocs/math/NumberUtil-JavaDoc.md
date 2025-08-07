@@ -35,3 +35,31 @@
           * `a` (`double`): 第一个加数。
           * `b` (`double`): 第二个加数。
 
+  * #### `parseInt(String input, int defaultValue)`
+
+      * **返回类型:** `int`
+      * **功能描述:** 尝试将字符串解析为整数；当输入为空或解析失败时返回 `defaultValue`。
+      * **参数说明:**
+          * `input` (`String`): 待解析的字符串，可为空或包含空白字符。
+          * `defaultValue` (`int`): 解析失败时返回的默认值。
+  * #### `parseDouble(String input, double defaultValue)`
+
+      * **返回类型:** `double`
+      * **功能描述:** 尝试将字符串解析为双精度浮点数；当输入为空或解析失败时返回 `defaultValue`。
+      * **参数说明:**
+          * `input` (`String`): 待解析的字符串，可为空或包含空白字符。
+          * `defaultValue` (`double`): 解析失败时返回的默认值。
+
+  * #### `parseInt(String input)`
+
+      * **返回类型:** `Integer`
+      * **功能描述:** 尝试将字符串解析为整数；当输入为空或解析失败时返回 `null`。
+      * **参数说明:**
+          * `input` (`String`): 待解析的字符串，可为空或包含空白字符。
+
+  * #### `parseDouble(String input)`
+
+      * **返回类型:** `Double`
+      * **功能描述:** 尝试将字符串解析为双精度浮点数；当输入为空或解析失败时返回 `null`。
+      * **参数说明:**
+          * `input` (`String`): 待解析的字符串，可为空或包含空白字符。
