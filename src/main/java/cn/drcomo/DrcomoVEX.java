@@ -159,7 +159,7 @@ public class DrcomoVEX extends JavaPlugin {
      * 初始化数据库连接
      */
     private void initializeDatabase() {
-        database = new HikariConnection(this, logger, configsManager);
+        database = new HikariConnection(this, logger, configsManager, asyncTaskManager);
         database.initialize();
     }
     
