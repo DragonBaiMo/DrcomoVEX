@@ -3,6 +3,7 @@ package cn.drcomo.managers;
 import cn.drcomo.DrcomoVEX;
 import cn.drcomo.model.VariableResult;
 import cn.drcomo.model.structure.Variable;
+import cn.drcomo.model.structure.ScopeType;
 import cn.drcomo.model.structure.Limitations;
 import cn.drcomo.model.structure.ValueType;
 import cn.drcomo.storage.VariableMemoryStorage;
@@ -478,6 +479,27 @@ public class RefactoredVariablesManager {
                 .filter(e -> e.getValue().isGlobal())
                 .map(Map.Entry::getKey)
                 .collect(Collectors.toSet());
+    }
+
+    /**
+     * 验证变量作用域是否符合预期
+     *
+     * @param key       变量键
+     * @param scopeType 期望的作用域类型
+     * @return 若验证失败返回错误结果，否则返回 {@code Optional.empty()}
+     */
+    public Optional<VariableResult> validateScope(String key, ScopeType scopeType) {
+        Variable variable = getVariableDefinition(key);
+        if (variable == null) {
+            return Optional.of(VariableResult.failure("变量不存在: " + key));
+        }
+        if (scopeType == ScopeType.PLAYER && !variable.isPlayerScoped()) {
+            return Optional.of(VariableResult.failure("变量不是玩家作用域: " + key));
+        }
+        if (scopeType == ScopeType.GLOBAL && !variable.isGlobal()) {
+            return Optional.of(VariableResult.failure("变量不是全局作用域: " + key));
+        }
+        return Optional.empty();
     }
 
     /**

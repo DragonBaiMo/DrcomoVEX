@@ -2,6 +2,7 @@ package cn.drcomo.managers;
 
 import cn.drcomo.DrcomoVEX;
 import cn.drcomo.model.VariableResult;
+import cn.drcomo.model.structure.ScopeType;
 import cn.drcomo.model.structure.Variable;
 import cn.drcomo.database.HikariConnection;
 import cn.drcomo.corelib.util.DebugUtil;
@@ -12,6 +13,7 @@ import org.bukkit.entity.Player;
 import java.util.Collection;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ThreadLocalRandom;
+import java.util.Optional;
 
 /**
  * 服务器变量管理器
@@ -87,19 +89,10 @@ public class ServerVariablesManager {
      * 设置服务器变量值
      */
     public CompletableFuture<VariableResult> setServerVariable(String key, String value) {
-        Variable variable = variablesManager.getVariableDefinition(key);
-        if (variable == null) {
-            return CompletableFuture.completedFuture(
-                    VariableResult.failure("变量不存在: " + key)
-            );
+        Optional<VariableResult> validation = variablesManager.validateScope(key, ScopeType.GLOBAL);
+        if (validation.isPresent()) {
+            return CompletableFuture.completedFuture(validation.get());
         }
-        
-        if (!variable.isGlobal()) {
-            return CompletableFuture.completedFuture(
-                    VariableResult.failure("变量不是全局作用域: " + key)
-            );
-        }
-        
         OfflinePlayer playerForPlaceholders = getPlayerForPlaceholders();
         return variablesManager.setVariable(playerForPlaceholders, key, value);
     }
@@ -108,19 +101,10 @@ public class ServerVariablesManager {
      * 增加服务器变量值
      */
     public CompletableFuture<VariableResult> addServerVariable(String key, String addValue) {
-        Variable variable = variablesManager.getVariableDefinition(key);
-        if (variable == null) {
-            return CompletableFuture.completedFuture(
-                    VariableResult.failure("变量不存在: " + key)
-            );
+        Optional<VariableResult> validation = variablesManager.validateScope(key, ScopeType.GLOBAL);
+        if (validation.isPresent()) {
+            return CompletableFuture.completedFuture(validation.get());
         }
-        
-        if (!variable.isGlobal()) {
-            return CompletableFuture.completedFuture(
-                    VariableResult.failure("变量不是全局作用域: " + key)
-            );
-        }
-        
         OfflinePlayer playerForPlaceholders = getPlayerForPlaceholders();
         return variablesManager.addVariable(playerForPlaceholders, key, addValue);
     }
@@ -129,19 +113,10 @@ public class ServerVariablesManager {
      * 移除服务器变量值
      */
     public CompletableFuture<VariableResult> removeServerVariable(String key, String removeValue) {
-        Variable variable = variablesManager.getVariableDefinition(key);
-        if (variable == null) {
-            return CompletableFuture.completedFuture(
-                    VariableResult.failure("变量不存在: " + key)
-            );
+        Optional<VariableResult> validation = variablesManager.validateScope(key, ScopeType.GLOBAL);
+        if (validation.isPresent()) {
+            return CompletableFuture.completedFuture(validation.get());
         }
-        
-        if (!variable.isGlobal()) {
-            return CompletableFuture.completedFuture(
-                    VariableResult.failure("变量不是全局作用域: " + key)
-            );
-        }
-        
         OfflinePlayer playerForPlaceholders = getPlayerForPlaceholders();
         return variablesManager.removeVariable(playerForPlaceholders, key, removeValue);
     }
@@ -150,19 +125,10 @@ public class ServerVariablesManager {
      * 重置服务器变量
      */
     public CompletableFuture<VariableResult> resetServerVariable(String key) {
-        Variable variable = variablesManager.getVariableDefinition(key);
-        if (variable == null) {
-            return CompletableFuture.completedFuture(
-                    VariableResult.failure("变量不存在: " + key)
-            );
+        Optional<VariableResult> validation = variablesManager.validateScope(key, ScopeType.GLOBAL);
+        if (validation.isPresent()) {
+            return CompletableFuture.completedFuture(validation.get());
         }
-        
-        if (!variable.isGlobal()) {
-            return CompletableFuture.completedFuture(
-                    VariableResult.failure("变量不是全局作用域: " + key)
-            );
-        }
-        
         OfflinePlayer playerForPlaceholders = getPlayerForPlaceholders();
         return variablesManager.resetVariable(playerForPlaceholders, key);
     }
