@@ -47,6 +47,14 @@
       * **参数说明:**
           * `msg` (`String`): 要输出的日志消息。
 
+  * #### `debug(String msg, Throwable t)`
+
+      * **返回类型:** `void`
+      * **功能描述:** 输出一条带异常堆栈的 DEBUG 级别日志，便于在开发阶段定位问题。
+      * **参数说明:**
+          * `msg` (`String`): 对调试信息的描述。
+          * `t` (`Throwable`): 需要输出的异常对象。
+
   * #### `info(String msg)`
 
       * **返回类型:** `void`

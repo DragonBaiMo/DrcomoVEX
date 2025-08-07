@@ -3,7 +3,7 @@
 **1. 概述 (Overview)**
 
   * **完整路径:** `cn.drcomo.corelib.database.SQLiteDB`
-  * **核心职责:** 管理 SQLite 连接、初始化表结构，并提供最基础的增删改查以及事务执行能力。自 1.1 起内部集成 HikariCP 连接池，保证多线程环境下安全获取连接。它遵循零硬编码和控制反转原则，由调用方传入数据库路径和初始化脚本。
+  * **核心职责:** 管理 SQLite 连接、初始化表结构，并提供增删改查、事务及批量操作能力。自 1.1 起内部集成 HikariCP 连接池，并支持查询连接池状态与执行统计，保证多线程环境下安全获取连接。它遵循零硬编码和控制反转原则，由调用方传入数据库路径和初始化脚本。
 
 **2. 如何实例化 (Initialization)**
 
@@ -43,6 +43,26 @@
 
       * **返回类型:** `void`
       * **功能描述:** 按顺序读取构造时提供的 SQL 脚本，以分号为界执行每条语句，用于建表或升级数据库结构。
+      * **参数说明:** 无
+
+  * #### `getPoolStatus()`
+
+      * **返回类型:** `ConnectionPoolStatus`
+      * **功能描述:** 获取当前连接池的总连接数、活跃连接数与空闲连接数。
+      * **参数说明:** 无
+      * **关联文档:** [查看](./ConnectionPoolStatus-JavaDoc.md)
+
+  * #### `getMetrics()`
+
+      * **返回类型:** `DatabaseMetrics`
+      * **功能描述:** 返回数据库连接借出次数与语句执行耗时等统计信息。
+      * **参数说明:** 无
+      * **关联文档:** [查看](./DatabaseMetrics-JavaDoc.md)
+
+  * #### `isConnectionValid()`
+
+      * **返回类型:** `boolean`
+      * **功能描述:** 检查当前数据源连接是否可用。
       * **参数说明:** 无
 
   * #### `executeUpdate(String sql, Object... params)`
@@ -104,6 +124,29 @@
 
       * **返回类型:** `CompletableFuture<Void>`
       * **功能描述:** 异步执行事务逻辑。
+
+  * #### `batchUpdate(String sql, List<Object[]> paramsList)`
+
+      * **返回类型:** `CompletableFuture<int[]>`
+      * **功能描述:** 异步执行同一 SQL 的批量更新。
+      * **参数说明:**
+          * `sql` (`String`): 更新语句模板。
+          * `paramsList` (`List<Object[]>`): 每条更新所需的参数数组。
+
+  * #### `batchInsert(String table, List<Map<String, Object>> dataList)`
+
+      * **返回类型:** `CompletableFuture<Void>`
+      * **功能描述:** 根据键值集合批量插入多行数据。
+      * **参数说明:**
+          * `table` (`String`): 目标表名。
+          * `dataList` (`List<Map<String, Object>>`): 每行数据的键值对集合。
+
+  * #### `<T> executeInTransaction(Function<Connection, T> op)`
+
+      * **返回类型:** `CompletableFuture<T>`
+      * **功能描述:** 在单个事务中执行操作并返回结果。
+      * **参数说明:**
+          * `op` (`Function<Connection, T>`): 需要在事务中执行的逻辑。
 
 **4. 内部接口 (Inner Interfaces)**
 

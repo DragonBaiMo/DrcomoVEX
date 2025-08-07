@@ -3,7 +3,7 @@
 **1. 概述 (Overview)**
 
   * **完整路径:** `cn.drcomo.corelib.async.AsyncTaskManager`
-  * **核心职责:** 提供基于线程池的异步任务提交與調度能力，並在執行過程中自動捕獲並記錄例外。
+  * **核心职责:** 提供基于线程池的异步任务提交与调度能力，支持带优先级的任务队列，并在执行过程中自动捕获并记录异常。
 
 **2. 如何实例化 (Initialization)**
 
@@ -42,6 +42,21 @@
 
 **3. 公共API方法 (Public API Methods)**
 
+  * #### `<T> Future<T> submitWithPriority(Supplier<T> supplier, TaskPriority priority)`
+      * **返回类型:** `Future<T>`
+      * **功能描述:** 将 `Supplier` 提交到带优先级的队列，高优先级任务会先执行。
+  * #### `Future<?> runWithPriority(Runnable task, TaskPriority priority)`
+      * **返回类型:** `Future<?>`
+      * **功能描述:** 在带优先级的队列中运行一个 `Runnable` 任务。
+  * #### `TaskQueueStatus getQueueStatus()`
+      * **返回类型:** `TaskQueueStatus`
+      * **功能描述:** 获取当前优先级任务队列中各优先级的任务数量。
+  * #### `<T> CompletableFuture<T> supplyAsync(Supplier<T> supplier)`
+      * **返回类型:** `CompletableFuture<T>`
+      * **功能描述:** 使用 `CompletableFuture` 异步执行 `Supplier`，便于链式调用。
+  * #### `CompletableFuture<Void> runAsync(Runnable task)`
+      * **返回类型:** `CompletableFuture<Void>`
+      * **功能描述:** 使用 `CompletableFuture` 异步执行 `Runnable`。
   * #### `Future<?> submitAsync(Runnable task)`
       * **返回类型:** `Future<?>`
       * **功能描述:** 在内部线程池中异步执行一个 `Runnable`。
@@ -60,3 +75,9 @@
   * #### `void shutdown()`
       * **返回类型:** `void`
       * **功能描述:** 关闭内部线程池，停止接受新任务。
+  * #### `ExecutorService getExecutor()`
+      * **返回类型:** `ExecutorService`
+      * **功能描述:** 获取内部执行线程池实例。
+  * #### `ScheduledExecutorService getScheduler()`
+      * **返回类型:** `ScheduledExecutorService`
+      * **功能描述:** 获取内部调度线程池实例。

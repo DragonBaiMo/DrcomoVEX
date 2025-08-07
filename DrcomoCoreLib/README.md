@@ -249,16 +249,27 @@ if (coreLib != null) {
 - **包类路径**：`cn.drcomo.corelib.config.YamlUtil`
 - **查询文档**：[查看](./JavaDocs/config/YamlUtil-JavaDoc.md)
 
+### 配置文件变更监听
+- **功能描述**：监听配置文件的创建、修改、删除并触发自定义回调。
+- **包类路径**：
+  - `cn.drcomo.corelib.config.FileChangeListener`（回调接口）
+  - `cn.drcomo.corelib.config.FileChangeType`（变更类型枚举）
+- **查询文档**：
+  - [查看](./JavaDocs/config/FileChangeListener-JavaDoc.md)（回调接口）
+  - [查看](./JavaDocs/config/FileChangeType-JavaDoc.md)（变更类型枚举）
+
 ### 配置校验
 - **功能描述**：在读取或重载配置后，验证必填项是否存在且类型正确，支持字符串、数值、枚举类型验证以及自定义校验规则。
 - **包类路径**：
   - `cn.drcomo.corelib.config.ConfigValidator`（配置校验器主入口）
   - `cn.drcomo.corelib.config.ValidatorBuilder`（链式校验规则构建器）
   - `cn.drcomo.corelib.config.ValidationResult`（校验结果处理）
+  - `cn.drcomo.corelib.config.ConfigSchema`（配置结构声明接口）
 - **核心查询**：[查看](./JavaDocs/config/ConfigValidator-JavaDoc.md)（配置校验器主入口）
 - **关联查询**：
   - [查看](./JavaDocs/config/ValidatorBuilder-JavaDoc.md)（链式校验规则构建器）
   - [查看](./JavaDocs/config/ValidationResult-JavaDoc.md)（校验结果处理）
+  - [查看](./JavaDocs/config/ConfigSchema-JavaDoc.md)（配置结构声明接口）
 
 
 ### 文本颜色处理
@@ -268,9 +279,13 @@ if (coreLib != null) {
 
 
 ### 发送消息与文本本地化
-- **功能描述**：发送游戏内消息（聊天、ActionBar、Title），解析多层级占位符（自定义、PAPI、内部），管理多语言文件。  
-- **包类路径**：`cn.drcomo.corelib.message.MessageService`
-- **查询文档**：[查看](./JavaDocs/message/MessageService-JavaDoc.md)
+- **功能描述**：发送游戏内消息（聊天、ActionBar、Title），解析多层级占位符（自定义、PAPI、内部），管理多语言文件。
+- **包类路径**：
+  - `cn.drcomo.corelib.message.MessageService`
+  - `cn.drcomo.corelib.message.PlaceholderResolver`
+- **查询文档**：
+  - [MessageService](./JavaDocs/message/MessageService-JavaDoc.md)
+  - [PlaceholderResolver](./JavaDocs/message/PlaceholderResolver-JavaDoc.md)
 
 
 ### 物品NBT数据操作
@@ -327,6 +342,8 @@ if (coreLib != null) {
 - **功能描述**：管理异步任务执行，支持任务提交、延迟执行、定时调度、批量处理等，内置异常捕获和日志记录。通过 Builder 可调整线程池大小及线程工厂。
 - **包类路径**：`cn.drcomo.corelib.async.AsyncTaskManager`
 - **查询文档**：[查看](./JavaDocs/async/AsyncTaskManager-JavaDoc.md)
+- **关联查询 1**：[查看](./JavaDocs/async/TaskPriority-JavaDoc.md)（任务优先级枚举）
+- **关联查询 2**：[查看](./JavaDocs/async/TaskQueueStatus-JavaDoc.md)（队列状态对象）
 
 
 ### 性能监控
@@ -394,4 +411,6 @@ if (coreLib != null) {
 ### 数据库操作 (SQLite)
 - **功能描述**：连接管理 SQLite 数据库，初始化表结构，执行增删改查（CRUD）、事务处理。内置 HikariCP 连接池并提供异步接口，适合并发环境。
 - **包类路径**：`cn.drcomo.corelib.database.SQLiteDB`
-- **查询文档**：[查看](./JavaDocs/database)
+- **查询文档 1（核心 API）**：[查看](./JavaDocs/database/SQLiteDB-JavaDoc.md)
+- **查询文档 2（连接池状态）**：[查看](./JavaDocs/database/ConnectionPoolStatus-JavaDoc.md)
+- **查询文档 3（执行统计）**：[查看](./JavaDocs/database/DatabaseMetrics-JavaDoc.md)

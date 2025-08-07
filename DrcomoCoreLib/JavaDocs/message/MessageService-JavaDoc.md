@@ -55,7 +55,7 @@ MessageService 不是孤立组件，依赖日志、YAML 配置加载器和 Place
 
 1. 通过 `yamlUtil.loadConfig(langConfigPath)` 载入文件。
 2. 遍历所有字符串键，将其缓存到 `messages`。
-3. 后续所有 `get`/`parse` 等操作基于内存缓存进行，避免每次 I/O。
+3. 后续所有 `get`/`parseWithDelimiter` 等操作基于内存缓存进行，避免每次 I/O。
 
 #### 示例代码
 
@@ -107,12 +107,15 @@ messageService.registerInternalPlaceholder("online", (player, args) ->
 
 #### 内部占位符注册
 
-* 方法：`registerInternalPlaceholder(String key, BiFunction<Player, String, String> resolver)`
+* 方法：`registerInternalPlaceholder(String key, PlaceholderResolver resolver)`
 * 说明：
 
   * key 不带大括号，内部统一小写匹配。
-  * resolver 接收玩家（可能为 null）和冒号后的 args。
-  * 例如：`{time:HH:mm}` 可用 key=`"time"`，resolver 负责按 args 格式化时间。
+  * resolver 接收玩家（可能为 null）和冒号分隔的参数数组。
+  * 例如：`{time:HH:mm}` 可用 key=`"time"`，resolver 负责按参数格式化时间。
+
+* 方法：`unregisterInternalPlaceholder(String key)`
+* 说明：取消注册指定的内部占位符。
 
 #### 额外正则规则注册
 
@@ -127,7 +130,6 @@ messageService.registerInternalPlaceholder("online", (player, args) ->
 
 * 方法：`parseWithDelimiter(...)`
 * 说明：可指定任意 prefix/suffix（如 `%`、`{}`、`<<>>` 等）控制 custom 替换语法。
-* 兼容旧接口：`parse(...)` 等价于 `parseWithDelimiter(..., "%", "%")`，已标记为 deprecated。
 
 #### 容错与降级
 
