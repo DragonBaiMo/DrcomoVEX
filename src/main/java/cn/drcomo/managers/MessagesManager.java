@@ -73,28 +73,28 @@ public class MessagesManager {
      */
     private void registerInternalPlaceholders() {
         // 插件基本信息
-        messageService.registerInternalPlaceholder("plugin_name", (player, args) -> plugin.getName());
-        messageService.registerInternalPlaceholder("plugin_version", (player, args) -> plugin.getDescription().getVersion());
-        messageService.registerInternalPlaceholder("plugin_author", (player, args) -> "BaiMo");
+        messageService.registerInternalPlaceholder("plugin_name", (Player player, String arg) -> plugin.getName());
+        messageService.registerInternalPlaceholder("plugin_version", (Player player, String arg) -> plugin.getDescription().getVersion());
+        messageService.registerInternalPlaceholder("plugin_author", (Player player, String arg) -> "BaiMo");
         
         // 系统信息
-        messageService.registerInternalPlaceholder("server_name", (player, args) -> plugin.getServer().getName());
-        messageService.registerInternalPlaceholder("server_version", (player, args) -> plugin.getServer().getVersion());
-        messageService.registerInternalPlaceholder("online_players", (player, args) -> String.valueOf(plugin.getServer().getOnlinePlayers().size()));
-        messageService.registerInternalPlaceholder("max_players", (player, args) -> String.valueOf(plugin.getServer().getMaxPlayers()));
+        messageService.registerInternalPlaceholder("server_name", (Player player, String arg) -> plugin.getServer().getName());
+        messageService.registerInternalPlaceholder("server_version", (Player player, String arg) -> plugin.getServer().getVersion());
+        messageService.registerInternalPlaceholder("online_players", (Player player, String arg) -> String.valueOf(plugin.getServer().getOnlinePlayers().size()));
+        messageService.registerInternalPlaceholder("max_players", (Player player, String arg) -> String.valueOf(plugin.getServer().getMaxPlayers()));
         
         // 变量统计
-        messageService.registerInternalPlaceholder("total_variables", (player, args) -> 
+        messageService.registerInternalPlaceholder("total_variables", (Player player, String arg) -> 
                 String.valueOf(plugin.getVariablesManager().getAllVariableKeys().size()));
-        messageService.registerInternalPlaceholder("database_type", (player, args) -> 
+        messageService.registerInternalPlaceholder("database_type", (Player player, String arg) -> 
                 plugin.getDatabase().getDatabaseType().toUpperCase());
-        messageService.registerInternalPlaceholder("database_status", (player, args) -> 
+        messageService.registerInternalPlaceholder("database_status", (Player player, String arg) -> 
                 plugin.getDatabase().isConnectionValid() ? "正常" : "异常");
         
         // 时间信息
-        messageService.registerInternalPlaceholder("current_time", (player, args) ->
+        messageService.registerInternalPlaceholder("current_time", (Player player, String arg) ->
                 String.valueOf(System.currentTimeMillis()));
-        messageService.registerInternalPlaceholder("formatted_time", (player, args) ->
+        messageService.registerInternalPlaceholder("formatted_time", (Player player, String arg) ->
                 LocalDateTime.now().format(FORMATTER));
         
         logger.debug("已注册所有内部占位符");
