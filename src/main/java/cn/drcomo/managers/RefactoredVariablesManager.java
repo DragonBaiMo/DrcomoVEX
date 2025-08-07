@@ -262,17 +262,21 @@ public class RefactoredVariablesManager {
                 if (processedValue == null) {
                     return VariableResult.failure("值格式错误或超出约束: " + value, "SET", key, playerName);
                 }
+                String limitedValue = applyLimitations(variable, processedValue);
+                if (limitedValue == null) {
+                    return VariableResult.failure("值不满足限制: " + processedValue, "SET", key, playerName);
+                }
 
                 if (isFormulaVariable(variable)) {
                     // 计算相对于基础公式的增量
-                    String increment = calculateIncrementForSet(variable, processedValue, player);
+                    String increment = calculateIncrementForSet(variable, limitedValue, player);
                     updateMemoryAndInvalidate(player, variable, increment);
-                    logger.debug("设置公式变量: " + key + " 增量= " + increment + " 最终值= " + processedValue + " (异步持久化中)");
+                    logger.debug("设置公式变量: " + key + " 增量= " + increment + " 最终值= " + limitedValue + " (异步持久化中)");
                 } else {
-                    updateMemoryAndInvalidate(player, variable, processedValue);
-                    logger.debug("设置变量: " + key + " = " + processedValue + " (异步持久化中)");
+                    updateMemoryAndInvalidate(player, variable, limitedValue);
+                    logger.debug("设置变量: " + key + " = " + limitedValue + " (异步持久化中)");
                 }
-                return VariableResult.success(processedValue, "SET", key, playerName);
+                return VariableResult.success(limitedValue, "SET", key, playerName);
             } catch (Exception e) {
                 logger.error("设置变量失败: " + key, e);
                 return VariableResult.fromException(e, "SET", key, playerName);
@@ -304,20 +308,29 @@ public class RefactoredVariablesManager {
                     String currentIncrement = Optional.ofNullable(getMemoryValue(player, variable))
                             .map(VariableValue::getValue).orElse("0");
                     newValue = calculateFormulaIncrement(variable.getValueType(), currentIncrement, resolvedAdd, true);
-                    
+
                     // 计算最终显示值：基础公式值 + 新增量
                     String baseValue = resolveExpression(variable.getInitial(), player, variable);
                     finalDisplayValue = addFormulaIncrement(baseValue, newValue, variable.getValueType());
+                    finalDisplayValue = applyLimitations(variable, finalDisplayValue);
+                    if (finalDisplayValue == null) {
+                        return VariableResult.failure("加法操作结果不满足限制", "ADD", key, playerName);
+                    }
+                    newValue = calculateIncrementForSet(variable, finalDisplayValue, player);
                 } else {
                     // 普通变量加法
                     String resolvedAdd = resolveExpression(addValue, player, variable);
                     newValue = calculateAddition(variable.getValueType(), currentValue, resolvedAdd);
+                    if (newValue == null) {
+                        return VariableResult.failure("加法操作失败或超出约束", "ADD", key, playerName);
+                    }
+                    newValue = applyLimitations(variable, newValue);
+                    if (newValue == null) {
+                        return VariableResult.failure("加法结果不满足限制", "ADD", key, playerName);
+                    }
                     finalDisplayValue = newValue;
                 }
-                
-                if (newValue == null) {
-                    return VariableResult.failure("加法操作失败或超出约束", "ADD", key, playerName);
-                }
+
                 updateMemoryAndInvalidate(player, variable, newValue);
                 logger.debug("加法操作: " + key + " = " + finalDisplayValue + " (当前: " + currentValue + " + 增加: " + addValue + ")");
                 return VariableResult.success(finalDisplayValue, "ADD", key, playerName);
@@ -352,18 +365,27 @@ public class RefactoredVariablesManager {
                             variable.getValueType(),
                             Optional.ofNullable(getMemoryValue(player, variable)).map(VariableValue::getValue).orElse("0"),
                             removeValue, false);
-                    
+
                     // 计算最终显示值：基础公式值 + 新增量
                     String baseValue = resolveExpression(variable.getInitial(), player, variable);
                     finalDisplayValue = addFormulaIncrement(baseValue, newValue, variable.getValueType());
+                    finalDisplayValue = applyLimitations(variable, finalDisplayValue);
+                    if (finalDisplayValue == null) {
+                        return VariableResult.failure("删除操作结果不满足限制", "REMOVE", key, playerName);
+                    }
+                    newValue = calculateIncrementForSet(variable, finalDisplayValue, player);
                 } else {
                     newValue = calculateRemoval(variable.getValueType(), currentValue, removeValue);
+                    if (newValue == null) {
+                        return VariableResult.failure("删除操作失败", "REMOVE", key, playerName);
+                    }
+                    newValue = applyLimitations(variable, newValue);
+                    if (newValue == null) {
+                        return VariableResult.failure("删除结果不满足限制", "REMOVE", key, playerName);
+                    }
                     finalDisplayValue = newValue;
                 }
-                
-                if (newValue == null) {
-                    return VariableResult.failure("删除操作失败", "REMOVE", key, playerName);
-                }
+
                 updateMemoryAndInvalidate(player, variable, newValue);
                 logger.debug("删除操作: " + key + " = " + finalDisplayValue + " (删除: " + removeValue + ")");
                 return VariableResult.success(finalDisplayValue, "REMOVE", key, playerName);
@@ -776,6 +798,101 @@ public class RefactoredVariablesManager {
             }
         }
         return true;
+    }
+
+    /**
+     * 根据变量限制对值进行最终约束处理
+     * @param variable 变量定义
+     * @param value 原始值
+     * @return 调整后的值；若不满足最小限制则返回 null
+     */
+    private String applyLimitations(Variable variable, String value) {
+        if (value == null || variable == null) {
+            return value;
+        }
+        Limitations limitations = variable.getLimitations();
+        if (limitations == null) {
+            return value;
+        }
+        ValueType type = variable.getValueType();
+        if (type == null) {
+            type = inferTypeFromValue(value);
+        }
+
+        switch (type) {
+            case INT: {
+                long val = parseIntOrDefault(value, 0);
+                if (limitations.getMinValue() != null) {
+                    try {
+                        long min = Long.parseLong(limitations.getMinValue());
+                        if (val < min) val = min;
+                    } catch (NumberFormatException ignored) {}
+                }
+                if (limitations.getMaxValue() != null) {
+                    try {
+                        long max = Long.parseLong(limitations.getMaxValue());
+                        if (val > max) val = max;
+                    } catch (NumberFormatException ignored) {}
+                }
+                return String.valueOf(val);
+            }
+            case DOUBLE: {
+                double val = parseDoubleOrDefault(value, 0);
+                if (limitations.getMinValue() != null) {
+                    try {
+                        double min = Double.parseDouble(limitations.getMinValue());
+                        if (val < min) val = min;
+                    } catch (NumberFormatException ignored) {}
+                }
+                if (limitations.getMaxValue() != null) {
+                    try {
+                        double max = Double.parseDouble(limitations.getMaxValue());
+                        if (val > max) val = max;
+                    } catch (NumberFormatException ignored) {}
+                }
+                return String.valueOf(val);
+            }
+            case STRING: {
+                Integer minLen = limitations.getMinLength();
+                Integer maxLen = limitations.getMaxLength();
+                if (minLen == null && limitations.getMinValue() != null) {
+                    try { minLen = Integer.parseInt(limitations.getMinValue()); } catch (NumberFormatException ignored) {}
+                }
+                if (maxLen == null && limitations.getMaxValue() != null) {
+                    try { maxLen = Integer.parseInt(limitations.getMaxValue()); } catch (NumberFormatException ignored) {}
+                }
+                if (maxLen != null && value.length() > maxLen) {
+                    value = value.substring(0, maxLen);
+                }
+                if (minLen != null && value.length() < minLen) {
+                    return null;
+                }
+                return value;
+            }
+            case LIST: {
+                List<String> items = new ArrayList<>();
+                if (value != null && !value.trim().isEmpty()) {
+                    items = new ArrayList<>(Arrays.asList(value.split(",")));
+                }
+                Integer minLen = limitations.getMinLength();
+                Integer maxLen = limitations.getMaxLength();
+                if (minLen == null && limitations.getMinValue() != null) {
+                    try { minLen = Integer.parseInt(limitations.getMinValue()); } catch (NumberFormatException ignored) {}
+                }
+                if (maxLen == null && limitations.getMaxValue() != null) {
+                    try { maxLen = Integer.parseInt(limitations.getMaxValue()); } catch (NumberFormatException ignored) {}
+                }
+                if (maxLen != null && items.size() > maxLen) {
+                    items = new ArrayList<>(items.subList(0, maxLen));
+                }
+                if (minLen != null && items.size() < minLen) {
+                    return null;
+                }
+                return String.join(",", items);
+            }
+            default:
+                return value;
+        }
     }
 
     /** 判断变量是否为公式变量 */
