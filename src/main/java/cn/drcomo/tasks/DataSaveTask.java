@@ -70,22 +70,23 @@ public class DataSaveTask {
             logger.info("数据自动保存任务已停止");
         }
 
-        // 关闭时必须同步等待数据保存完成，防止数据丢失
+        // 关闭时尝试异步保存数据并记录结果
         logger.info("关闭前执行最终数据保存...");
-        try {
-            long startTime = System.currentTimeMillis();
-            
-            // 关闭时强制刷新数据库，确保数据真实写入磁盘
-            variablesManager.saveAllData(true).get(30, TimeUnit.SECONDS);
-            
-            long duration = System.currentTimeMillis() - startTime;
-            logger.info("关闭前数据保存完成，耗时: " + duration + "ms");
-            
-        } catch (TimeoutException e) {
-            logger.error("关闭前数据保存超时！可能存在数据丢失风险", e);
-        } catch (Exception e) {
-            logger.error("关闭前数据保存失败！", e);
-        }
+        long startTime = System.currentTimeMillis();
+        variablesManager.saveAllData(true)
+                .orTimeout(30, TimeUnit.SECONDS)
+                .whenCompleteAsync((res, err) -> {
+                    if (err != null) {
+                        if (err instanceof TimeoutException || err.getCause() instanceof TimeoutException) {
+                            logger.error("关闭前数据保存超时！可能存在数据丢失风险", err);
+                        } else {
+                            logger.error("关闭前数据保存失败！", err);
+                        }
+                    } else {
+                        long duration = System.currentTimeMillis() - startTime;
+                        logger.info("关闭前数据保存完成，耗时: " + duration + "ms");
+                    }
+                }, plugin.getAsyncTaskManager().getExecutor());
     }
     
     /**

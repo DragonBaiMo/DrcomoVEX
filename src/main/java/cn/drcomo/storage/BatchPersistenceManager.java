@@ -120,87 +120,97 @@ public class BatchPersistenceManager {
         if (scheduledPersistenceTask != null) {
             scheduledPersistenceTask.cancel(false);
         }
-        try {
-            flushAllDirtyData().get(30, TimeUnit.SECONDS);
-        } catch (Exception e) {
-            logger.error("关闭时持久化数据失败", e);
-        }
-        scheduler.shutdown();
-        persistenceExecutor.shutdown();
-        try {
-            if (!persistenceExecutor.awaitTermination(10, TimeUnit.SECONDS)) {
-                persistenceExecutor.shutdownNow();
-            }
-        } catch (InterruptedException e) {
-            persistenceExecutor.shutdownNow();
-            Thread.currentThread().interrupt();
-        }
-        logger.info("批量持久化管理器已关闭");
+        flushAllDirtyData()
+                .orTimeout(30, TimeUnit.SECONDS)
+                .whenCompleteAsync((res, err) -> {
+                    if (err != null) {
+                        logger.error("关闭时持久化数据失败", err);
+                    }
+                    scheduler.shutdown();
+                    persistenceExecutor.shutdown();
+                    try {
+                        if (!persistenceExecutor.awaitTermination(10, TimeUnit.SECONDS)) {
+                            persistenceExecutor.shutdownNow();
+                        }
+                    } catch (InterruptedException e) {
+                        persistenceExecutor.shutdownNow();
+                        Thread.currentThread().interrupt();
+                    }
+                    logger.info("批量持久化管理器已关闭");
+                }, asyncTaskManager.getExecutor());
     }
 
     /**
      * 批量持久化所有脏数据
      */
     public CompletableFuture<Void> flushAllDirtyData() {
-        return CompletableFuture.runAsync(() -> {
-            try {
-                Map<String, DirtyFlag> allDirty = memoryStorage.getAllDirtyData();
-                if (allDirty.isEmpty()) return;
-                logger.debug("开始批量持久化，脏数据数量: " + allDirty.size());
-                List<PersistenceTask> tasks = collectPersistenceTasks(allDirty);
-                executeBatchPersistence(tasks);
-                lastPersistenceTime.set(System.currentTimeMillis());
-            } catch (Exception e) {
-                logger.error("批量持久化所有数据失败", e);
-                failedPersistenceOperations.incrementAndGet();
-                throw new RuntimeException("批量持久化失败", e);
+        return CompletableFuture.supplyAsync(() -> {
+            Map<String, DirtyFlag> allDirty = memoryStorage.getAllDirtyData();
+            if (allDirty.isEmpty()) {
+                return CompletableFuture.<Void>completedFuture(null);
             }
-        }, persistenceExecutor);
+            logger.debug("开始批量持久化，脏数据数量: " + allDirty.size());
+            List<PersistenceTask> tasks = collectPersistenceTasks(allDirty);
+            return executeBatchPersistence(tasks);
+        }, persistenceExecutor).thenCompose(f -> f)
+                .whenComplete((v, err) -> {
+                    if (err == null) {
+                        lastPersistenceTime.set(System.currentTimeMillis());
+                    } else {
+                        logger.error("批量持久化所有数据失败", err);
+                        failedPersistenceOperations.incrementAndGet();
+                    }
+                });
     }
 
     /**
      * 玩家退出时立即持久化该玩家数据
      */
     public CompletableFuture<Void> flushPlayerData(UUID playerId) {
-        return CompletableFuture.runAsync(() -> {
-            try {
-                Map<String, DirtyFlag> dirty = memoryStorage.getPlayerDirtyData(playerId);
-                if (dirty.isEmpty()) return;
-                logger.debug("玩家退出，立即持久化数据: " + playerId + "，脏数据数量: " + dirty.size());
-                List<PersistenceTask> tasks = collectPersistenceTasks(dirty);
-                executeBatchPersistence(tasks);
-                memoryStorage.cleanupPlayerData(playerId, false);
-                logger.debug("玩家数据持久化完成: " + playerId);
-            } catch (Exception e) {
-                logger.error("持久化玩家数据失败: " + playerId, e);
-                failedPersistenceOperations.incrementAndGet();
-                throw new RuntimeException("持久化玩家数据失败", e);
+        return CompletableFuture.supplyAsync(() -> {
+            Map<String, DirtyFlag> dirty = memoryStorage.getPlayerDirtyData(playerId);
+            if (dirty.isEmpty()) {
+                return CompletableFuture.<Void>completedFuture(null);
             }
-        }, persistenceExecutor);
+            logger.debug("玩家退出，立即持久化数据: " + playerId + "，脏数据数量: " + dirty.size());
+            List<PersistenceTask> tasks = collectPersistenceTasks(dirty);
+            return executeBatchPersistence(tasks)
+                    .whenComplete((v, e) -> memoryStorage.cleanupPlayerData(playerId, false));
+        }, persistenceExecutor).thenCompose(f -> f)
+                .whenComplete((v, err) -> {
+                    if (err == null) {
+                        logger.debug("玩家数据持久化完成: " + playerId);
+                    } else {
+                        logger.error("持久化玩家数据失败: " + playerId, err);
+                        failedPersistenceOperations.incrementAndGet();
+                    }
+                });
     }
 
     /**
      * 内存压力触发的持久化
      */
     public CompletableFuture<Void> flushOnMemoryPressure() {
-        return CompletableFuture.runAsync(() -> {
-            try {
-                VariableMemoryStorage.MemoryStats stats = memoryStorage.getMemoryStats();
-                if (stats.getMemoryUsagePercent() < memoryPressureThreshold) return;
-                logger.warn("内存压力触发持久化，当前使用率: " +
-                        String.format("%.1f%%", stats.getMemoryUsagePercent()));
-                List<PersistenceTask> tasks = collectPersistenceTasks(memoryStorage.getAllDirtyData());
-                // 冷数据优先：按照等待时间降序
-                tasks.sort(Comparator.comparingLong(
-                        (PersistenceTask t) -> t.getDirtyFlag().getPendingDuration()).reversed());
-                executeBatchPersistence(tasks);
-                logger.info("内存压力持久化完成");
-            } catch (Exception e) {
-                logger.error("内存压力持久化失败", e);
-                failedPersistenceOperations.incrementAndGet();
-                throw new RuntimeException("内存压力持久化失败", e);
+        return CompletableFuture.supplyAsync(() -> {
+            VariableMemoryStorage.MemoryStats stats = memoryStorage.getMemoryStats();
+            if (stats.getMemoryUsagePercent() < memoryPressureThreshold) {
+                return CompletableFuture.<Void>completedFuture(null);
             }
-        }, persistenceExecutor);
+            logger.warn("内存压力触发持久化，当前使用率: " +
+                    String.format("%.1f%%", stats.getMemoryUsagePercent()));
+            List<PersistenceTask> tasks = collectPersistenceTasks(memoryStorage.getAllDirtyData());
+            tasks.sort(Comparator.comparingLong(
+                    (PersistenceTask t) -> t.getDirtyFlag().getPendingDuration()).reversed());
+            return executeBatchPersistence(tasks);
+        }, persistenceExecutor).thenCompose(f -> f)
+                .whenComplete((v, err) -> {
+                    if (err == null) {
+                        logger.info("内存压力持久化完成");
+                    } else {
+                        logger.error("内存压力持久化失败", err);
+                        failedPersistenceOperations.incrementAndGet();
+                    }
+                });
     }
 
     /**
@@ -255,7 +265,7 @@ public class BatchPersistenceManager {
                     batch.add(next);
                 }
                 try {
-                    executeBatchPersistence(batch);
+                    executeBatchPersistence(batch).join();
                 } catch (Exception e) {
                     logger.error("工作线程执行批量持久化失败", e);
                 }
@@ -288,25 +298,24 @@ public class BatchPersistenceManager {
     /**
      * 统一执行批量持久化
      */
-    private void executeBatchPersistence(List<PersistenceTask> tasks) {
-        if (tasks.isEmpty()) return;
+    private CompletableFuture<Void> executeBatchPersistence(List<PersistenceTask> tasks) {
+        if (tasks.isEmpty()) {
+            return CompletableFuture.completedFuture(null);
+        }
         totalPersistenceOperations.incrementAndGet();
-        // 分组
         Map<Class<? extends PersistenceTask>, List<PersistenceTask>> byType =
                 tasks.stream().collect(Collectors.groupingBy(PersistenceTask::getClass));
         if ("sqlite".equals(database.getDatabaseType())) {
-            try {
-                executeSQLiteBatchPersistence(byType, tasks);
-            } catch (RuntimeException e) {
-                handleRetriesOnFailure(tasks, e);
-                throw e;
-            }
+            return executeSQLiteBatchPersistence(byType, tasks);
         } else {
             try {
                 executeMySQLBatchPersistence(byType, tasks);
+                return CompletableFuture.completedFuture(null);
             } catch (RuntimeException e) {
                 handleRetriesOnFailure(tasks, e);
-                throw e;
+                CompletableFuture<Void> failed = new CompletableFuture<>();
+                failed.completeExceptionally(e);
+                return failed;
             }
         }
     }
@@ -314,7 +323,7 @@ public class BatchPersistenceManager {
     /**
      * 执行 SQLite 批量持久化（异步方式）
      */
-    private void executeSQLiteBatchPersistence(
+    private CompletableFuture<Void> executeSQLiteBatchPersistence(
             Map<Class<? extends PersistenceTask>, List<PersistenceTask>> byType,
             List<PersistenceTask> allTasks) {
 
@@ -359,27 +368,17 @@ public class BatchPersistenceManager {
                 futures);
 
         totalPersistedVariables.addAndGet(futures.size());
-        // 异步等待完成并清除标记
-        CompletableFuture<Void> allComplete = CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]))
-            .orTimeout(15, TimeUnit.SECONDS)  // 减少单次操作超时时间
-            .thenRun(() -> {
-                clearDirtyFlags(allTasks);
-                logger.debug("SQLite 批量持久化完成，处理任务数: " + allTasks.size());
-            })
-            .exceptionally(throwable -> {
-                logger.error("SQLite 批量持久化执行失败", throwable);
-                // 发生异常时，部分数据可能已保存，但为安全起见不清除脏标记
-                handleRetriesOnFailure(allTasks, new RuntimeException("批量持久化异常", throwable));
-                return null;
-            });
-        
-        // 同步等待 - 但时间更短，避免长时间阻塞
-        try {
-            allComplete.get(20, TimeUnit.SECONDS);
-        } catch (Exception e) {
-            logger.error("SQLite 批量持久化最终等待失败", e);
-            throw new RuntimeException("SQLite 批量持久化最终等待失败", e);
-        }
+        return CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]))
+                .orTimeout(15, TimeUnit.SECONDS)
+                .whenCompleteAsync((r, err) -> {
+                    if (err != null) {
+                        logger.error("SQLite 批量持久化执行失败", err);
+                        handleRetriesOnFailure(allTasks, new RuntimeException("批量持久化异常", err));
+                    } else {
+                        clearDirtyFlags(allTasks);
+                        logger.debug("SQLite 批量持久化完成，处理任务数: " + allTasks.size());
+                    }
+                }, asyncTaskManager.getExecutor());
     }
 
     /**
