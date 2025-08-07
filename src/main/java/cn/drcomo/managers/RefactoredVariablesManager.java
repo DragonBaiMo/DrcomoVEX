@@ -516,6 +516,35 @@ public class RefactoredVariablesManager {
         }
     }
 
+    /**
+     * 从内存与多级缓存中删除变量
+     *
+     * @param key 变量键
+     */
+    public void removeVariableFromMemoryAndCache(String key) {
+        try {
+            Variable variable = getVariableDefinition(key);
+            if (variable == null) {
+                logger.warn("变量不存在: " + key);
+                return;
+            }
+
+            if (variable.isGlobal()) {
+                memoryStorage.removeServerVariable(key);
+                cacheManager.invalidateCache(null, key);
+            } else if (variable.isPlayerScoped()) {
+                for (OfflinePlayer p : Bukkit.getOnlinePlayers()) {
+                    memoryStorage.removePlayerVariable(p.getUniqueId(), key);
+                    cacheManager.invalidateCache(p, key);
+                }
+            }
+
+            logger.debug("已从内存与缓存删除变量: " + key);
+        } catch (Exception e) {
+            logger.error("删除变量缓存失败: " + key, e);
+        }
+    }
+
     // ======================== 私有辅助方法 ========================
 
     /** 获取玩家名，若为空则返回 "SERVER" */
