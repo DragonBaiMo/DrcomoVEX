@@ -147,19 +147,19 @@ public class ServerVariablesAPI {
         // 通用参数非空验证函数
         java.util.function.Function<String, Boolean> isBlank = s -> s == null || s.trim().isEmpty();
 
-        // =============== %drcomovex_var_<key>% ===============
+        // =============== %drcomovex_[var]_[变量名]% ===============
         // 返回变量的默认值(initial)
         placeholderUtil.register("var", (player, rawArgs) ->
                 processPlaceholder(placeholderUtil, "drcomovex_var", player, rawArgs,
                         (pl, key) -> getDefaultInitial(key)));
 
-        // ========= %drcomovex_global_var_<key>% =========
+        // ========= %drcomovex_[global_var]_[变量名]% =========
         // 强制以全局身份获取变量值
         placeholderUtil.register("global_var", (player, rawArgs) ->
                 processPlaceholder(placeholderUtil, "drcomovex_global_var", player, rawArgs,
                         (pl, key) -> fetchGlobalVariable(key)));
 
-        // ========= %drcomovex_player_var_<key>% =========
+        // ========= %drcomovex_[player_var]_[变量名]% =========
         // 强制以玩家身份获取变量值
         placeholderUtil.register("player_var", (player, rawArgs) ->
                 processPlaceholder(placeholderUtil, "drcomovex_player_var", player, rawArgs,
