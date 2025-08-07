@@ -1,7 +1,7 @@
 package cn.drcomo.storage;
 
 import cn.drcomo.corelib.util.DebugUtil;
-import org.bukkit.OfflinePlayer;
+import cn.drcomo.database.HikariConnection;
 
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
@@ -21,15 +21,19 @@ import java.util.stream.Collectors;
 public class VariableMemoryStorage {
     
     private final DebugUtil logger;
+    private final HikariConnection database;
     
     // 玩家变量存储: UUID -> 变量键 -> 变量值对象
     private final ConcurrentHashMap<UUID, ConcurrentHashMap<String, VariableValue>> playerVariables;
     
     // 服务器全局变量存储: 变量键 -> 变量值对象
     private final ConcurrentHashMap<String, VariableValue> serverVariables;
-    
+
     // 脏数据追踪器 - 记录需要持久化的数据
     private final ConcurrentHashMap<String, DirtyFlag> dirtyTracker;
+
+    // 玩家变量首次修改时间索引: 变量键 -> 最早首次修改时间
+    private final ConcurrentHashMap<String, Long> playerFirstModifiedIndex;
     
     // 内存使用监控
     private final AtomicLong memoryUsage = new AtomicLong(0);
@@ -47,20 +51,22 @@ public class VariableMemoryStorage {
     /**
      * 构造函数
      */
-    public VariableMemoryStorage(DebugUtil logger) {
-        this(logger, MAX_MEMORY_THRESHOLD);
+    public VariableMemoryStorage(DebugUtil logger, HikariConnection database) {
+        this(logger, database, MAX_MEMORY_THRESHOLD);
     }
-    
+
     /**
      * 构造函数（指定内存限制）
      */
-    public VariableMemoryStorage(DebugUtil logger, long maxMemoryThreshold) {
+    public VariableMemoryStorage(DebugUtil logger, HikariConnection database, long maxMemoryThreshold) {
         this.logger = logger;
+        this.database = database;
         this.maxMemoryThreshold = maxMemoryThreshold;
         this.playerVariables = new ConcurrentHashMap<>();
         this.serverVariables = new ConcurrentHashMap<>();
         this.dirtyTracker = new ConcurrentHashMap<>();
-        
+        this.playerFirstModifiedIndex = new ConcurrentHashMap<>();
+
         logger.info("内存存储系统初始化完成，最大内存限制: " + (maxMemoryThreshold / 1024 / 1024) + "MB");
     }
     
@@ -98,10 +104,12 @@ public class VariableMemoryStorage {
             ConcurrentHashMap<String, VariableValue> playerVars = playerVariables.computeIfAbsent(
                 playerId, k -> new ConcurrentHashMap<>());
             
+            VariableValue currentValue;
             VariableValue oldValue = playerVars.get(key);
             if (oldValue != null) {
                 // 更新现有值
                 oldValue.setValue(value);
+                currentValue = oldValue;
                 if (oldValue.isDirty()) {
                     trackDirtyData(buildPlayerKey(playerId, key), DirtyFlag.Type.PLAYER_VARIABLE);
                 }
@@ -111,16 +119,21 @@ public class VariableMemoryStorage {
                 VariableValue newValue = new VariableValue(value);
                 newValue.markDirty(); // 新创建的值需要持久化
                 playerVars.put(key, newValue);
-                
+                currentValue = newValue;
+
                 // 更新内存使用统计
                 updateMemoryUsage(newValue.getEstimatedMemoryUsage());
-                
+
                 // 追踪脏数据
                 trackDirtyData(buildPlayerKey(playerId, key), DirtyFlag.Type.PLAYER_VARIABLE);
-                
+
                 logger.debug("创建玩家变量: " + playerId + ":" + key + " = " + value);
             }
-            
+
+            // 更新首次修改索引
+            long first = currentValue.getFirstModifiedAt();
+            playerFirstModifiedIndex.compute(key, (k, v) -> v == null || first < v ? first : v);
+
             // 检查内存压力
             checkMemoryPressure();
             
@@ -143,6 +156,9 @@ public class VariableMemoryStorage {
 
             // 更新内存使用统计
             updateMemoryUsage(newValue.getEstimatedMemoryUsage());
+
+            // 更新首次修改索引
+            playerFirstModifiedIndex.compute(key, (k, v) -> v == null || firstModifiedAt < v ? firstModifiedAt : v);
         } finally {
             memoryLock.writeLock().unlock();
         }
@@ -173,28 +189,32 @@ public class VariableMemoryStorage {
     /**
      * 获取所有玩家中指定变量的最早首次修改时间
      *
+     * 优先从内存索引查询，若索引不存在则回退到数据库并缓存结果。
+     *
      * @param key 变量键
      * @return 最早首次修改时间，若不存在返回 null
      */
     public Long getPlayerFirstModifiedAt(String key) {
-        memoryLock.readLock().lock();
-        try {
-            long earliest = Long.MAX_VALUE;
-            boolean found = false;
-            for (ConcurrentHashMap<String, VariableValue> vars : playerVariables.values()) {
-                VariableValue vv = vars.get(key);
-                if (vv != null) {
-                    long first = vv.getFirstModifiedAt();
-                    if (first < earliest) {
-                        earliest = first;
-                    }
-                    found = true;
-                }
-            }
-            return found ? earliest : null;
-        } finally {
-            memoryLock.readLock().unlock();
+        // 先查索引
+        Long indexed = playerFirstModifiedIndex.get(key);
+        if (indexed != null) {
+            return indexed;
         }
+
+        // 索引缺失时回退到数据库
+        try {
+            String val = database
+                    .queryValueAsync("SELECT MIN(first_modified_at) FROM player_variables WHERE variable_key = ?", key)
+                    .join();
+            if (val != null) {
+                long first = Long.parseLong(val);
+                playerFirstModifiedIndex.putIfAbsent(key, first);
+                return first;
+            }
+        } catch (Exception e) {
+            logger.error("查询玩家变量首次修改时间失败: " + key, e);
+        }
+        return null;
     }
 
     /**

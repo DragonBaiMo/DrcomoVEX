@@ -96,7 +96,7 @@ public class RefactoredVariablesManager {
         this.database = database;
 
         // 初始化内存存储（256MB）
-        this.memoryStorage = new VariableMemoryStorage(logger, 256 * 1024 * 1024);
+        this.memoryStorage = new VariableMemoryStorage(logger, database, 256 * 1024 * 1024);
 
         // 初始化多级缓存
         CacheConfig cacheConfig = new CacheConfig()
@@ -202,6 +202,9 @@ public class RefactoredVariablesManager {
 
     /**
      * 获取变量的首次修改时间
+     *
+     * 玩家变量的查询由内存存储负责索引和数据库回退。
+     *
      * @param isGlobal 是否为全局变量
      * @param key      变量键
      * @return 首次修改时间，若不存在返回 null
@@ -211,19 +214,7 @@ public class RefactoredVariablesManager {
             VariableValue vv = memoryStorage.getServerVariable(key);
             return vv != null ? vv.getFirstModifiedAt() : null;
         }
-        Long first = memoryStorage.getPlayerFirstModifiedAt(key);
-        if (first != null) {
-            return first;
-        }
-        try {
-            String val = database
-                    .queryValueAsync("SELECT MIN(first_modified_at) FROM player_variables WHERE variable_key = ?", key)
-                    .join();
-            return val != null ? Long.parseLong(val) : null;
-        } catch (Exception e) {
-            logger.error("查询玩家变量首次修改时间失败: " + key, e);
-            return null;
-        }
+        return memoryStorage.getPlayerFirstModifiedAt(key);
     }
 
     // ======================== 公共 API：变量操作 ========================
