@@ -8,12 +8,12 @@ import com.github.benmanes.caffeine.cache.stats.CacheStats;
 import org.bukkit.OfflinePlayer;
 
 import java.time.Duration;
-import java.util.concurrent.atomic.AtomicLong;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.Map;
 import java.util.Set;
-import java.util.HashSet;
-import java.util.regex.Pattern;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * 多级缓存管理器
@@ -33,7 +33,10 @@ public class MultiLevelCacheManager {
     
     // L2缓存：解析后的表达式结果
     private final Cache<String, String> l2ExpressionCache;
-    
+
+    // L2缓存索引：记录玩家上下文与表达式键的关联
+    private final Map<String, Set<String>> l2Index = new ConcurrentHashMap<>();
+
     // L3缓存：最终计算结果
     private final Cache<String, CacheEntry> l3ResultCache;
     
@@ -144,6 +147,11 @@ public class MultiLevelCacheManager {
             if (expression != null && result != null && !containsPlaceholders(expression)) {
                 String expressionKey = buildExpressionKey(expression, player);
                 l2ExpressionCache.put(expressionKey, result);
+
+                String playerContext = player != null ? player.getUniqueId().toString() : "server";
+                l2Index.computeIfAbsent(playerContext, k -> ConcurrentHashMap.newKeySet())
+                        .add(expressionKey);
+
                 logger.debug("L2缓存表达式结果: " + expressionKey);
             } else if (containsPlaceholders(expression)) {
                 logger.debug("跳过L2缓存（包含PlaceholderAPI占位符）: " + expression);
@@ -158,16 +166,11 @@ public class MultiLevelCacheManager {
      */
     private void invalidateL2CacheForVariable(OfflinePlayer player, String key) {
         String playerContext = player != null ? player.getUniqueId().toString() : "server";
-        
-        // 清除直接相关的表达式缓存（更精确的匹配）
-        l2ExpressionCache.asMap().keySet().removeIf(cacheKey -> {
-            // 解析缓存键格式: "expr:hashCode:playerContext"
-            String[] parts = cacheKey.split(":", 3);
-            if (parts.length == 3 && "expr".equals(parts[0])) {
-                return playerContext.equals(parts[2]);
-            }
-            return false;
-        });
+
+        Set<String> keys = l2Index.remove(playerContext);
+        if (keys != null) {
+            keys.forEach(l2ExpressionCache::invalidate);
+        }
     }
     
     /**
@@ -324,6 +327,10 @@ public class MultiLevelCacheManager {
                 l2ExpressionCache.invalidateAll();
                 logger.debug("L2表达式缓存已清空");
             }
+
+            // 清空L2索引
+            l2Index.clear();
+            logger.debug("L2缓存索引已清空");
             
             if (l3ResultCache != null) {
                 l3ResultCache.invalidateAll();
