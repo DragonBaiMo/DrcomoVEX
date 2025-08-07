@@ -323,22 +323,24 @@ public class BatchPersistenceManager {
         submitAsyncOperations(byType.get(PlayerVariableUpdateTask.class),
                 task -> database.executeUpdateAsync(
                         "INSERT OR REPLACE INTO player_variables " +
-                                "(player_uuid, variable_key, value, created_at, updated_at) VALUES (?,?,?,?,?)",
+                                "(player_uuid, variable_key, value, created_at, updated_at, first_modified_at) VALUES (?,?,?,?,?,?)",
                         ((PlayerVariableUpdateTask) task).getPlayerId().toString(),
                         ((PlayerVariableUpdateTask) task).getVariableKey(),
                         ((PlayerVariableUpdateTask) task).getValue().getValue(),
-                        System.currentTimeMillis(),
-                        System.currentTimeMillis()),
+                        ((PlayerVariableUpdateTask) task).getValue().getCreatedAt(),
+                        ((PlayerVariableUpdateTask) task).getValue().getLastModified(),
+                        ((PlayerVariableUpdateTask) task).getValue().getFirstModifiedAt()),
                 futures);
         // 服务器更新
         submitAsyncOperations(byType.get(ServerVariableUpdateTask.class),
                 task -> database.executeUpdateAsync(
                         "INSERT OR REPLACE INTO server_variables " +
-                                "(variable_key, value, created_at, updated_at) VALUES (?,?,?,?)",
+                                "(variable_key, value, created_at, updated_at, first_modified_at) VALUES (?,?,?,?,?)",
                         ((ServerVariableUpdateTask) task).getVariableKey(),
                         ((ServerVariableUpdateTask) task).getValue().getValue(),
-                        System.currentTimeMillis(),
-                        System.currentTimeMillis()),
+                        ((ServerVariableUpdateTask) task).getValue().getCreatedAt(),
+                        ((ServerVariableUpdateTask) task).getValue().getLastModified(),
+                        ((ServerVariableUpdateTask) task).getValue().getFirstModifiedAt()),
                 futures);
         // 玩家删除
         submitAsyncOperations(byType.get(PlayerVariableDeleteTask.class),
@@ -496,16 +498,17 @@ public class BatchPersistenceManager {
 
     private void batchUpdatePlayerVariables(Connection conn, List<PersistenceTask> tasks) throws SQLException {
         String sql = "INSERT OR REPLACE INTO player_variables " +
-                "(player_uuid, variable_key, value, created_at, updated_at) VALUES (?,?,?,?,?)";
+                "(player_uuid, variable_key, value, created_at, updated_at, first_modified_at) VALUES (?,?,?,?,?,?)";
         try (PreparedStatement stmt = conn.prepareStatement(sql)) {
-            long now = System.currentTimeMillis();
             for (PersistenceTask t : tasks) {
                 PlayerVariableUpdateTask u = (PlayerVariableUpdateTask) t;
+                VariableValue v = u.getValue();
                 stmt.setString(1, u.getPlayerId().toString());
                 stmt.setString(2, u.getVariableKey());
-                stmt.setString(3, u.getValue().getValue());
-                stmt.setLong(4, now);
-                stmt.setLong(5, now);
+                stmt.setString(3, v.getValue());
+                stmt.setLong(4, v.getCreatedAt());
+                stmt.setLong(5, v.getLastModified());
+                stmt.setLong(6, v.getFirstModifiedAt());
                 stmt.addBatch();
             }
             stmt.executeBatch();
@@ -514,15 +517,16 @@ public class BatchPersistenceManager {
 
     private void batchUpdateServerVariables(Connection conn, List<PersistenceTask> tasks) throws SQLException {
         String sql = "INSERT OR REPLACE INTO server_variables " +
-                "(variable_key, value, created_at, updated_at) VALUES (?,?,?,?)";
+                "(variable_key, value, created_at, updated_at, first_modified_at) VALUES (?,?,?,?,?)";
         try (PreparedStatement stmt = conn.prepareStatement(sql)) {
-            long now = System.currentTimeMillis();
             for (PersistenceTask t : tasks) {
                 ServerVariableUpdateTask u = (ServerVariableUpdateTask) t;
+                VariableValue v = u.getValue();
                 stmt.setString(1, u.getVariableKey());
-                stmt.setString(2, u.getValue().getValue());
-                stmt.setLong(3, now);
-                stmt.setLong(4, now);
+                stmt.setString(2, v.getValue());
+                stmt.setLong(3, v.getCreatedAt());
+                stmt.setLong(4, v.getLastModified());
+                stmt.setLong(5, v.getFirstModifiedAt());
                 stmt.addBatch();
             }
             stmt.executeBatch();

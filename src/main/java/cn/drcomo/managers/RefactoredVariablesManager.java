@@ -113,7 +113,6 @@ public class RefactoredVariablesManager {
                 loadAllVariableDefinitions();
                 validateVariableDefinitions();
                 persistenceManager.start();
-                preloadDatabaseData();
                 logger.info("变量管理系统初始化完成！已加载 " + variableRegistry.size() + " 个变量定义");
             } catch (Exception e) {
                 logger.error("变量管理系统初始化失败！", e);
@@ -208,14 +207,9 @@ public class RefactoredVariablesManager {
             });
         }
         
-        return saveTask.thenRun(() -> {
-                logger.info("所有变量数据保存完成！");
-                try {
-                    cacheManager.clearAllCaches();
-                } catch (Exception e) {
-                    logger.debug("缓存清理跳过: " + e.getMessage());
-                }
-            })
+        return saveTask.thenRun(() ->
+                logger.info("所有变量数据保存完成！")
+            )
             .exceptionally(throwable -> {
                 if (throwable.getCause() instanceof TimeoutException) {
                     logger.warn("持久化数据超时，部分数据可能未保存");
@@ -224,6 +218,34 @@ public class RefactoredVariablesManager {
                 }
                 throw new RuntimeException("保存变量数据失败", throwable);
             });
+    }
+
+    /**
+     * 获取变量的首次修改时间
+     * @param isGlobal 是否为全局变量
+     * @param key      变量键
+     * @return 首次修改时间，若不存在返回 null
+     */
+    public Long getFirstModifiedAt(boolean isGlobal, String key) {
+        if (isGlobal) {
+            VariableValue vv = memoryStorage.getServerVariable(key);
+            return vv != null ? vv.getFirstModifiedAt() : null;
+        }
+        // 先从内存中获取所有玩家的最早首次修改时间
+        Long first = memoryStorage.getPlayerFirstModifiedAt(key);
+        if (first != null) {
+            return first;
+        }
+        // 内存未找到则查询数据库
+        try {
+            String val = database
+                    .queryValueAsync("SELECT MIN(first_modified_at) FROM player_variables WHERE variable_key = ?", key)
+                    .join();
+            return val != null ? Long.parseLong(val) : null;
+        } catch (Exception e) {
+            logger.error("查询玩家变量首次修改时间失败: " + key, e);
+            return null;
+        }
     }
 
     // ======================== 公共 API 方法 ========================
@@ -1159,94 +1181,126 @@ public class RefactoredVariablesManager {
         currentValidatingVariable.remove();
     }
 
-    // ======================== 数据预加载 ========================
+    // ======================== 数据加载 ========================
 
-    /** 预加载数据库中的变量数据 */
-    private void preloadDatabaseData() {
-        logger.info("开始预加载数据库数据到内存...");
+    /** 加载数据库中的变量数据 */
+    public void loadPersistedData() {
+        logger.info("开始加载数据库持久化数据到内存...");
         try {
-            CompletableFuture<Void> sv = preloadServerVariables();
-            CompletableFuture<Void> pv = preloadOnlinePlayerVariables();
+            CompletableFuture<Void> sv = loadServerVariables();
+            CompletableFuture<Void> pv = loadOnlinePlayerVariables();
             CompletableFuture.allOf(sv, pv).join();
             VariableMemoryStorage.MemoryStats stats = memoryStorage.getMemoryStats();
-            logger.info("预加载完成: " + stats);
+            logger.info("加载完成: " + stats);
         } catch (Exception e) {
-            logger.error("预加载数据库数据失败", e);
+            logger.error("加载数据库数据失败", e);
         }
     }
 
-    /** 预加载服务器变量 */
-    private CompletableFuture<Void> preloadServerVariables() {
+    /** 加载服务器变量 */
+    private CompletableFuture<Void> loadServerVariables() {
         return CompletableFuture.runAsync(() -> {
             try {
                 List<CompletableFuture<Void>> futures = new ArrayList<>();
                 for (String key : getGlobalVariableKeys()) {
-                    CompletableFuture<Void> future = database
-                            .queryValueAsync("SELECT value FROM server_variables WHERE variable_key = ?", key)
-                            .thenAccept(val -> {
+                    CompletableFuture<String> valueFuture = database
+                            .queryValueAsync("SELECT value FROM server_variables WHERE variable_key = ?", key);
+                    CompletableFuture<String> updatedFuture = database
+                            .queryValueAsync("SELECT updated_at FROM server_variables WHERE variable_key = ?", key);
+                    CompletableFuture<String> firstFuture = database
+                            .queryValueAsync("SELECT first_modified_at FROM server_variables WHERE variable_key = ?", key);
+                    CompletableFuture<Void> future = CompletableFuture
+                            .allOf(valueFuture, updatedFuture, firstFuture)
+                            .thenRun(() -> {
+                                String val = valueFuture.join();
                                 if (val != null) {
-                                    memoryStorage.setServerVariable(key, val);
-                                    memoryStorage.clearDirtyFlag("server:" + key);
+                                    long updatedAt = parseLong(updatedFuture.join());
+                                    long firstAt = parseLong(firstFuture.join());
+                                    memoryStorage.loadServerVariable(key, val, updatedAt, firstAt);
                                 }
                             })
                             .exceptionally(ex -> {
-                                logger.error("预加载服务器变量失败: " + key, ex);
+                                logger.error("加载服务器变量失败: " + key, ex);
                                 return null;
                             });
                     futures.add(future);
                 }
                 CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
-                logger.debug("服务器变量预加载完成，数量: " + getGlobalVariableKeys().size());
+                logger.debug("服务器变量加载完成，数量: " + getGlobalVariableKeys().size());
             } catch (Exception e) {
-                logger.error("预加载服务器变量失败", e);
+                logger.error("加载服务器变量失败", e);
             }
         }, asyncTaskManager.getExecutor());
     }
 
-    /** 预加载在线玩家变量 */
-    private CompletableFuture<Void> preloadOnlinePlayerVariables() {
+    /** 加载在线玩家变量 */
+    private CompletableFuture<Void> loadOnlinePlayerVariables() {
         return CompletableFuture.runAsync(() -> {
             try {
                 Collection<? extends OfflinePlayer> players = Bukkit.getOnlinePlayers();
                 List<CompletableFuture<Void>> futures = new ArrayList<>();
                 for (OfflinePlayer p : players) {
-                    futures.add(preloadPlayerVariables(p));
+                    futures.add(loadPlayerVariables(p));
                 }
                 CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
-                logger.debug("在线玩家变量预加载完成，玩家数: " + players.size());
+                logger.debug("在线玩家变量加载完成，玩家数: " + players.size());
             } catch (Exception e) {
-                logger.error("预加载在线玩家变量失败", e);
+                logger.error("加载在线玩家变量失败", e);
             }
         }, asyncTaskManager.getExecutor());
     }
 
-    /** 预加载单个玩家变量 */
-    private CompletableFuture<Void> preloadPlayerVariables(OfflinePlayer player) {
+    /** 加载单个玩家变量 */
+    private CompletableFuture<Void> loadPlayerVariables(OfflinePlayer player) {
         return CompletableFuture.runAsync(() -> {
             try {
                 List<CompletableFuture<Void>> futures = new ArrayList<>();
                 for (String key : getPlayerVariableKeys()) {
-                    CompletableFuture<Void> future = database
+                    UUID pid = player.getUniqueId();
+                    CompletableFuture<String> valueFuture = database
                             .queryValueAsync(
                                     "SELECT value FROM player_variables WHERE player_uuid = ? AND variable_key = ?",
-                                    player.getUniqueId().toString(), key)
-                            .thenAccept(val -> {
+                                    pid.toString(), key);
+                    CompletableFuture<String> updatedFuture = database
+                            .queryValueAsync(
+                                    "SELECT updated_at FROM player_variables WHERE player_uuid = ? AND variable_key = ?",
+                                    pid.toString(), key);
+                    CompletableFuture<String> firstFuture = database
+                            .queryValueAsync(
+                                    "SELECT first_modified_at FROM player_variables WHERE player_uuid = ? AND variable_key = ?",
+                                    pid.toString(), key);
+                    CompletableFuture<Void> future = CompletableFuture
+                            .allOf(valueFuture, updatedFuture, firstFuture)
+                            .thenRun(() -> {
+                                String val = valueFuture.join();
                                 if (val != null) {
-                                    memoryStorage.setPlayerVariable(player.getUniqueId(), key, val);
-                                    memoryStorage.clearDirtyFlag("player:" + player.getUniqueId() + ":" + key);
+                                    long updatedAt = parseLong(updatedFuture.join());
+                                    long firstAt = parseLong(firstFuture.join());
+                                    memoryStorage.loadPlayerVariable(pid, key, val, updatedAt, firstAt);
                                 }
                             })
                             .exceptionally(ex -> {
-                                logger.error("预加载玩家变量失败: " + player.getUniqueId() + " - " + key, ex);
+                                logger.error("加载玩家变量失败: " + pid + " - " + key, ex);
                                 return null;
                             });
                     futures.add(future);
                 }
                 CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
             } catch (Exception e) {
-                logger.error("预加载玩家变量失败: " + player.getUniqueId(), e);
+                logger.error("加载玩家变量失败: " + player.getUniqueId(), e);
             }
         }, asyncTaskManager.getExecutor());
+    }
+
+    /**
+     * 解析字符串为 long，失败时返回当前时间
+     */
+    private long parseLong(String value) {
+        try {
+            return value == null ? System.currentTimeMillis() : Long.parseLong(value);
+        } catch (NumberFormatException e) {
+            return System.currentTimeMillis();
+        }
     }
 
     // ======================== 未调用的内容（隐藏） ========================

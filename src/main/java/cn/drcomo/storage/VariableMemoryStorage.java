@@ -128,7 +128,26 @@ public class VariableMemoryStorage {
             memoryLock.writeLock().unlock();
         }
     }
-    
+
+    /**
+     * 从持久化数据加载玩家变量
+     */
+    public void loadPlayerVariable(UUID playerId, String key, String value, long lastModified, long firstModifiedAt) {
+        memoryLock.writeLock().lock();
+        try {
+            ConcurrentHashMap<String, VariableValue> playerVars = playerVariables.computeIfAbsent(
+                    playerId, k -> new ConcurrentHashMap<>());
+
+            VariableValue newValue = new VariableValue(value, lastModified, firstModifiedAt);
+            playerVars.put(key, newValue);
+
+            // 更新内存使用统计
+            updateMemoryUsage(newValue.getEstimatedMemoryUsage());
+        } finally {
+            memoryLock.writeLock().unlock();
+        }
+    }
+
     /**
      * 获取服务器变量值
      */
@@ -150,7 +169,34 @@ public class VariableMemoryStorage {
             memoryLock.readLock().unlock();
         }
     }
-    
+
+    /**
+     * 获取所有玩家中指定变量的最早首次修改时间
+     *
+     * @param key 变量键
+     * @return 最早首次修改时间，若不存在返回 null
+     */
+    public Long getPlayerFirstModifiedAt(String key) {
+        memoryLock.readLock().lock();
+        try {
+            long earliest = Long.MAX_VALUE;
+            boolean found = false;
+            for (ConcurrentHashMap<String, VariableValue> vars : playerVariables.values()) {
+                VariableValue vv = vars.get(key);
+                if (vv != null) {
+                    long first = vv.getFirstModifiedAt();
+                    if (first < earliest) {
+                        earliest = first;
+                    }
+                    found = true;
+                }
+            }
+            return found ? earliest : null;
+        } finally {
+            memoryLock.readLock().unlock();
+        }
+    }
+
     /**
      * 设置服务器变量值
      */
@@ -183,6 +229,22 @@ public class VariableMemoryStorage {
             // 检查内存压力
             checkMemoryPressure();
             
+        } finally {
+            memoryLock.writeLock().unlock();
+        }
+    }
+
+    /**
+     * 从持久化数据加载服务器变量
+     */
+    public void loadServerVariable(String key, String value, long lastModified, long firstModifiedAt) {
+        memoryLock.writeLock().lock();
+        try {
+            VariableValue newValue = new VariableValue(value, lastModified, firstModifiedAt);
+            serverVariables.put(key, newValue);
+
+            // 更新内存使用统计
+            updateMemoryUsage(newValue.getEstimatedMemoryUsage());
         } finally {
             memoryLock.writeLock().unlock();
         }
