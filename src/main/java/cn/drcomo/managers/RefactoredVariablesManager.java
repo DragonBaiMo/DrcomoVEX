@@ -10,6 +10,7 @@ import cn.drcomo.corelib.config.YamlUtil;
 import cn.drcomo.corelib.async.AsyncTaskManager;
 import cn.drcomo.corelib.hook.placeholder.PlaceholderAPIUtil;
 import cn.drcomo.corelib.math.FormulaCalculator;
+import cn.drcomo.util.ValueLimiter;
 import org.bukkit.Bukkit;
 import org.bukkit.OfflinePlayer;
 import org.bukkit.configuration.ConfigurationSection;
@@ -318,6 +319,16 @@ public class RefactoredVariablesManager {
                 if (newValue == null) {
                     return VariableResult.failure("加法操作失败或超出约束", "ADD", key, playerName);
                 }
+                // 二次校验，若不合法则尝试按限制截断
+                if (!validateValue(variable, newValue)) {
+                    String adjusted = ValueLimiter.apply(variable, newValue);
+                    if (adjusted == null || !validateValue(variable, adjusted)) {
+                        return VariableResult.failure("加法结果超出限制", "ADD", key, playerName);
+                    }
+                    newValue = adjusted;
+                    finalDisplayValue = newValue;
+                }
+
                 updateMemoryAndInvalidate(player, variable, newValue);
                 logger.debug("加法操作: " + key + " = " + finalDisplayValue + " (当前: " + currentValue + " + 增加: " + addValue + ")");
                 return VariableResult.success(finalDisplayValue, "ADD", key, playerName);
@@ -364,6 +375,16 @@ public class RefactoredVariablesManager {
                 if (newValue == null) {
                     return VariableResult.failure("删除操作失败", "REMOVE", key, playerName);
                 }
+                // 二次校验，若不合法则尝试按限制截断
+                if (!validateValue(variable, newValue)) {
+                    String adjusted = ValueLimiter.apply(variable, newValue);
+                    if (adjusted == null || !validateValue(variable, adjusted)) {
+                        return VariableResult.failure("删除结果超出限制", "REMOVE", key, playerName);
+                    }
+                    newValue = adjusted;
+                    finalDisplayValue = newValue;
+                }
+
                 updateMemoryAndInvalidate(player, variable, newValue);
                 logger.debug("删除操作: " + key + " = " + finalDisplayValue + " (删除: " + removeValue + ")");
                 return VariableResult.success(finalDisplayValue, "REMOVE", key, playerName);

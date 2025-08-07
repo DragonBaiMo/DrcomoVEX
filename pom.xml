@@ -131,6 +131,14 @@
             <version>9.2.1</version>
             <scope>provided</scope>
         </dependency>
+
+        <!-- 测试依赖：JUnit 5 -->
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <version>5.10.2</version>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 
 </project>
