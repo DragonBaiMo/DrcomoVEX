@@ -36,6 +36,9 @@ import java.util.regex.Pattern;
  */
 public class ServerVariablesAPI {
 
+    /** 占位符完整格式校验正则 */
+    private static final Pattern FULL_PLACEHOLDER_PATTERN = Pattern.compile("^drcomovex_\\[([^]]+)]_(.+)$");
+
     private final DebugUtil logger;
     private final RefactoredVariablesManager variablesManager;
     private final ServerVariablesManager serverVariablesManager;
@@ -189,7 +192,7 @@ public class ServerVariablesAPI {
         }
 
         String full = "drcomovex_" + placeholder + "_" + rawArgs;
-        Matcher m = Pattern.compile("^drcomovex_\\[([^]]+)]_(.+)$").matcher(full);
+        Matcher m = FULL_PLACEHOLDER_PATTERN.matcher(full);
         if (!m.matches()) {
             String result = "错误";
             logger.error("占位符 " + full + " 参数解析失败");
