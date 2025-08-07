@@ -3,6 +3,7 @@ package cn.drcomo.util;
 import cn.drcomo.model.structure.Limitations;
 import cn.drcomo.model.structure.ValueType;
 import cn.drcomo.model.structure.Variable;
+import cn.drcomo.corelib.math.NumberUtil;
 
 import java.util.Arrays;
 
@@ -48,18 +49,23 @@ public class ValueLimiter {
 
     // 数值截断
     private static String limitNumber(ValueType type, String value, Limitations lim) {
-        double num;
-        try {
-            num = Double.parseDouble(value);
-        } catch (Exception e) {
+        if (type == ValueType.INT) {
+            Integer num = NumberUtil.parseInt(value);
+            if (num == null) {
+                return null;
+            }
+            int min = lim.getMinValue() != null ? NumberUtil.parseInt(lim.getMinValue(), num) : num;
+            int max = lim.getMaxValue() != null ? NumberUtil.parseInt(lim.getMaxValue(), num) : num;
+            num = Math.max(min, Math.min(max, num));
+            return String.valueOf(num);
+        }
+        Double num = NumberUtil.parseDouble(value);
+        if (num == null) {
             return null;
         }
-        double min = lim.getMinValue() != null ? parseDouble(lim.getMinValue(), num) : num;
-        double max = lim.getMaxValue() != null ? parseDouble(lim.getMaxValue(), num) : num;
+        double min = lim.getMinValue() != null ? NumberUtil.parseDouble(lim.getMinValue(), num) : num;
+        double max = lim.getMaxValue() != null ? NumberUtil.parseDouble(lim.getMaxValue(), num) : num;
         num = Math.max(min, Math.min(max, num));
-        if (type == ValueType.INT) {
-            return String.valueOf((int) num);
-        }
         return String.valueOf(num);
     }
 
@@ -90,11 +96,5 @@ public class ValueLimiter {
         return value;
     }
 
-    private static double parseDouble(String text, double def) {
-        try {
-            return Double.parseDouble(text);
-        } catch (Exception e) {
-            return def;
-        }
-    }
+    // 解析逻辑已整合至 NumberUtil
 }
