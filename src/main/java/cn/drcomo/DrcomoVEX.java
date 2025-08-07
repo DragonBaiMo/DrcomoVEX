@@ -216,7 +216,7 @@ public class DrcomoVEX extends JavaPlugin {
      */
     private void registerListeners() {
         Bukkit.getPluginManager().registerEvents(
-                new PlayerListener(this, logger, playerVariablesManager),
+                new PlayerListener(this, logger, playerVariablesManager, serverVariablesManager),
                 this
         );
     }

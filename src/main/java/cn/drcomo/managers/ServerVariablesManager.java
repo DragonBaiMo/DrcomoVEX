@@ -10,8 +10,9 @@ import org.bukkit.Bukkit;
 import org.bukkit.OfflinePlayer;
 import org.bukkit.entity.Player;
 
-import java.util.Collection;
+import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.Optional;
 
@@ -28,6 +29,11 @@ public class ServerVariablesManager {
     private final DebugUtil logger;
     private final RefactoredVariablesManager variablesManager;
     private final HikariConnection database;
+
+    /**
+     * 在线玩家缓存列表，用于快速获取随机玩家
+     */
+    private final List<Player> onlinePlayerCache = new CopyOnWriteArrayList<>();
     
     public ServerVariablesManager(
             DrcomoVEX plugin,
@@ -46,7 +52,26 @@ public class ServerVariablesManager {
      */
     public void initialize() {
         logger.info("正在初始化服务器变量管理器...");
+        onlinePlayerCache.addAll(Bukkit.getOnlinePlayers());
         logger.info("服务器变量管理器初始化完成！");
+    }
+
+    /**
+     * 玩家加入时更新在线玩家缓存
+     *
+     * @param player 加入的玩家
+     */
+    public void handlePlayerJoin(Player player) {
+        onlinePlayerCache.add(player);
+    }
+
+    /**
+     * 玩家退出时更新在线玩家缓存
+     *
+     * @param player 退出的玩家
+     */
+    public void handlePlayerQuit(Player player) {
+        onlinePlayerCache.remove(player);
     }
     
     /**
@@ -54,15 +79,13 @@ public class ServerVariablesManager {
      * 对于全局变量，如果需要占位符解析，使用随机在线玩家
      */
     private OfflinePlayer getPlayerForPlaceholders() {
-        Collection<? extends Player> onlinePlayers = Bukkit.getOnlinePlayers();
-        if (onlinePlayers.isEmpty()) {
+        if (onlinePlayerCache.isEmpty()) {
             logger.debug("没有在线玩家可用于全局变量占位符解析");
             return null;
         }
-        
-        // 随机选择一个在线玩家用于占位符解析
-        Player[] players = onlinePlayers.toArray(new Player[0]);
-        Player randomPlayer = players[ThreadLocalRandom.current().nextInt(players.length)];
+
+        int randomIndex = ThreadLocalRandom.current().nextInt(onlinePlayerCache.size());
+        Player randomPlayer = onlinePlayerCache.get(randomIndex);
         logger.debug("选择玩家用于全局变量占位符解析: " + randomPlayer.getName());
         return randomPlayer;
     }

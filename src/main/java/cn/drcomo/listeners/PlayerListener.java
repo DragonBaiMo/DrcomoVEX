@@ -2,6 +2,7 @@ package cn.drcomo.listeners;
 
 import cn.drcomo.DrcomoVEX;
 import cn.drcomo.managers.PlayerVariablesManager;
+import cn.drcomo.managers.ServerVariablesManager;
 import cn.drcomo.corelib.util.DebugUtil;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
@@ -21,15 +22,18 @@ public class PlayerListener implements Listener {
     private final DrcomoVEX plugin;
     private final DebugUtil logger;
     private final PlayerVariablesManager playerVariablesManager;
+    private final ServerVariablesManager serverVariablesManager;
     
     public PlayerListener(
             DrcomoVEX plugin,
             DebugUtil logger,
-            PlayerVariablesManager playerVariablesManager
+            PlayerVariablesManager playerVariablesManager,
+            ServerVariablesManager serverVariablesManager
     ) {
         this.plugin = plugin;
         this.logger = logger;
         this.playerVariablesManager = playerVariablesManager;
+        this.serverVariablesManager = serverVariablesManager;
     }
     
     /**
@@ -47,6 +51,7 @@ public class PlayerListener implements Listener {
                     });
             
             logger.debug("玩家 " + event.getPlayer().getName() + " 登入，变量数据预加载中");
+            serverVariablesManager.handlePlayerJoin(event.getPlayer());
             
         } catch (Exception e) {
             logger.error("处理玩家登入事件失败: " + event.getPlayer().getName(), e);
@@ -68,6 +73,7 @@ public class PlayerListener implements Listener {
                     });
             
             logger.debug("玩家 " + event.getPlayer().getName() + " 退出，变量数据持久化中");
+            serverVariablesManager.handlePlayerQuit(event.getPlayer());
             
         } catch (Exception e) {
             logger.error("处理玩家退出事件失败: " + event.getPlayer().getName(), e);
