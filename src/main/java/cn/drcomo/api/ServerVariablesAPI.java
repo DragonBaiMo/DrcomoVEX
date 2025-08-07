@@ -232,7 +232,7 @@ public class ServerVariablesAPI {
         }
 
         // 分拆参数，尝试最后一段为玩家名
-        String[] parts = rawArgs.split("_");
+        String[] parts = PlaceholderAPIUtil.splitArgs(rawArgs);
         String key;
         String playerName = null;
         if (parts.length > 1) {
