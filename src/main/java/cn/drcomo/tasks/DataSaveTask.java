@@ -3,11 +3,9 @@ package cn.drcomo.tasks;
 import cn.drcomo.DrcomoVEX;
 import cn.drcomo.managers.RefactoredVariablesManager;
 import cn.drcomo.corelib.util.DebugUtil;
-import org.bukkit.Bukkit;
 import org.bukkit.configuration.file.FileConfiguration;
-import org.bukkit.scheduler.BukkitTask;
 
-import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 
@@ -25,7 +23,7 @@ public class DataSaveTask {
     private final RefactoredVariablesManager variablesManager;
     private final FileConfiguration config;
     
-    private BukkitTask saveTask;
+    private ScheduledFuture<?> saveTask;
     
     public DataSaveTask(
             DrcomoVEX plugin,
@@ -51,14 +49,13 @@ public class DataSaveTask {
         
         // 获取保存间隔（分钟）
         int saveIntervalMinutes = config.getInt("data.save-interval-minutes", 5);
-        long saveIntervalTicks = saveIntervalMinutes * 20L * 60L; // 转换为 ticks
-        
+
         // 启动定时任务
-        saveTask = Bukkit.getScheduler().runTaskTimerAsynchronously(
-                plugin,
+        saveTask = plugin.getAsyncTaskManager().scheduleAtFixedRate(
                 this::performSave,
-                saveIntervalTicks, // 初始延迟
-                saveIntervalTicks  // 重复间隔
+                saveIntervalMinutes, // 初始延迟
+                saveIntervalMinutes, // 重复间隔
+                TimeUnit.MINUTES
         );
         
         logger.info("已启动数据自动保存任务，间隔: " + saveIntervalMinutes + " 分钟");
@@ -69,7 +66,7 @@ public class DataSaveTask {
      */
     public void stop() {
         if (saveTask != null && !saveTask.isCancelled()) {
-            saveTask.cancel();
+            plugin.getAsyncTaskManager().cancelTask(saveTask);
             logger.info("数据自动保存任务已停止");
         }
 
