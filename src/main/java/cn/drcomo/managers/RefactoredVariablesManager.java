@@ -20,6 +20,8 @@ import java.io.File;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
@@ -189,8 +191,11 @@ public class RefactoredVariablesManager {
         logger.info("正在保存所有变量数据...");
         return CompletableFuture.runAsync(() -> {
             try {
-                persistenceManager.flushAllDirtyData().join();
+                persistenceManager.flushAllDirtyData().get(10, TimeUnit.SECONDS);
                 logger.info("所有变量数据保存完成！");
+            } catch (TimeoutException e) {
+                logger.warn("持久化数据超时，部分数据可能未保存", e);
+                throw new RuntimeException("持久化数据超时", e);
             } catch (Exception e) {
                 logger.error("保存变量数据失败！", e);
                 throw new RuntimeException("保存变量数据失败", e);
