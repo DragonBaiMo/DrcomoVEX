@@ -607,6 +607,12 @@ public class RefactoredVariablesManager {
                 memoryStorage.clearDirtyFlag("server:" + variable.getKey());
                 logger.debug("服务器变量设置为不可持久化，跳过数据库保存: " + variable.getKey());
             }
+            // 同步清理全局上下文缓存，避免不同玩家上下文下出现旧值
+            try {
+                cacheManager.invalidateCache(null, variable.getKey());
+            } catch (Exception e) {
+                logger.debug("清理全局上下文缓存失败: " + variable.getKey());
+            }
         }
         cacheManager.invalidateCache(player, variable.getKey());
     }
@@ -669,6 +675,7 @@ public class RefactoredVariablesManager {
 
             String prev = result;
             result = resolveInternalVariables(result, player);
+            // 仅在有玩家上下文时解析 PAPI，避免无上下文导致被 PAPI 清空或返回空白
             if (player != null && player.isOnline()) {
                 result = placeholderUtil.parse(player.getPlayer(), result);
             }

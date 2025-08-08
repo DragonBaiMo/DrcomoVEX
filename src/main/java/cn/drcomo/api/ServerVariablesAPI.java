@@ -153,20 +153,26 @@ public class ServerVariablesAPI {
      * 注册 PlaceholderAPI 占位符
      */
     public void registerPlaceholders(PlaceholderAPIUtil placeholderUtil) {
-        // 通用参数非空验证函数
-        java.util.function.Function<String, Boolean> isBlank = s -> s == null || s.trim().isEmpty();
-
-        // %drcomovex_[var]_[<key>]%
+        logger.info("正在注册 DrcomoVEX PlaceholderAPI 占位符...");
+        // 通用变量
         placeholderUtil.register("[var]", (player, rawArgs) ->
                 processPlaceholder("[var]", player, rawArgs, this::getCalculatedValue));
+        placeholderUtil.register("var", (player, rawArgs) ->
+                processPlaceholder("[var]", player, rawArgs, this::getCalculatedValue));
 
-        // %drcomovex_[global_var]_[<key>]%
-        placeholderUtil.register("[global_var]", (player, rawArgs) ->
-                processPlaceholder("[global_var]", player, rawArgs, (pl, key) -> fetchGlobalVariable(key)));
+        // 全局变量（新版命名）
+        placeholderUtil.register("[global]", (player, rawArgs) ->
+                processPlaceholder("[global]", player, rawArgs, (pl, key) -> fetchGlobalVariableWithPlayer(pl, key)));
+        placeholderUtil.register("global", (player, rawArgs) ->
+                processPlaceholder("[global]", player, rawArgs, (pl, key) -> fetchGlobalVariableWithPlayer(pl, key)));
 
-        // %drcomovex_[player_var]_[<key>]% 或 %drcomovex_[player_var]_[<key>]_[<player_name>]%
-        placeholderUtil.register("[player_var]", (player, rawArgs) ->
-                processPlayerVariablePlaceholder("[player_var]", player, rawArgs));
+        // 玩家变量（新版命名）
+        placeholderUtil.register("[player]", (player, rawArgs) ->
+                processPlayerVariablePlaceholder("[player]", player, rawArgs));
+        placeholderUtil.register("player", (player, rawArgs) ->
+                processPlayerVariablePlaceholder("[player]", player, rawArgs));
+
+        logger.info("DrcomoVEX PlaceholderAPI 占位符注册完成");
     }
 
     // -------------------- 私有通用方法 --------------------
@@ -191,7 +197,9 @@ public class ServerVariablesAPI {
             return result;
         }
 
-        String full = "drcomovex_" + placeholder + "_" + rawArgs;
+        // 兼容外层加[]的参数：统一规范化后再匹配
+        String normalizedArgs = rawArgs.replace("[", "").replace("]", "").trim();
+        String full = "drcomovex_" + placeholder + "_" + normalizedArgs;
         Matcher m = FULL_PLACEHOLDER_PATTERN.matcher(full);
         if (!m.matches()) {
             String result = "错误";
@@ -234,26 +242,34 @@ public class ServerVariablesAPI {
             return result;
         }
 
-        // 分拆参数，尝试最后一段为玩家名
-        String[] parts = rawArgs.split("_");
         String key;
         String playerName = null;
-        if (parts.length > 1) {
-            String maybeName = parts[parts.length - 1];
-            StringBuilder kb = new StringBuilder();
-            for (int i = 0; i < parts.length - 1; i++) {
-                if (i > 0) kb.append("_");
-                kb.append(parts[i]);
-            }
-            String candidateKey = kb.toString();
-            if (variablesManager.getVariableDefinition(candidateKey) != null) {
-                key = candidateKey;
-                playerName = maybeName;
-            } else {
-                key = rawArgs;
+
+        // 优先解析标准格式: [key] 或 [key]_[player]
+        java.util.regex.Matcher pm = java.util.regex.Pattern
+                .compile("^\\[([^\\]]+)](?:_\\[([^\\]]+)])?$")
+                .matcher(rawArgs.trim());
+        if (pm.matches()) {
+            key = pm.group(1).trim();
+            if (pm.group(2) != null) {
+                playerName = pm.group(2).trim();
             }
         } else {
-            key = rawArgs;
+            // 回退：去括号并按下划线拆分，最后一段视为玩家名（若前缀恰好是变量键）
+            String normalized = rawArgs.replace("[", "").replace("]", "").trim();
+            int last = normalized.lastIndexOf('_');
+            if (last > 0) {
+                String possibleKey = normalized.substring(0, last);
+                String possibleName = normalized.substring(last + 1);
+                if (variablesManager.getVariableDefinition(possibleKey) != null) {
+                    key = possibleKey;
+                    playerName = possibleName;
+                } else {
+                    key = normalized;
+                }
+            } else {
+                key = normalized;
+            }
         }
 
         logger.info("占位符 drcomovex_[" + domain + "]_" + key
@@ -321,7 +337,9 @@ public class ServerVariablesAPI {
         try {
             CompletableFuture<VariableResult> future;
             if (var.isGlobal()) {
-                future = variablesManager.getVariable(null, key);
+                // 全局变量：通过 ServerVariablesManager 获取，以便内部选择在线玩家解析占位符
+                future = serverVariablesManager.getServerVariable(key)
+                        .toCompletableFuture();
             } else if (var.isPlayerScoped()) {
                 if (player == null) {
                     logger.info("占位符 drcomovex_[var] 玩家变量 " + key + " 需要玩家参数");
@@ -340,25 +358,27 @@ public class ServerVariablesAPI {
     }
 
     /**
-     * 以全局身份获取变量值
+     * 使用传入玩家优先作为占位符上下文解析全局变量
      */
-    private String fetchGlobalVariable(String key) {
+    private String fetchGlobalVariableWithPlayer(OfflinePlayer player, String key) {
         if (!hasVariable(key)) {
             return "变量不存在";
         }
         Variable var = variablesManager.getVariableDefinition(key);
         if (var != null && var.isGlobal()) {
             try {
-                VariableResult vr = variablesManager.getVariable(null, key)
-                        .get(500, TimeUnit.MILLISECONDS);
+                CompletableFuture<VariableResult> future;
+                if (player != null) {
+                    future = variablesManager.getVariable(player, key);
+                } else {
+                    future = serverVariablesManager.getServerVariable(key).toCompletableFuture();
+                }
+                VariableResult vr = future.get(500, TimeUnit.MILLISECONDS);
                 return vr.isSuccess() ? vr.getValue() : "0";
             } catch (Exception e) {
-                logger.error("占位符 drcomovex_[global_var] 异常，参数: " + key, e);
+                logger.error("占位符 drcomovex_[global] 解析异常，参数: " + key, e);
                 return (e instanceof java.util.concurrent.TimeoutException) ? "0" : "异常:" + e.getMessage();
             }
-        } else if (var != null) {
-            logger.info("占位符 drcomovex_[global_var] 变量 " + key + " 不是全局类型");
-            return "类型不匹配";
         }
         return "变量不存在";
     }

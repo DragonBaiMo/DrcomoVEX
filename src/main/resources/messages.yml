@@ -114,7 +114,7 @@ messages:
       - "&7占位符示例:"
       - "&e%drcomovex_[var]_[变量名]% &7- 获取变量值"
       - "&e%drcomovex_[player_var]_[变量名]% &7- 获取玩家变量值"
-      - "&e%drcomovex_[global_var]_[变量名]% &7- 获取服务器变量值"
+      - "&e%drcomovex_[global]_[变量名]% &7- 获取服务器变量值"
 
   # 特殊消息类型
   special:

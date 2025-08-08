@@ -153,6 +153,18 @@ public class DrcomoVEX extends JavaPlugin {
     private void initializeConfigs() {
         configsManager = new ConfigsManager(this, logger, yamlUtil);
         configsManager.initialize();
+
+        // 从配置设置日志级别，确保 debug.level 生效
+        try {
+            String levelStr = configsManager.getMainConfig().getString("debug.level", "INFO");
+            if (levelStr != null) {
+                cn.drcomo.corelib.util.DebugUtil.LogLevel lvl = cn.drcomo.corelib.util.DebugUtil.LogLevel.valueOf(levelStr.trim().toUpperCase());
+                logger.setLevel(lvl);
+                logger.info("已应用日志级别: " + lvl);
+            }
+        } catch (Exception e) {
+            logger.warn("解析日志级别失败，使用默认 INFO。请检查 config.yml 的 debug.level 配置");
+        }
     }
     
     /**
@@ -244,7 +256,7 @@ public class DrcomoVEX extends JavaPlugin {
         dataSaveTask.start();
 
         variableCycleTask = new VariableCycleTask(
-                this, logger, variablesManager, configsManager
+                this, logger, variablesManager, configsManager, yamlUtil
         );
         variableCycleTask.start();
     }

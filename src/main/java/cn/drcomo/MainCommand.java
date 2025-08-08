@@ -479,7 +479,23 @@ public class MainCommand implements CommandExecutor, TabCompleter {
             String successKey,
             String errorLogPrefix
     ) {
-        stage.thenAccept(r -> sendResult(sender, r, params, successKey))
+        stage.thenAccept(r -> {
+                    if (r == null) {
+                        messagesManager.sendMessage(sender, "error.internal", EMPTY_PARAMS);
+                        return;
+                    }
+                    // 合并异步结果值到占位符：若调用方未提供或提供为空，则回填 r.getValue()
+                    Map<String, String> merged = new HashMap<>(params);
+                    String resultVal = r.getValue();
+                    if (resultVal != null && !resultVal.isEmpty()) {
+                        merged.put("value", resultVal);
+                        String newVal = merged.get("new_value");
+                        if (newVal == null || newVal.isEmpty()) {
+                            merged.put("new_value", resultVal);
+                        }
+                    }
+                    sendResult(sender, r, merged, successKey);
+                })
                 .exceptionally(t -> handleException(errorLogPrefix, t, sender));
     }
 }

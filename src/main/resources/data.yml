@@ -1,20 +1,8 @@
 # ================================================================
-# DrcomoVEX - 数据配置文件
-# 这个文件存储运行时数据和统计信息
+# DrcomoVEX - 周期重置数据记录
+# 存储变量周期重置的时间记录，确保重置逻辑正确执行
 # 请勿手动修改，除非你知道自己在做什么
 # ================================================================
-
-# 版本信息
-version: "1.0.0"
-first-run: 0
-last-startup: 0
-
-# 统计信息
-statistics:
-  total-startups: 0
-  total-players: 0
-  total-variables-created: 0
-  total-operations: 0
 
 # 周期性重置记录
 cycle:
@@ -22,15 +10,3 @@ cycle:
   last-weekly-reset: 0
   last-monthly-reset: 0
   last-yearly-reset: 0
-
-# 性能统计
-performance:
-  average-query-time: 0.0
-  cache-hit-count: 0
-  cache-miss-count: 0
-
-# 更新信息
-update:
-  last-check: ""
-  latest-version: "1.0.0"
-  update-available: false

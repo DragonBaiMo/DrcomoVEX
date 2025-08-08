@@ -2,7 +2,8 @@ package cn.drcomo.tasks;
 
 import cn.drcomo.DrcomoVEX;
 import cn.drcomo.config.ConfigsManager;
-import cn.drcomo.config.DataConfigManager;
+import cn.drcomo.corelib.config.YamlUtil;
+import org.bukkit.configuration.file.FileConfiguration;
 import cn.drcomo.managers.RefactoredVariablesManager;
 import cn.drcomo.model.structure.Variable;
 import cn.drcomo.corelib.util.DebugUtil;
@@ -41,22 +42,59 @@ public class VariableCycleTask {
     private final DebugUtil logger;
     private final RefactoredVariablesManager variablesManager;
     private final ConfigsManager configsManager;
+    private final YamlUtil yamlUtil;
     private final CronParser cronParser;
+    private static final String DATA_CONFIG = "data";
     private ScheduledFuture<?> task;
 
     public VariableCycleTask(
             DrcomoVEX plugin,
             DebugUtil logger,
             RefactoredVariablesManager variablesManager,
-            ConfigsManager configsManager
+            ConfigsManager configsManager,
+            YamlUtil yamlUtil
     ) {
         this.plugin = plugin;
         this.logger = logger;
         this.variablesManager = variablesManager;
         this.configsManager = configsManager;
+        this.yamlUtil = yamlUtil;
         this.cronParser = new CronParser(
                 CronDefinitionBuilder.instanceDefinitionFor(CronType.QUARTZ)
         );
+        initializeDataConfig();
+    }
+    
+    /** 初始化数据配置文件 */
+    private void initializeDataConfig() {
+        // 确保 data.yml 文件存在，如果不存在则创建
+        yamlUtil.copyYamlFile("data.yml", "");
+        yamlUtil.loadConfig(DATA_CONFIG);
+    }
+    
+    /** 获取数据配置 */
+    private FileConfiguration getDataConfig() {
+        return yamlUtil.getConfig(DATA_CONFIG);
+    }
+    
+    /** 获取配置值 */
+    private long getDataLong(String path, long defaultValue) {
+        return yamlUtil.getLong(DATA_CONFIG, path, defaultValue);
+    }
+    
+    /** 设置配置值 */
+    private void setDataValue(String path, Object value) {
+        yamlUtil.setValue(DATA_CONFIG, path, value);
+    }
+    
+    /** 保存数据配置 */
+    private void saveDataConfig(String action) {
+        try {
+            getDataConfig().save(plugin.getDataFolder().toPath().resolve("data.yml").toFile());
+            logger.debug(action);
+        } catch (Exception e) {
+            throw new RuntimeException("无法保存配置：" + action, e);
+        }
     }
 
     /** 启动周期检测任务 */
@@ -135,21 +173,20 @@ public class VariableCycleTask {
 
         /** 执行重置流程 */
         private void execute() throws Exception {
-            DataConfigManager dataConfig = configsManager.getDataConfigManager();
-            synchronized (dataConfig) {
-                if (!needReset(dataConfig)) return;
-                createCheckpoint(dataConfig);
+            synchronized (yamlUtil) {
+                if (!needReset()) return;
+                createCheckpoint();
                 performResets();
-                updateTimestamp(dataConfig);
-                clearCheckpoint(dataConfig);
+                updateTimestamp();
+                clearCheckpoint();
                 logger.info("安全重置完成 - " + cycleType +
                         " 周期，重置了 " + resetList.size() + " 个变量");
             }
         }
 
         /** 判断是否需要重置 */
-        private boolean needReset(DataConfigManager dataConfig) {
-            originalLastReset = dataConfig.getLong(lockKey, 0L);
+        private boolean needReset() {
+            originalLastReset = getDataLong(lockKey, 0L);
             if (originalLastReset >= startMillis) {
                 logger.debug("跳过重置 - 已重置过：" + cycleType);
                 return false;
@@ -221,52 +258,39 @@ public class VariableCycleTask {
         }
 
         /** 创建崩服保护检查点 */
-        private void createCheckpoint(DataConfigManager dataConfig) {
-            dataConfig.getConfig()
-                    .set("cycle.checkpoint-" + cycleType, System.currentTimeMillis());
-            saveDataConfig(dataConfig, "创建重置检查点: " + cycleType);
+        private void createCheckpoint() {
+            getDataConfig().set("cycle.checkpoint-" + cycleType, System.currentTimeMillis());
+            saveDataConfig("创建重置检查点: " + cycleType);
         }
 
         /** 清理检查点 */
-        private void clearCheckpoint(DataConfigManager dataConfig) {
-            dataConfig.getConfig().set("cycle.checkpoint-" + cycleType, null);
-            saveDataConfig(dataConfig, "清理重置检查点: " + cycleType);
+        private void clearCheckpoint() {
+            getDataConfig().set("cycle.checkpoint-" + cycleType, null);
+            saveDataConfig("清理重置检查点: " + cycleType);
         }
 
         /** 更新时间戳 */
-        private void updateTimestamp(DataConfigManager dataConfig) throws Exception {
-            dataConfig.updateCycleResetTime(cycleType, startMillis);
-            saveDataConfig(dataConfig, "更新时间戳: " + cycleType);
+        private void updateTimestamp() throws Exception {
+            setDataValue("cycle.last-" + cycleType.toLowerCase() + "-reset", startMillis);
+            saveDataConfig("更新时间戳: " + cycleType);
             timeUpdated = true;
         }
 
         /** 回滚 */
         private void rollback() {
             try {
-                DataConfigManager dataConfig = configsManager.getDataConfigManager();
-                synchronized (dataConfig) {
+                synchronized (yamlUtil) {
                     if (timeUpdated && originalLastReset >= 0) {
-                        dataConfig.updateCycleResetTime(cycleType, originalLastReset);
+                        setDataValue("cycle.last-" + cycleType.toLowerCase() + "-reset", originalLastReset);
                     }
-                    dataConfig.getConfig()
-                            .set("cycle.rollback-" + cycleType, System.currentTimeMillis());
-                    saveDataConfig(dataConfig, "回滚检查点: " + cycleType);
+                    getDataConfig().set("cycle.rollback-" + cycleType, System.currentTimeMillis());
+                    saveDataConfig("回滚检查点: " + cycleType);
                 }
             } catch (Exception ex) {
                 logger.error("回滚操作失败: " + cycleType, ex);
             }
         }
 
-        /** 私有工具：保存配置并记录日志 */
-        private void saveDataConfig(DataConfigManager dataConfig, String action) {
-            try {
-                dataConfig.getConfig()
-                        .save(plugin.getDataFolder().toPath().resolve("data.yml").toFile());
-                logger.debug(action);
-            } catch (Exception e) {
-                throw new RuntimeException("无法保存配置：" + action, e);
-            }
-        }
 
         /** 线程睡眠工具 */
         private void sleepMillis(long ms) {
@@ -301,37 +325,60 @@ public class VariableCycleTask {
             Variable var = variablesManager.getVariableDefinition(key);
             String expr = (var == null) ? null : var.getCycle();
             if (expr != null && expr.contains(" ")) {
-                ExecutionTime et = parseCronExecutionTime(expr);
-                if (et == null) continue;
+                if (var == null) {
+                    continue;
+                }
+                ExecutionTime executionTime = parseCronExecutionTime(expr);
+                if (executionTime == null) continue;
 
-                ZonedDateTime baseTime = getBaseTime(var, key, now);
-                if (baseTime == null) {
+                // 若变量从未被修改过，则不参与 Cron 重置
+                Long firstModifiedAtMillis = variablesManager.getFirstModifiedAt(var.isGlobal(), key);
+                if (firstModifiedAtMillis == null) {
                     logger.debug("跳过Cron重置(变量未曾修改): " + key);
                     continue;
                 }
 
-                Optional<ZonedDateTime> nextOpt = et.nextExecution(baseTime);
-                if (!nextOpt.isPresent()) {
-                    logger.debug("跳过Cron重置(无法计算下次执行时间): " + key);
+                // 计算当前时间点对应的上一次计划执行时间（对齐 Cron Tick，例如 0 * * * * ? => 每分钟00秒）
+                Optional<ZonedDateTime> lastExecOpt = executionTime.lastExecution(now);
+                if (!lastExecOpt.isPresent()) {
+                    logger.debug("跳过Cron重置(无法计算上次执行时间): " + key);
                     continue;
                 }
-                ZonedDateTime nextReset = nextOpt.get();
-                if (now.isBefore(nextReset)) {
-                    logger.debug("跳过Cron重置(未到重置时间): " + key +
-                            " 基准时间: " + baseTime +
-                            " 下次重置: " + nextReset +
-                            " 当前: " + now);
+                ZonedDateTime lastScheduledExec = lastExecOpt.get();
+
+                // 读取该变量最后一次重置记录时间与首次修改时间
+                ZonedDateTime firstModifiedTime = Instant.ofEpochMilli(firstModifiedAtMillis).atZone(now.getZone());
+                Long lastResetMillis = getLastResetTime(key);
+                ZonedDateTime lastResetTime = (lastResetMillis != null)
+                        ? Instant.ofEpochMilli(lastResetMillis).atZone(now.getZone())
+                        : null;
+
+                // 判定规则（防止“新创建后立刻被当前刻度重置”）：
+                // 1) 若本刻度已重置过(最后重置时间 >= 本刻度计划时间)，则跳过
+                if (lastResetTime != null && !lastResetTime.isBefore(lastScheduledExec)) {
+                    logger.debug("跳过Cron重置(本刻度已重置): " + key);
+                    continue;
+                }
+                // 2) 若变量在本刻度计划时间之后才创建/首次修改(首次修改时间 > 本刻度计划时间)，则跳过，避免“首次添加即被当前刻度清空”
+                if (firstModifiedTime.isAfter(lastScheduledExec)) {
+                    logger.debug("跳过Cron重置(首次修改在本刻度之后): " + key +
+                            " 首改: " + firstModifiedTime + " 本刻度: " + lastScheduledExec);
                     continue;
                 }
 
+                // 仅用于日志展示下一次计划时间，非判定依据
+                Optional<ZonedDateTime> nextExecOpt = executionTime.nextExecution(now);
+                String nextInfo = nextExecOpt.map(Object::toString).orElse("N/A");
+
                 logger.info("Cron变量需要重置: " + key +
-                        " 基准时间: " + baseTime +
-                        " 应重置时间: " + nextReset +
+                        " 上次计划执行: " + lastScheduledExec +
+                        " 下次计划执行: " + nextInfo +
                         " 当前时间: " + now +
                         " (" + expr + ")");
 
                 if (safeDeleteAndClear(var.isGlobal(), key, 0, true)) {
-                    updateVariableResetTime(key, nextReset.toInstant().toEpochMilli());
+                    // 对齐记录到“上次计划执行时间”，确保同一分钟内只重置一次
+                    updateVariableResetTime(key, lastScheduledExec.toInstant().toEpochMilli());
                     resetList.add(key);
                 }
             }
@@ -388,14 +435,12 @@ public class VariableCycleTask {
 
     /** 更新变量的重置时间记录 */
     private void updateVariableResetTime(String key, long resetTime) {
-        DataConfigManager dataConfig = configsManager.getDataConfigManager();
         String resetKey = "cycle.variable." + key + ".last-reset-time";
-        synchronized (dataConfig) {
-            dataConfig.getConfig().set(resetKey, resetTime);
+        synchronized (yamlUtil) {
+            getDataConfig().set(resetKey, resetTime);
             plugin.getAsyncTaskManager().submitAsync(() -> {
                 try {
-                    dataConfig.getConfig()
-                            .save(plugin.getDataFolder().toPath().resolve("data.yml").toFile());
+                    getDataConfig().save(plugin.getDataFolder().toPath().resolve("data.yml").toFile());
                     logger.debug("更新变量重置时间记录: " + key +
                             " -> " + Instant.ofEpochMilli(resetTime));
                 } catch (Exception e) {
@@ -407,10 +452,9 @@ public class VariableCycleTask {
 
     /** 获取变量的最后重置时间 */
     private Long getLastResetTime(String key) {
-        DataConfigManager dataConfig = configsManager.getDataConfigManager();
         String resetKey = "cycle.variable." + key + ".last-reset-time";
-        synchronized (dataConfig) {
-            long time = dataConfig.getLong(resetKey, 0L);
+        synchronized (yamlUtil) {
+            long time = getDataLong(resetKey, 0L);
             return time > 0 ? time : null;
         }
     }
@@ -544,26 +588,5 @@ public class VariableCycleTask {
         }
     }
 
-    /**
-     * 获取变量的基准时间（最后重置或首次修改）
-     *
-     * @param var  变量定义
-     * @param key  变量键
-     * @param now  当前时间
-     * @return 基准时间，若变量从未修改则返回 null
-     */
-    private ZonedDateTime getBaseTime(Variable var, String key, ZonedDateTime now) {
-        Long firstModified = variablesManager.getFirstModifiedAt(var.isGlobal(), key);
-        if (firstModified == null) {
-            return null;
-        }
-        ZoneId zone = now.getZone();
-        ZonedDateTime firstTime = Instant
-                .ofEpochMilli(firstModified)
-                .atZone(zone);
-        Long lastResetMillis = getLastResetTime(key);
-        return (lastResetMillis != null)
-                ? Instant.ofEpochMilli(lastResetMillis).atZone(zone)
-                : firstTime;
-    }
+    // getBaseTime 已不再需要（Cron 重置基于 lastExecution 对齐），移除以简化逻辑
 }

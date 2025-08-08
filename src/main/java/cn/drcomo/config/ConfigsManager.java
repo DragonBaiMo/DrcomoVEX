@@ -11,7 +11,7 @@ import java.util.Arrays;
 /**
  * 配置管理器
  * 
- * 统一管理插件的所有配置文件，包括主配置、数据配置和玩家配置。
+ * 统一管理插件的所有配置文件，包括主配置和变量配置。
  * 
  * @author BaiMo
  */
@@ -22,7 +22,6 @@ public class ConfigsManager {
     private final YamlUtil yamlUtil;
     
     private MainConfigManager mainConfigManager;
-    private DataConfigManager dataConfigManager;
     
     public ConfigsManager(DrcomoVEX plugin, DebugUtil logger, YamlUtil yamlUtil) {
         this.plugin = plugin;
@@ -39,13 +38,11 @@ public class ConfigsManager {
         // 创建需要的目录
         createDirectories();
         
-        // 初始化各个配置管理器
+        // 初始化配置管理器
         mainConfigManager = new MainConfigManager(plugin, logger, yamlUtil);
-        dataConfigManager = new DataConfigManager(plugin, logger, yamlUtil);
         
         // 初始化配置
         mainConfigManager.initialize();
-        dataConfigManager.initialize();
         
         logger.info("配置管理系统初始化完成！");
     }
@@ -57,7 +54,6 @@ public class ConfigsManager {
         logger.info("正在重载所有配置...");
         
         mainConfigManager.reload();
-        dataConfigManager.reload();
         
         logger.info("所有配置已重载完成！");
     }
@@ -87,16 +83,8 @@ public class ConfigsManager {
         return mainConfigManager;
     }
     
-    public DataConfigManager getDataConfigManager() {
-        return dataConfigManager;
-    }
-    
     // 快捷访问方法
     public FileConfiguration getMainConfig() {
         return mainConfigManager.getConfig();
-    }
-    
-    public FileConfiguration getDataConfig() {
-        return dataConfigManager.getConfig();
     }
 }
