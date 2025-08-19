@@ -1,0 +1,288 @@
+# ================================================================
+# DrcomoVEX - 变量定义文件
+# 这里定义了所有的服务器变量和玩家变量
+# 
+# 支持的类型: INT, DOUBLE, STRING, LIST
+# 支持的作用域: player, global
+# 支持的周期: minute, daily, weekly, monthly, yearly, Cron表达式
+# ================================================================
+
+variables:
+  
+  # ======================== 玩家变量示例 ========================
+  
+  # 玩家金币 - 数值类型，有约束
+  player_money:
+    name: "玩家金币"
+    scope: "player"
+    type: "DOUBLE"
+    initial: 100.0
+    min: 0
+    max: 999999.99
+  
+  # 玩家等级 - 整数类型
+  player_level:
+    name: "玩家等级"
+    scope: "player"
+    type: "INT"
+    initial: 1
+    min: 1
+    max: 100
+  
+  # 玩家经验值 - 整数类型，无上限
+  player_exp:
+    name: "玩家经验值"
+    scope: "player"
+    type: "INT"
+    initial: 0
+    min: 0
+  
+  # 玩家称号列表 - 列表类型
+  player_titles:
+    name: "玩家称号"
+    scope: "player"
+    type: "LIST"
+    initial:
+      - "新手冒险家"
+    max: 10
+  
+  # 玩家状态 - 字符串类型
+  player_status:
+    name: "玩家状态"
+    scope: "player"
+    type: "STRING"
+    initial: "正常"
+  
+  # ======================== 周期性变量示例 ========================
+  
+  # 临时状态 - 每分钟重置
+  temp_status:
+    name: "临时状态"
+    scope: "player"
+    type: "STRING"
+    initial: "idle"
+    cycle: "minute"
+  
+  # 每日登入奖励领取状态 - 每日重置
+  daily_reward_claimed:
+    name: "每日奖励领取状态"
+    scope: "player"
+    type: "STRING"
+    initial: "false"
+    cycle: "daily"
+  
+  # 每日任务进度 - 每日重置
+  daily_task_progress:
+    name: "每日任务进度"
+    scope: "player"
+    type: "INT"
+    initial: 0
+    min: 0
+    max: 100
+    cycle: "daily"
+  
+  # 周排行榜积分 - 每周重置
+  weekly_score:
+    name: "周排行榜积分"
+    scope: "player"
+    type: "INT"
+    initial: 0
+    min: 0
+    cycle: "weekly"
+  
+  # 月度活跃度 - 每月重置
+  monthly_activity:
+    name: "月度活跃度"
+    scope: "player"
+    type: "INT"
+    initial: 0
+    min: 0
+    cycle: "monthly"
+  
+  # ======================== 动态变量示例 ========================
+  
+  # 玩家战斗力 - 根据等级和金币计算
+  player_combat_power:
+    name: "玩家战斗力"
+    scope: "player"
+    type: "DOUBLE"
+    initial: "(${player_level} * 10) + (${player_money} / 100)"
+    min: 0
+  
+  # 玩家综合评分 - 复杂计算
+  player_overall_score:
+    name: "玩家综合评分"
+    scope: "player"
+    type: "DOUBLE"
+    initial: "${player_level} * 0.3 + ${player_exp} * 0.0001 + ${player_money} * 0.01"
+    min: 0
+  
+  # VIP等级显示 - 使用PlaceholderAPI
+  player_vip_display:
+    name: "VIP等级显示"
+    scope: "player"
+    type: "STRING"
+    initial: "%vault_prefix% %player_name%"
+  
+  # ======================== 服务器全局变量示例 ========================
+  
+  # 服务器公告 - 全局字符串
+  server_motd:
+    name: "服务器公告"
+    scope: "global"
+    type: "STRING"
+    initial: "欢迎来到我们的服务器！"
+  
+  # 服务器状态 - 全局数值
+  server_status:
+    name: "服务器状态"
+    scope: "global"
+    type: "INT"
+    initial: 1
+    min: 0
+    max: 2
+  
+  # 全服在线人数 - 动态获取
+  server_online_count:
+    name: "全服在线人数"
+    scope: "global"
+    type: "INT"
+    initial: "%server_online%"
+    min: 0
+  
+  # 服务器TPS - 动态获取
+  server_tps:
+    name: "服务器TPS"
+    scope: "global"
+    type: "DOUBLE"
+    initial: "%server_tps%"
+    min: 0
+    max: 20
+  
+  # ======================== 高级功能示例 ========================
+  
+  # 动态金币上限 - 根据等级动态调整
+  player_money_cap:
+    name: "玩家金币上限"
+    scope: "player"
+    type: "DOUBLE"
+    initial: "1000 + ${player_level} * 500"
+    min: 1000
+  
+  # 每日登入奖励金额 - 动态计算
+  daily_login_bonus:
+    name: "每日登入奖励"
+    scope: "player"
+    type: "DOUBLE"
+    initial: "50 + ${player_level} * 10"
+    min: 50
+    cycle: "daily"
+  
+  # 复合周期变量 - 每天中午0点重置
+  complex_daily_reset:
+    name: "复合每日重置"
+    scope: "player"
+    type: "INT"
+    initial: 0
+    cycle: "0 0 0 * * ?"  # Cron表达式: 每日凌敨0点
+  
+  # ======================== 限制条件示例 ========================
+  
+  # 只读变量 - 不能修改
+  readonly_server_version:
+    name: "服务器版本"
+    scope: "global"
+    type: "STRING"
+    initial: "%server_version%"
+    limitations:
+      read-only: true
+  
+  # 不持久化变量 - 不保存到数据库
+  temp_session_data:
+    name: "临时会话数据"
+    scope: "player"
+    type: "STRING"
+    initial: ""
+    limitations:
+      persistable: false
+
+  # 安全限制变量 - 限制表达式复杂度
+  secure_calculation:
+    name: "安全计算"
+    scope: "player"
+    type: "DOUBLE"
+    initial: "${player_level} + ${player_exp}"
+    limitations:
+      read-only: true
+      max-recursion-depth: 5
+      max-expression-length: 200
+      allow-circular-references: false
+
+  # ======================== 严格初始值模式示例 ========================
+
+  # 严格模式 + 周期重置 - initial 只在周期重置时更新
+  strict_cycle_bonus:
+    name: "严格周期奖励"
+    scope: "player"
+    type: "DOUBLE"
+    initial: "100 + ${player_level} * 5" # 包含动态表达式
+    cycle: "daily"
+    limitations:
+      strict-initial-mode: true # 启用严格模式，initial 只在每日重置时重新计算
+
+  # 严格模式 + 无周期 - initial 只在玩家首次获得变量时计算一次
+  strict_one_time_bonus:
+    name: "严格单次奖励"
+    scope: "player"
+    type: "DOUBLE"
+    initial: "500 + ${player_level} * 20" # 包含动态表达式
+    limitations:
+      strict-initial-mode: true # 启用严格模式，变量值只在首次创建时计算，后续不再更新
+
+  # 普通模式对比 - initial 会实时更新（默认行为）
+  normal_dynamic_bonus:
+    name: "普通动态奖励"
+    scope: "player"
+    type: "DOUBLE"
+    initial: "200 + ${player_level} * 10" # 包含动态表达式
+    # 没有 strict-initial-mode 配置，默认为 false，初始值会实时更新
+
+  # 严格模式 + 占位符示例
+  strict_vip_status:
+    name: "严格VIP状态"
+    scope: "player"
+    type: "STRING"
+    initial: "%vault_prefix%" # 使用 PlaceholderAPI 占位符
+    limitations:
+      strict-initial-mode: true # 启用严格模式，VIP前缀只在首次获得时确定
+
+  # ======================== 依赖关系示例 ========================
+
+  # 合理的依赖关系 - A依赖B，B是静态值
+  dependent_var_good:
+    name: "合理依赖变量"
+    scope: "player"
+    type: "INT"
+    initial: "${player_level} * 2 + 100" # 依赖player_level
+    limitations:
+      strict-initial-mode: true
+      
+  # 危险示例 - 循环依赖（仅作演示，实际使用会被检测并阻止）
+  # circular_a:
+  #   initial: "${circular_b} + 10"
+  #   limitations:
+  #     strict-initial-mode: true
+  # circular_b:
+  #   initial: "${circular_a} + 5"  
+  #   limitations:
+  #     strict-initial-mode: true
+
+  # ======================== 每分钟重置示例 ========================
+
+  # 每分钟重置变量 - 用于测试
+  minute_reset_variable:
+    name: "每分钟重置变量"
+    scope: "global"
+    type: "INT"
+    initial: 0
+    cycle: "0 * * * * ?" # Cron表达式: 每分钟重置

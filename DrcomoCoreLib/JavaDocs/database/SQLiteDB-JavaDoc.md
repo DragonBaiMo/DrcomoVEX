@@ -1,0 +1,161 @@
+### `SQLiteDB.java`
+
+**1. 概述 (Overview)**
+
+  * **完整路径:** `cn.drcomo.corelib.database.SQLiteDB`
+  * **核心职责:** 管理 SQLite 连接、初始化表结构，并提供增删改查、事务及批量操作能力。自 1.1 起内部集成 HikariCP 连接池，并支持查询连接池状态与执行统计，保证多线程环境下安全获取连接。它遵循零硬编码和控制反转原则，由调用方传入数据库路径和初始化脚本。
+
+**2. 如何实例化 (Initialization)**
+
+  * **核心思想:** 使用依赖注入的方式，将 `Plugin` 实例、相对路径以及初始化 SQL 脚本列表在构造时提供给该类。这样库本身不关心具体的文件位置与表结构。
+  * **构造函数:** `public SQLiteDB(Plugin plugin, String relativePath, List<String> initScripts)`
+  * **代码示例:**
+    ```java
+    Plugin myPlugin = this;
+    List<String> scripts = Arrays.asList("schema.sql");
+    SQLiteDB db = new SQLiteDB(myPlugin, "data/mydb.sqlite", scripts);
+    db.getConfig()
+        .maximumPoolSize(20)
+        .connectionTestQuery("SELECT 1");
+    db.connect();
+    db.initializeSchema();
+    ```
+
+  * **可配置项：** 通过 `db.getConfig()` 可以修改连接池参数。
+      * `maximumPoolSize`：连接池最大连接数，默认 `10`。
+      * `connectionTestQuery`：检测连接有效性的 SQL，默认 `SELECT 1`。
+
+**3. 公共API方法 (Public API Methods)**
+
+  * #### `connect()`
+
+      * **返回类型:** `void`
+      * **功能描述:** 打开数据库连接并关闭自动提交。如果路径父目录不存在会自动创建。
+      * **参数说明:** 无
+
+  * #### `disconnect()`
+
+      * **返回类型:** `void`
+      * **功能描述:** 回滚未提交的事务并关闭连接，忽略关闭过程中的异常。
+      * **参数说明:** 无
+
+  * #### `initializeSchema()`
+
+      * **返回类型:** `void`
+      * **功能描述:** 按顺序读取构造时提供的 SQL 脚本，以分号为界执行每条语句，用于建表或升级数据库结构。
+      * **参数说明:** 无
+
+  * #### `getPoolStatus()`
+
+      * **返回类型:** `ConnectionPoolStatus`
+      * **功能描述:** 获取当前连接池的总连接数、活跃连接数与空闲连接数。
+      * **参数说明:** 无
+      * **关联文档:** [查看](./ConnectionPoolStatus-JavaDoc.md)
+
+  * #### `getMetrics()`
+
+      * **返回类型:** `DatabaseMetrics`
+      * **功能描述:** 返回数据库连接借出次数与语句执行耗时等统计信息。
+      * **参数说明:** 无
+      * **关联文档:** [查看](./DatabaseMetrics-JavaDoc.md)
+
+  * #### `isConnectionValid()`
+
+      * **返回类型:** `boolean`
+      * **功能描述:** 检查当前数据源连接是否可用。
+      * **参数说明:** 无
+
+  * #### `executeUpdate(String sql, Object... params)`
+
+      * **返回类型:** `int`
+      * **功能描述:** 使用 `PreparedStatement` 执行 INSERT、UPDATE 或 DELETE 语句并返回受影响的行数。
+      * **参数说明:**
+          * `sql` (`String`): 包含 `?` 占位符的 SQL 语句。
+          * `params` (`Object...`): 填充占位符的参数列表。
+
+  * #### `queryOne(String sql, ResultSetHandler<T> handler, Object... params)`
+
+      * **返回类型:** `T`
+      * **功能描述:** 执行查询并返回第一行结果，不存在记录时返回 `null`。
+      * **参数说明:**
+          * `sql` (`String`): 查询语句。
+          * `handler` (`ResultSetHandler<T>`): 将 `ResultSet` 转为实体的回调。
+          * `params` (`Object...`): 占位符参数。
+
+  * #### `queryList(String sql, ResultSetHandler<T> handler, Object... params)`
+
+      * **返回类型:** `List<T>`
+      * **功能描述:** 执行查询并将所有结果转换为列表，永不返回 `null`。
+      * **参数说明:** 同 `queryOne`
+
+  * #### `transaction(SQLRunnable callback)`
+
+      * **返回类型:** `void`
+      * **功能描述:** 关闭自动提交后执行回调内的多次数据库更新，若发生异常则回滚，否则提交。
+      * **参数说明:**
+          * `callback` (`SQLRunnable`): 在事务中执行的逻辑。
+
+  * #### `connectAsync()`
+
+      * **返回类型:** `CompletableFuture<Void>`
+      * **功能描述:** 异步打开连接，底层仍使用连接池。
+
+  * #### `initializeSchemaAsync()`
+
+      * **返回类型:** `CompletableFuture<Void>`
+      * **功能描述:** 在后台线程执行初始化脚本。
+
+  * #### `executeUpdateAsync(String sql, Object... params)`
+
+      * **返回类型:** `CompletableFuture<Integer>`
+      * **功能描述:** 异步执行更新语句，返回影响行数。
+
+  * #### `queryOneAsync(String sql, ResultSetHandler<T> handler, Object... params)`
+
+      * **返回类型:** `CompletableFuture<T>`
+      * **功能描述:** 异步查询单行数据。
+
+  * #### `queryListAsync(String sql, ResultSetHandler<T> handler, Object... params)`
+
+      * **返回类型:** `CompletableFuture<List<T>>`
+      * **功能描述:** 异步查询多行数据。
+
+  * #### `transactionAsync(SQLRunnable callback)`
+
+      * **返回类型:** `CompletableFuture<Void>`
+      * **功能描述:** 异步执行事务逻辑。
+
+  * #### `batchUpdate(String sql, List<Object[]> paramsList)`
+
+      * **返回类型:** `CompletableFuture<int[]>`
+      * **功能描述:** 异步执行同一 SQL 的批量更新。
+      * **参数说明:**
+          * `sql` (`String`): 更新语句模板。
+          * `paramsList` (`List<Object[]>`): 每条更新所需的参数数组。
+
+  * #### `batchInsert(String table, List<Map<String, Object>> dataList)`
+
+      * **返回类型:** `CompletableFuture<Void>`
+      * **功能描述:** 根据键值集合批量插入多行数据。
+      * **参数说明:**
+          * `table` (`String`): 目标表名。
+          * `dataList` (`List<Map<String, Object>>`): 每行数据的键值对集合。
+
+  * #### `<T> executeInTransaction(Function<Connection, T> op)`
+
+      * **返回类型:** `CompletableFuture<T>`
+      * **功能描述:** 在单个事务中执行操作并返回结果。
+      * **参数说明:**
+          * `op` (`Function<Connection, T>`): 需要在事务中执行的逻辑。
+
+**4. 内部接口 (Inner Interfaces)**
+
+  * #### `ResultSetHandler<T>`
+
+      * **核心职责:** 将 `ResultSet` 中的一行转换为目标类型 `T`。
+      * **关键方法:** `T handle(ResultSet rs) throws SQLException`
+
+  * #### `SQLRunnable`
+
+      * **核心职责:** 在事务中执行自定义数据库操作。
+      * **关键方法:** `void run(SQLiteDB db) throws SQLException`

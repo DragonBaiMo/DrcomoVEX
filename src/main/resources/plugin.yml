@@ -1,0 +1,132 @@
+name: DrcomoVEX
+version: 1.0.0
+main: cn.drcomo.DrcomoVEX
+api-version: 1.16
+author: BaiMo
+description: "DrcomoVEX - 基于直觉设计的服务器变量管理系统"
+
+# 前置依赖
+depend: [DrcomoCoreLib]
+
+# 软依赖
+softdepend: [PlaceholderAPI, Vault, PlayerPoints]
+libraries:
+  - com.zaxxer:HikariCP:6.2.1
+  - com.github.ben-manes.caffeine:caffeine:3.1.8
+  - com.cronutils:cron-utils:9.2.1
+# 主指令
+commands:
+  vex:
+    description: "DrcomoVEX 主指令"
+    usage: "/<command> [子命令] [参数...]"
+    aliases: [dvex, drcomo]
+    permission: drcomovex.command.help
+    permission-message: "§c你没有权限使用这个命令！"
+
+# 权限节点
+permissions:
+  # 基础权限
+  drcomovex.*:
+    description: "DrcomoVEX 所有权限"
+    default: false
+    children:
+      drcomovex.command.*: true
+      drcomovex.admin.*: true
+  
+  # 指令权限
+  drcomovex.command.*:
+    description: "所有指令权限"
+    default: false
+    children:
+      drcomovex.command.help: true
+      drcomovex.command.get: true
+      drcomovex.command.set: true
+      drcomovex.command.add: true
+      drcomovex.command.remove: true
+      drcomovex.command.reset: true
+      drcomovex.command.get.others: true
+      drcomovex.command.set.others: true
+      drcomovex.command.add.others: true
+      drcomovex.command.remove.others: true
+      drcomovex.command.reset.others: true
+  
+  drcomovex.command.help:
+    description: "查看帮助信息"
+    default: true
+  
+  drcomovex.command.get:
+    description: "获取变量值"
+    default: op
+  
+  drcomovex.command.set:
+    description: "设置变量值"
+    default: op
+  
+  drcomovex.command.add:
+    description: "增加变量值"
+    default: op
+  
+  drcomovex.command.remove:
+    description: "移除变量值"
+    default: op
+  
+  drcomovex.command.reset:
+    description: "重置变量值"
+    default: op
+  
+  # 操作其他玩家的权限
+  drcomovex.command.get.others:
+    description: "获取其他玩家的变量值"
+    default: op
+  
+  drcomovex.command.set.others:
+    description: "设置其他玩家的变量值"
+    default: op
+  
+  drcomovex.command.add.others:
+    description: "增加其他玩家的变量值"
+    default: op
+  
+  drcomovex.command.remove.others:
+    description: "移除其他玩家的变量值"
+    default: op
+  
+  drcomovex.command.reset.others:
+    description: "重置其他玩家的变量值"
+    default: op
+  
+  # 管理员权限
+  drcomovex.admin.*:
+    description: "所有管理员权限"
+    default: false
+    children:
+      drcomovex.admin.reload: true
+      drcomovex.admin.debug: true
+      drcomovex.admin.export: true
+      drcomovex.admin.import: true
+      drcomovex.admin.cleanup: true
+  
+  drcomovex.admin.reload:
+    description: "重载插件配置"
+    default: op
+  
+  drcomovex.admin.debug:
+    description: "查看调试信息"
+    default: op
+  
+  drcomovex.admin.export:
+    description: "导出变量数据"
+    default: op
+  
+  drcomovex.admin.import:
+    description: "导入变量数据"
+    default: op
+  
+  drcomovex.admin.cleanup:
+    description: "清理无效数据"
+    default: op
+  
+  # 更新通知权限
+  drcomovex.update.notify:
+    description: "接收插件更新通知"
+    default: op

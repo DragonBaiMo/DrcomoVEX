@@ -1,0 +1,76 @@
+# ================================================================
+# DrcomoVEX - 基于直觉设计的服务器变量管理系统
+# 版本: 1.0.0 (代号: 直觉)
+# 作者: BaiMo
+# ================================================================
+
+# 数据库配置
+database:
+  # 数据库类型: sqlite 或 mysql
+  type: "sqlite"
+  
+  # SQLite 配置
+  file: "drcomovex.db"
+  
+  # MySQL 配置
+  mysql:
+    host: "localhost"
+    port: 3306
+    database: "drcomovex"
+    username: "root"
+    password: "password"
+    useSSL: false
+  
+  # 连接池配置 (针对持久化超时问题优化)
+  pool:
+    minimum-idle: 3              # 适中的最小连接数，节约资源
+    maximum-pool-size: 12        # 适中的最大连接数，避免过度竞争
+    connection-timeout: 15000    # 15秒连接超时，更快失败反馈
+    idle-timeout: 300000         # 5分钟空闲超时，及时释放资源
+    max-lifetime: 900000         # 15分钟最大生命周期，保持连接新鲜
+
+# 数据保存配置
+data:
+  # 是否启用自动保存
+  auto-save: true
+  
+  # 保存间隔（分钟） - 优化：减少频率避免频繁I/O
+  save-interval-minutes: 3
+  
+  # 玩家退出时是否保存数据
+  save-on-player-quit: true
+
+# 周期性重置配置
+cycle:
+  # 是否启用周期性重置
+  enabled: true
+  
+  # 检查间隔（秒）- 设为1秒以确保不错过任何重置时间点
+  check-interval-seconds: 1
+  
+  # 时区设置
+  timezone: "Asia/Shanghai"
+
+# 基本设置
+settings:
+  # 是否检查更新
+  check-updates: true
+  
+  # 是否通知OP更新
+  notify-ops: true
+
+  # 入服兜底刷新（多子服共库建议开启）：
+  # - 玩家进入服务器后，延迟一段时间清理关键变量的本服缓存并为该玩家预热，避免跨服旧缓存导致的“看起来未刷新”
+  # - 仅在本服执行，不会写入数据库；若 keys 为空则自动筛选“玩家作用域且带周期”的变量
+  join-refresh:
+    enabled: true              # 是否启用入服兜底刷新（仅失效缓存与预热，不删除内存，不写库）
+    delay-millis: 800          # 入服后延迟执行毫秒数，避免与入服预加载并发冲突
+    max-keys: 32               # 单次处理的最大变量键数量，防止全量遍历造成压力
+    cooldown-seconds: 60       # 同一玩家的入服兜底刷新冷却（秒），避免频繁重登触发
+    preheat: false             # 是否在失效缓存后对目标键进行预热（异步只读）；线程池不可用时会自动跳过
+    keys: []                   # 可选：指定需要兜底刷新的变量键清单（留空则自动筛选带周期的玩家变量）
+
+# 调试配置
+debug:
+  # 日志级别: DEBUG, INFO, WARN, ERROR
+  level: "INFO"

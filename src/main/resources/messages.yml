@@ -1,0 +1,219 @@
+# ================================================================
+# DrcomoVEX - 消息配置文件
+# 支持颜色码 (&a, &c, 等) 和 PlaceholderAPI 占位符
+# ================================================================
+
+# 所有插件消息
+messages:
+  # 成功消息
+  success:
+    # 参数: {variable}, {value}
+    get: "&a变量 &e{variable} &a的值: &f{value}"
+    # 参数: {variable}, {value}
+    set: "&a已将变量 &e{variable} &a设置为: &f{value}"
+    # 参数: {variable}, {value}, {new_value}
+    add: "&a已将变量 &e{variable} &a增加 &f{value}&a, 当前值: &f{new_value}"
+    # 参数: {variable}, {value}, {new_value}
+    remove: "&a已从变量 &e{variable} &a中移除 &f{value}&a, 当前值: &f{new_value}"
+    # 参数: {variable}, {value}
+    reset: "&a已重置变量 &e{variable}&a, 当前值: &f{value}"
+    reload: "&a配置文件已重载完成！"
+    # 参数: {count}
+    player-query-summary: "&a符合条件的玩家数: &e{count}"
+    # 参数: {count}, {action}, {variable}
+    player-bulk-dryrun: "&a预演完成，预计影响玩家: &e{count}&a，操作: &e{action}&a，变量: &e{variable}"
+    # 参数: {success}, {failed}, {variable}
+    player-bulk-done: "&a批量操作完成，成功: &e{success}&a，失败: &e{failed}&a，变量: &e{variable}"
+    # 参数: {action}, {variable}, {target}
+    global-bulk-dryrun: "&a预演完成，操作: &e{action}&a，变量: &e{variable}&a，目标: &e{target}"
+    # 参数: {variable}, {result}
+    global-bulk-done: "&a全局变量批量操作完成，变量: &e{variable}&a，结果: &e{result}"
+    # 参数: {file}, {players}, {matches}
+    player-query-saved: "&a已导出批量查询结果到: &e{file} &7(玩家: &e{players}&7, 匹配项: &e{matches}&7)"
+    
+    # 全局变量操作
+    # 参数: {variable}, {value}
+    global-get: "&a全局变量 &e{variable} &a的值: &f{value}"
+    # 参数: {variable}, {value}
+    global-set: "&a已将全局变量 &e{variable} &a设置为: &f{value}"
+    # 参数: {variable}, {value}, {new_value}
+    global-add: "&a已将全局变量 &e{variable} &a增加 &f{value}&a, 当前值: &f{new_value}"
+    # 参数: {variable}, {value}, {new_value}
+    global-remove: "&a已从全局变量 &e{variable} &a中移除 &f{value}&a, 当前值: &f{new_value}"
+    # 参数: {variable}, {value}
+    global-reset: "&a已重置全局变量 &e{variable}&a, 当前值: &f{value}"
+    
+    # 玩家变量操作
+    # 参数: {player}, {variable}, {value}
+    player-get: "&a玩家 &e{player} &a的变量 &e{variable} &a值: &f{value}"
+    # 参数: {player}, {variable}, {value}
+    player-set: "&a已将玩家 &e{player} &a的变量 &e{variable} &a设置为: &f{value}"
+    # 参数: {player}, {variable}, {value}, {new_value}
+    player-add: "&a已将玩家 &e{player} &a的变量 &e{variable} &a增加 &f{value}&a, 当前值: &f{new_value}"
+    # 参数: {player}, {variable}, {value}, {new_value}
+    player-remove: "&a已从玩家 &e{player} &a的变量 &e{variable} &a中移除 &f{value}&a, 当前值: &f{new_value}"
+    # 参数: {player}, {variable}, {value}
+    player-reset: "&a已重置玩家 &e{player} &a的变量 &e{variable}&a, 当前值: &f{value}"
+
+  # 错误消息
+  error:
+    no-permission: "&c你没有权限执行这个操作！"
+    # 参数: {command}
+    unknown-command: "&c未知的子命令: &e{command}&c，请使用 &f/vex help &c查看帮助。"
+    # 参数: {variable}
+    variable-not-found: "&c变量 &e{variable} &c不存在！"
+    # 参数: {player}
+    player-not-found: "&c玩家 &e{player} &c不存在或从未登入过服务器！"
+    # 参数: {reason}
+    operation-failed: "&c操作失败: &e{reason}"
+    internal: "&c内部错误，请联系管理员！"
+    # 参数: {reason}
+    export-failed: "&c导出失败: &e{reason}"
+    console-specify-player: "&c控制台必须指定玩家！使用 &f-p:玩家名或UUID &c参数。"
+    reload-failed: "&c重载配置失败，请检查控制台错误信息！"
+    # 参数: {op}
+    invalid-operator: "&c无效的比较符: &e{op} &c，可用: > >= < <= == !="
+    # 参数: {value}
+    invalid-number: "&c无效的数值: &e{value}"
+    # 参数: {limit}
+    limit-exceeded: "&c超过最大限制: &e{limit}"
+    no-candidates: "&c没有符合条件的对象"
+    
+    # 子命令错误
+    # 参数: {command}
+    unknown-player-subcommand: "&c未知的玩家子命令: &e{command}&c，支持的命令: get, set, add, remove, reset"
+    # 参数: {command}
+    unknown-global-subcommand: "&c未知的全局子命令: &e{command}&c，支持的命令: get, set, add, remove, reset"
+    
+    # 指令格式说明
+    usage-player-command: "&c用法: &f/vex player <get|set|add|remove|reset> ..."
+    usage-global-command: "&c用法: &f/vex global <get|set|add|remove|reset> ..."
+    
+    # 玩家变量用法
+    usage-player-get: "&c用法: &f/vex player get <玩家|UUID> <变量名> [&7--offline&f]"
+    usage-player-set: "&c用法: &f/vex player set <玩家|UUID> <变量名> <值> [&7--offline&f]"
+    usage-player-add: "&c用法: &f/vex player add <玩家|UUID> <变量名> <值> [&7--offline&f]"
+    usage-player-remove: "&c用法: &f/vex player remove <玩家|UUID> <变量名> <值> [&7--offline&f]"
+    usage-player-reset: "&c用法: &f/vex player reset <玩家|UUID> <变量名> [&7--offline&f]"
+    
+    # 全局变量用法
+    usage-global-get: "&c用法: &f/vex global get <变量名>"
+    usage-global-set: "&c用法: &f/vex global set <变量名> <值>"
+    usage-global-add: "&c用法: &f/vex global add <变量名> <值>"
+    usage-global-remove: "&c用法: &f/vex global remove <变量名> <值>"
+    usage-global-reset: "&c用法: &f/vex global reset <变量名>"
+
+    # 使用说明
+    usage-get: "&c用法: &f/vex get <变量名> [-p:玩家ID]"
+    usage-set: "&c用法: &f/vex set <变量名> <值> [-p:玩家ID]"
+    usage-add: "&c用法: &f/vex add <变量名> <值> [-p:玩家ID]"
+    usage-remove: "&c用法: &f/vex remove <变量名> <值> [-p:玩家ID]"
+    usage-reset: "&c用法: &f/vex reset <变量名> [-p:玩家ID]"
+
+  # 帮助信息
+  help:
+    header: "&8&l=== &6&lDrcomoVEX &e帮助 &8&l==="
+    commands:
+      - "&6/vex player get <玩家|UUID> <变量> [&7--offline&f] &7- &f获取玩家变量值"
+      - "&6/vex player set <玩家|UUID> <变量> <值> [&7--offline&f] &7- &f设置玩家变量值"
+      - "&6/vex player add <玩家|UUID> <变量> <值> [&7--offline&f] &7- &f增加玩家变量值"
+      - "&6/vex player remove <玩家|UUID> <变量> <值> [&7--offline&f] &7- &f移除玩家变量值"
+      - "&6/vex player reset <玩家|UUID> <变量> [&7--offline&f] &7- &f重置玩家变量值"
+      - "&6&n批量/通配: &7玩家名可用 * 表示所有玩家; 变量支持通配 * (如 xzpx_*、*_coins、*pvp*)"
+      - "&6/vex player get * <变量通配[:条件]> [--out:文件名.yml] &7- &f批量查询 (条件: > >= < <= == !=)"
+      - "&6/vex player set * <变量通配> <值> [-n] [--limit N] &7- &f批量设置"
+      - "&6/vex player add * <变量通配> <增量> [-n] [--limit N] &7- &f批量增加"
+      - "&6/vex player remove * <变量通配> <减量> [-n] [--limit N] &7- &f批量移除"
+      - "&6/vex player reset * <变量通配> [-n] [--limit N] &7- &f批量重置"
+      - "&6/vex global get <变量> &7- &f获取全局变量值"
+      - "&6/vex global set <变量> <值> &7- &f设置全局变量值"
+      - "&6/vex global add <变量> <值> &7- &f增加全局变量值"
+      - "&6/vex global remove <变量> <值> &7- &f移除全局变量值"
+      - "&6/vex global reset <变量> &7- &f重置全局变量值"
+      - "&6/vex global get <变量通配[:条件]> &7- &f通配查询"
+      - "&6/vex global set <变量通配> <值> [-n] &7- &f通配设置"
+      - "&6/vex global add <变量通配> <增量> [-n] &7- &f通配增加"
+      - "&6/vex global remove <变量通配> <减量> [-n] &7- &f通配移除"
+      - "&6/vex global reset <变量通配> [-n] &7- &f通配重置"
+      - "&6/vex reload &7- &f重载配置文件"
+      - "&6/vex help &7- &f显示帮助信息"
+    footer: "&8&l=== &e提示: &7支持 * 批量与变量通配; 使用 -n 预演, --limit 限制影响数量 &8&l==="
+    flags:
+      - "&6可用参数(Flags):"
+      - "&e--offline &7- 允许按玩家名/UUID 解析离线玩家 (单人命令: get/set/add/remove/reset)"
+      - "&e-n/--dry-run &7- 预演模式，不实际写入 (批量/通配写入)"
+      - "&e--limit N &7- 限制最大影响对象数量 (批量/通配写入)"
+      - "&e--out:文件.yml &7- 将批量查询结果导出为 YML (玩家批量查询)"
+      - "&e--db-only &7- 仅扫描数据库，不扫描在线内存 (玩家批量查询)"
+      - "&e--online-only &7- 仅扫描在线内存，不扫描数据库 (玩家批量查询)"
+
+  # 信息提示
+  info:
+    # 参数: {player}, {old}, {new}
+    player-bulk-preview-item: "&7玩家: &e{player} &7旧值: &f{old} &7→ 新值: &a{new}"
+    # 参数: {player}, {value}
+    player-query-item: "&7{value}"
+    plugin-version: "&aDrcomoVEX &f版本: &e{version}"
+    author: "&a作者: &eBaiMo"
+    description: "&7基于直觉设计的服务器变量管理系统"
+    website: "&a官网: &fhttps://github.com/DragonBaiMo/DrcomoVEX"
+
+  # 统计信息
+  stats:
+    # 参数: {count}
+    total-variables: "&a已加载变量: &e{count}"
+    # 参数: {type}
+    database-type: "&a数据库类型: &e{type}"
+    # 参数: {status}
+    database-status: "&a数据库状态: &e{status}"
+    # 参数: {size}
+    cache-size: "&a缓存大小: &e{size}"
+
+  # 更新通知
+  update:
+    # 参数: {latest}, {current}
+    available: "&6[更新] &a发现新版本 &e{latest}&a！当前版本: &c{current}"
+    # 参数: {url}
+    download: "&6[更新] &a下载地址: &f{url}"
+    no-update: "&a当前已是最新版本！"
+
+  # 调试信息
+  debug:
+    # 参数: {variable}
+    variable-loaded: "&7[调试] 已加载变量: &e{variable}"
+    # 参数: {key}
+    cache-hit: "&7[调试] 缓存命中: &e{key}"
+    # 参数: {key}
+    cache-miss: "&7[调试] 缓存未命中: &e{key}"
+    # 参数: {sql}
+    database-query: "&7[调试] 数据库查询: &e{sql}"
+
+  # 占位符示例
+  placeholders:
+    examples:
+      - "&7占位符示例:"
+      - "&e%drcomovex_[var]_[变量名]% &7- 获取变量值"
+      - "&e%drcomovex_[player]_[变量名]% &7- 获取玩家变量值"
+      - "&e%drcomovex_[global]_[变量名]% &7- 获取服务器变量值"
+
+  # 特殊消息类型
+  special:
+    # ActionBar 消息
+    actionbar:
+      variable-updated: "&a变量已更新: &e{variable} &7= &f{value}"
+
+    # Title 消息
+    title:
+      welcome:
+        title: "&6欢迎使用 DrcomoVEX"
+        subtitle: "&7基于直觉设计的变量管理系统"
+
+# 多语言支持配置
+language:
+  # 默认语言
+  default: "zh_CN"
+
+  # 支持的语言列表
+  supported:
+    - "zh_CN"
+    - "en_US"
