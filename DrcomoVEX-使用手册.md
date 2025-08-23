@@ -150,11 +150,71 @@ variables:
 | **`type`** | 字符串 | 否 | **值类型**。`"INT"`, `"DOUBLE"`, `"STRING"`, `"LIST"`。若不填，会根据 `initial` 自动推断。 |
 | **`initial`** | 任意 | 是 | **初始值**。可以是静态值，也可以是包含占位符和计算的动态表达式字符串。 |
 | **`cycle`** | 字符串 | 否 | **重置周期**。预设值：`"minute"`, `"daily"`, `"weekly"`, `"monthly"`, `"yearly"`；或 Quartz Cron 表达式。 |
+| **`conditions`** | 字符串/字符串列表 | 否 | **条件门控**。全部条件为 `true` 才允许访问；配置此属性时将禁用该变量的缓存读写，以确保条件变化立即生效。 |
 | **`min`** | 数值 | 否 | **最小值**。仅对 `INT` 和 `DOUBLE` 类型有效。 |
 | **`max`** | 数值 | 否 | **最大值** 或 **最大长度/数量**。对 `INT`, `DOUBLE` 是最大值；对 `STRING` 是最大长度；对 `LIST` 是最大条目数。 |
 | **`limitations`** | 对象 | 否 | **高级限制**。 |
 | `limitations.read-only` | 布尔 | 否 | `true` 则变量无法通过指令修改。 |
 | `limitations.persistable` | 布尔 | 否 | `false` 则变量的值不会被保存到数据库，每次重启都恢复初始值。 |
+
+### **2.1 条件门控（conditions）**
+
+* __类型与语义__
+  - 支持两种写法：字符串 或 字符串列表（列表按“与”逻辑，需全部为真）。
+  - 空或空白条件视为不通过；字段缺失不会产生警告。
+
+* __布尔解释规则__
+  - `"true"`（忽略大小写）或 非零数字 视为 `true`。
+  - `"false"`、`0`、无法解析为数字的字符串、`null` 等视为 `false`。
+
+* __评估与保护__
+  - 对外操作：`GET/SET/ADD/REMOVE/RESET` 在执行前统一评估，未通过则拒绝操作。
+  - 内部解析：用于表达式解析的内部读取也会评估；未通过时返回空字符串，避免连锁失败。
+  - 递归保护：检测到自引用/循环引用时视为未通过。
+
+* __缓存策略__
+  - 配置了 `conditions` 的变量禁用缓存读写与预热，确保条件变化立即生效。
+
+**示例（与 `variables/default.yml` 一致）：**
+
+```yaml
+variables:
+  # 开关变量示例（玩家PVP开关）
+  pvp_enabled:
+    name: "PVP开关"
+    scope: "player"
+    type: "STRING"
+    initial: "true"
+
+  # 全局活动开关（双倍经验）
+  double_exp_event:
+    name: "双倍经验活动"
+    scope: "global"
+    type: "STRING"
+    initial: "false"
+
+  # 门控示例1：字符串写法（单条件）
+  gated_pvp_bonus:
+    name: "PVP奖励（门控）"
+    scope: "player"
+    type: "INT"
+    initial: 10
+    # 仅当 pvp_enabled == true 时可访问
+    conditions: "${pvp_enabled}"
+
+  # 门控示例2：列表写法（多条件全部通过）
+  gated_double_exp_reward:
+    name: "双倍经验奖励（门控）"
+    scope: "player"
+    type: "DOUBLE"
+    initial: "100 + ${player_level} * 5"
+    # 仅当双倍经验活动开启，且玩家 PVP 开启时可访问
+    conditions:
+      - "${double_exp_event}"
+      - "${pvp_enabled}"
+```
+
+> 提示：为获得最佳性能，建议将 `conditions` 条件保持简洁；复杂逻辑可拆分为中间变量，再由目标变量通过 `conditions` 引用这些中间变量。
 
 ### **3. 实际配置示例**
 

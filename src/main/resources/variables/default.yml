@@ -218,8 +218,47 @@ variables:
       max-expression-length: 200
       allow-circular-references: false
 
-  # ======================== 严格初始值模式示例 ========================
+  # ======================== 条件门控（conditions）示例 ========================
+  # conditions 可为 字符串 或 字符串列表（列表按“与”逻辑：全部为 true 才通过）
+  # 布尔解释规则："true"(忽略大小写) 或 非零数字 为 true；"false" 或 0/无法解析为数字 为 false
+  # 注意：带 conditions 的变量禁用缓存读写，避免条件变化导致缓存不一致
 
+  # 开关变量示例（玩家PVP开关）
+  pvp_enabled:
+    name: "PVP开关"
+    scope: "player"
+    type: "STRING"
+    initial: "true"
+
+  # 全局活动开关（双倍经验）
+  double_exp_event:
+    name: "双倍经验活动"
+    scope: "global"
+    type: "STRING"
+    initial: "false"
+
+  # 门控示例1：字符串写法（单条件）
+  gated_pvp_bonus:
+    name: "PVP奖励（门控）"
+    scope: "player"
+    type: "INT"
+    initial: 10
+    # 仅当 pvp_enabled == true 时可访问
+    conditions: "${pvp_enabled}"
+
+  # 门控示例2：列表写法（多条件全部通过）
+  gated_double_exp_reward:
+    name: "双倍经验奖励（门控）"
+    scope: "player"
+    type: "DOUBLE"
+    initial: "100 + ${player_level} * 5"
+    # 仅当双倍经验活动开启，且玩家 PVP 开启时可访问
+    conditions:
+      - "${double_exp_event}"
+      - "${pvp_enabled}"
+
+  # ======================== 严格初始值模式示例 ========================
+  
   # 严格模式 + 周期重置 - initial 只在周期重置时更新
   strict_cycle_bonus:
     name: "严格周期奖励"

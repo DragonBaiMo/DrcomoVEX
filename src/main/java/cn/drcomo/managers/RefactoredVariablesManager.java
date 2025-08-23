@@ -83,6 +83,8 @@ public class RefactoredVariablesManager {
 
     // 验证过程中传递当前变量键的线程本地变量
     private final ThreadLocal<String> currentValidatingVariable = new ThreadLocal<>();
+    // 门控评估中的变量栈，防止条件中自引用导致的递归
+    private final ThreadLocal<Set<String>> gatingEvaluatingStack = ThreadLocal.withInitial(HashSet::new);
 
     // ======================== 构造函数 ========================
     public RefactoredVariablesManager(
@@ -253,20 +255,26 @@ public class RefactoredVariablesManager {
         return CompletableFuture.supplyAsync(() -> {
             try {
                 Variable variable = getVariableDefinition(key);
-                Optional<VariableResult> pre = checkOpPreconditions(variable, key, "GET", playerName, false);
+                Optional<VariableResult> pre = checkOpPreconditions(player, variable, key, "GET", playerName, false);
                 if (pre.isPresent()) return pre.get();
 
-                CacheResult cacheResult = cacheManager.getFromCache(player, key, variable);
-                if (cacheResult.isHit()) {
-                    logger.debug("缓存命中(" + cacheResult.getLevel() + "): " + key);
-                    return VariableResult.success(cacheResult.getValue(), "GET", key, playerName);
+                // 条件变量禁用缓存读，避免条件变化导致错误命中
+                if (!variable.hasConditions()) {
+                    CacheResult cacheResult = cacheManager.getFromCache(player, key, variable);
+                    if (cacheResult.isHit()) {
+                        logger.debug("缓存命中(" + cacheResult.getLevel() + "): " + key);
+                        return VariableResult.success(cacheResult.getValue(), "GET", key, playerName);
+                    }
                 }
 
                 String finalValue = getVariableFromMemoryOrDefault(player, variable);
                 if (!isFormulaVariable(variable)) {
                     finalValue = resolveExpression(finalValue, player, variable);
                 }
-                cacheManager.cacheResult(player, key, finalValue, finalValue);
+                // 条件变量禁用缓存写，避免在条件失效后残留不当缓存
+                if (!variable.hasConditions()) {
+                    cacheManager.cacheResult(player, key, finalValue, finalValue);
+                }
                 return VariableResult.success(finalValue, "GET", key, playerName);
             } catch (Exception e) {
                 logger.error("获取变量失败: " + key, e);
@@ -283,7 +291,7 @@ public class RefactoredVariablesManager {
         return CompletableFuture.supplyAsync(() -> {
             try {
                 Variable variable = getVariableDefinition(key);
-                Optional<VariableResult> pre = checkOpPreconditions(variable, key, "SET", playerName, true);
+                Optional<VariableResult> pre = checkOpPreconditions(player, variable, key, "SET", playerName, true);
                 if (pre.isPresent()) return pre.get();
 
                 String processed = processAndValidateValue(variable, value, player);
@@ -315,7 +323,7 @@ public class RefactoredVariablesManager {
         return CompletableFuture.supplyAsync(() -> {
             try {
                 Variable variable = getVariableDefinition(key);
-                Optional<VariableResult> pre = checkOpPreconditions(variable, key, "ADD", playerName, true);
+                Optional<VariableResult> pre = checkOpPreconditions(player, variable, key, "ADD", playerName, true);
                 if (pre.isPresent()) return pre.get();
 
                 String currentValue = getVariableFromMemoryOrDefault(player, variable);
@@ -365,7 +373,7 @@ public class RefactoredVariablesManager {
         return CompletableFuture.supplyAsync(() -> {
             try {
                 Variable variable = getVariableDefinition(key);
-                Optional<VariableResult> pre = checkOpPreconditions(variable, key, "REMOVE", playerName, true);
+                Optional<VariableResult> pre = checkOpPreconditions(player, variable, key, "REMOVE", playerName, true);
                 if (pre.isPresent()) return pre.get();
 
                 String currentValue = getVariableFromMemoryOrDefault(player, variable);
@@ -414,7 +422,7 @@ public class RefactoredVariablesManager {
         return CompletableFuture.supplyAsync(() -> {
             try {
                 Variable variable = getVariableDefinition(key);
-                Optional<VariableResult> pre = checkOpPreconditions(variable, key, "RESET", playerName, true);
+                Optional<VariableResult> pre = checkOpPreconditions(player, variable, key, "RESET", playerName, true);
                 if (pre.isPresent()) return pre.get();
 
                 removeFromMemoryAndInvalidate(player, variable);
@@ -474,7 +482,7 @@ public class RefactoredVariablesManager {
                         Set<String> keys = getPlayerVariableKeys();
                         for (String key : keys) {
                             Variable var = getVariableDefinition(key);
-                            if (var != null) {
+                            if (var != null && !var.hasConditions()) {
                                 cacheManager.preloadCache(player, key, var);
                             }
                         }
@@ -587,14 +595,80 @@ public class RefactoredVariablesManager {
      * 1) 变量是否存在 2)（可选）是否可写
      */
     private Optional<VariableResult> checkOpPreconditions(
-            Variable variable, String key, String op, String playerName, boolean requireWritable) {
+            OfflinePlayer player, Variable variable, String key, String op, String playerName, boolean requireWritable) {
         if (variable == null) {
             return Optional.of(VariableResult.failure("变量不存在: " + key, op, key, playerName));
         }
         if (requireWritable && variable.getLimitations() != null && variable.getLimitations().isReadOnly()) {
             return Optional.of(VariableResult.failure("变量为只读模式: " + key, op, key, playerName));
         }
+        // 条件门控：所有操作在继续前判定
+        try {
+            if (variable.hasConditions() && !evaluateConditions(player, variable)) {
+                logger.debug("变量门控未通过: op=" + op + ", key=" + key + ", player=" + playerName);
+                return Optional.of(VariableResult.failure("变量不满足访问条件: " + key, op, key, playerName));
+            }
+        } catch (Exception e) {
+            logger.warn("变量门控评估异常，拒绝访问: key=" + key + ", player=" + playerName);
+            return Optional.of(VariableResult.failure("变量条件评估异常: " + key, op, key, playerName));
+        }
         return Optional.empty();
+    }
+
+    /** 评估变量的门控条件：全部为 true 才通过。解析错误按 false 处理 */
+    private boolean evaluateConditions(OfflinePlayer player, Variable variable) {
+        List<String> conds = variable.getConditions();
+        if (conds == null || conds.isEmpty()) return true;
+        Set<String> stack = gatingEvaluatingStack.get();
+        String k = variable.getKey();
+        if (stack.contains(k)) {
+            logger.debug("检测到变量门控自引用，拒绝通过: " + k);
+            return false;
+        }
+        stack.add(k);
+        try {
+        int idx = 0;
+        for (String raw : conds) {
+            idx++;
+            if (isBlank(raw)) {
+                logger.debug("变量条件为空，视为不通过: " + variable.getKey());
+                return false;
+            }
+            String resolved;
+            try {
+                // 解析条件表达式；此处传入 variable 以应用其安全限制
+                resolved = resolveExpression(raw, player, variable);
+            } catch (Exception e) {
+                logger.debug("变量条件解析异常: key=" + variable.getKey() + ", 条件#" + idx + " => 异常: " + e.getMessage());
+                return false;
+            }
+
+            boolean pass = interpretAsBoolean(resolved);
+            if (!pass) {
+                String rv = (resolved == null ? "null" : (resolved.length() > 64 ? resolved.substring(0, 64) + "..." : resolved));
+                String condPreview = raw.length() > 64 ? raw.substring(0, 64) + "..." : raw;
+                logger.debug("变量门控失败: key=" + variable.getKey() + ", 条件#" + idx + " '" + condPreview + "' => '" + rv + "'");
+                return false;
+            }
+        }
+        return true;
+        } finally {
+            stack.remove(k);
+        }
+    }
+
+    /** 严格布尔解释："true"(忽略大小写) 或 非零数字 为 true；其它均为 false */
+    private boolean interpretAsBoolean(String val) {
+        if (val == null) return false;
+        String s = val.trim().toLowerCase();
+        if ("true".equals(s)) return true;
+        if ("false".equals(s)) return false;
+        try {
+            double d = Double.parseDouble(s);
+            return Math.abs(d) > 1e-12;
+        } catch (Exception ignored) {
+            return false;
+        }
     }
 
     /** 获取玩家名，若为空则返回 "SERVER" */
@@ -624,6 +698,19 @@ public class RefactoredVariablesManager {
 
     /** 从内存获取变量值或返回默认/初始值（含严格模式与公式处理） */
     private String getVariableFromMemoryOrDefault(OfflinePlayer player, Variable variable) {
+        // 内部访问也进行门控，但失败时返回空串避免连锁失败
+        try {
+            if (variable.hasConditions()) {
+                if (!evaluateConditions(player, variable)) {
+                    logger.debug("内部访问门控未通过: " + variable.getKey());
+                    return "";
+                }
+            }
+        } catch (Exception e) {
+            logger.debug("内部访问门控评估异常，返回空串: " + variable.getKey());
+            return "";
+        }
+
         VariableValue val = getMemoryValue(player, variable);
         String init = variable.getInitial();
         boolean isFormula = isFormulaVariable(variable);
@@ -1128,6 +1215,22 @@ public class RefactoredVariablesManager {
             applyLimitationsFromSection(limSec, lb);
         }
 
+        // 解析 conditions：支持字符串或列表
+        if (section.contains("conditions")) {
+            List<String> conds = new java.util.ArrayList<>();
+            if (section.isList("conditions")) {
+                conds = section.getStringList("conditions");
+            } else if (section.isString("conditions")) {
+                String c = section.getString("conditions");
+                if (c != null && !c.trim().isEmpty()) conds.add(c);
+            } else {
+                logger.warn("变量 " + key + " 的 conditions 字段类型无效，已忽略");
+            }
+            if (!conds.isEmpty()) {
+                builder.conditions(conds);
+            }
+        }
+
         builder.limitations(lb.build());
         return builder.build();
     }
@@ -1244,7 +1347,7 @@ public class RefactoredVariablesManager {
                 try {
                     for (String key : getPlayerVariableKeys()) {
                         Variable var = getVariableDefinition(key);
-                        if (var != null) {
+                        if (var != null && !var.hasConditions()) {
                             cacheManager.preloadCache(player, key, var);
                         }
                     }

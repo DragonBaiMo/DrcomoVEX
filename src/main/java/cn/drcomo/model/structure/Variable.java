@@ -1,6 +1,8 @@
 package cn.drcomo.model.structure;
 
 import java.time.ZonedDateTime;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
 
@@ -24,6 +26,7 @@ public class Variable {
     private final String max;
     private final String cycle;
     private final Limitations limitations;
+    private final List<String> conditions;
     
     // 编译时计算的元数据
     private final boolean isDynamic;
@@ -41,6 +44,9 @@ public class Variable {
         this.max = builder.max;
         this.cycle = builder.cycle;
         this.limitations = builder.limitations;
+        this.conditions = builder.conditions == null
+                ? Collections.emptyList()
+                : Collections.unmodifiableList(new ArrayList<>(builder.conditions));
         
         // 计算元数据
         this.isDynamic = variableType.isDynamic();
@@ -89,6 +95,20 @@ public class Variable {
     
     public Limitations getLimitations() {
         return limitations;
+    }
+    
+    /**
+     * 条件门控表达式列表
+     */
+    public List<String> getConditions() {
+        return conditions;
+    }
+
+    /**
+     * 是否配置了条件门控
+     */
+    public boolean hasConditions() {
+        return conditions != null && !conditions.isEmpty();
     }
     
     public boolean isDynamic() {
@@ -303,6 +323,7 @@ public class Variable {
         private String max;
         private String cycle;
         private Limitations limitations;
+        private List<String> conditions;
         
         public Builder(String key) {
             this.key = key;
@@ -350,6 +371,19 @@ public class Variable {
         
         public Builder limitations(Limitations limitations) {
             this.limitations = limitations;
+            return this;
+        }
+        
+        /**
+         * 设置条件门控表达式列表
+         */
+        public Builder conditions(List<String> conditions) {
+            if (conditions == null) {
+                this.conditions = null;
+            } else {
+                // 防御性拷贝，避免外部修改
+                this.conditions = new ArrayList<>(conditions);
+            }
             return this;
         }
         
