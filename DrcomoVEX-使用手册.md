@@ -435,14 +435,85 @@ item:
     - '&7当前金币: &f%drcomovex_[var]_player_money%'
     - '&7服务器公告: &a%drcomovex_[global]_server_motd%'
 ```
-
------
-
-## **示例配置文件合集**
-
-### **示例一：基础经济与等级系统 (`economy.yml`)**
-
-```yaml
+  
+  -----
+  
+  ## **文档六：缓存失效 API 命名与使用规范**
+  
+  为保证跨服一致性与高性能，本插件实现多级缓存（L1 原始、L2 表达式解析、L3 最终结果）与精确失效策略。以下为对外可用的缓存相关 API 与推荐实践。
+  
+  ### 1. API 总览（RefactoredVariablesManager）
+  
+  - **invalidateGlobalCaches(String key)**
+    - 清理“全局上下文”的缓存（影响该 key 的 L3 以及关联的 L2）。
+    - 仅用于 `global` 作用域变量。
+    - 为了语义清晰，取代旧方法 `invalidateAllCaches(key)`（旧方法已 `@Deprecated` 并委托到本方法）。
+  
+  - **invalidateCachesForPlayer(OfflinePlayer player, String key)**
+    - 清理“玩家上下文”的缓存（影响该 key 的 L3 以及关联的 L2）。
+    - 用于 `player` 作用域变量；当 `player == null` 时等价于全局上下文，但不推荐这样使用，改用 `invalidateGlobalCaches` 以免混淆。
+  
+  - **invalidateAllL2ForPlayer(OfflinePlayer player)**
+    - 一次性批量清理该玩家上下文下的所有 L2 表达式缓存（不影响 L3）。
+    - 适合“先批量清 L2、后按键仅清 L3”的高效策略。
+  
+  - **invalidateL3Only(OfflinePlayer player, String key)**
+    - 仅清理 L3（最终结果），不触碰 L2。
+    - `player != null` 表示玩家上下文；`player == null` 表示全局上下文。
+  
+  - **getL2InvalidationsTotal() / getL3InvalidationsTotal()**
+    - 自插件启动以来累计的 L2/L3 清理条目数（原子计数，用于观测与排障）。
+  
+  ### 2. 作用域与参数约定
+  
+  - **玩家上下文**：传入对应的 `OfflinePlayer`（或在线 `Player`）。
+  - **全局上下文**：统一以 `player == null` 表示（内部等价于 `SERVER` 上下文）。
+  - 所有方法均为线程安全，可在异步线程调用；但请避免在主线程内大量循环清理，以免卡顿。
+  
+  ### 3. 推荐用法：玩家入服一致性刷新
+  
+  入服时建议使用“先批量 L2、再按键仅清 L3”的策略，避免重复清 L2：
+  
+  ```java
+  // 1) 批量清理该玩家的 L2（一次）
+  int l2Batch = variablesManager.invalidateAllL2ForPlayer(player);
+  
+  // 2) 遍历需要刷新的键
+  for (String key : keysToRefresh) {
+      if (isPlayerScoped(key)) {
+          // 仅清该玩家上下文的 L3
+          variablesManager.invalidateL3Only(player, key);
+      } else if (isGlobalScoped(key)) {
+          // 仅清全局上下文的 L3
+          variablesManager.invalidateL3Only(null, key);
+      } else {
+          // 作用域不明时，保守处理为玩家上下文
+          variablesManager.invalidateL3Only(player, key);
+      }
+  }
+  ```
+  
+  该流程已在 `PlayerListener.scheduleJoinConsistencyRefresh()` 中实现，适用于多子服共库的跨服一致性场景。
+  
+  ### 4. 迁移指引（向后兼容）
+  
+  - 旧方法 `invalidateAllCaches(key)` 已废弃但仍可使用；建议**全部迁移**为：
+    - `invalidateGlobalCaches(key)`（全局变量）。
+    - `invalidateCachesForPlayer(player, key)`（玩家变量，若需同时清 L2 和 L3）。
+    - 若已提前批量清 L2，请改用 `invalidateL3Only(...)` 进行精确 L3 失效，避免重复清 L2。
+  
+  ### 5. 注意事项
+  
+  - **避免重复清 L2**：批量清过 L2 后，请在循环中使用 `invalidateL3Only(...)`，不要再次调用会触碰 L2 的 API。
+  - **禁用缓存的变量**（配置了 `conditions`）读取默认不走缓存；对其执行失效通常不会产生有效清理条目。
+  - **日志与观测**：如需排障，短时将日志级别调整为 `DEBUG`，并观察 L2/L3 累计增量与耗时。
+  
+  -----
+  
+  ## **示例配置文件合集**
+  
+  ### **示例一：基础经济与等级系统 (`economy.yml`)**
+  ```yaml
 # /plugins/DrcomoVEX/variables/economy.yml
 variables:
   # 玩家金币

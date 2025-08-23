@@ -153,15 +153,46 @@ public class PlayerListener implements Listener {
                     return;
                 }
 
-                // 仅失效缓存：全局上下文与玩家上下文缓存，不改内存存储，不产生删除标记
+                // 仅失效缓存：
+                // 1) 先对该玩家做一次性 L2 批量清理；
+                // 2) 再按作用域仅清 L3（避免重复清 L2），不改内存存储，不产生删除标记
+                long startNs = System.nanoTime();
+                long l2Before = plugin.getVariablesManager().getL2InvalidationsTotal();
+                long l3Before = plugin.getVariablesManager().getL3InvalidationsTotal();
+                int l2BatchCleared = plugin.getVariablesManager().invalidateAllL2ForPlayer(player);
+
+                int playerScopedCount = 0;
+                int globalScopedCount = 0;
                 for (String key : keys) {
                     try {
-                        plugin.getVariablesManager().invalidateAllCaches(key);
-                        plugin.getVariablesManager().invalidateCachesForPlayer(player, key);
+                        Variable vdef = plugin.getVariablesManager().getVariableDefinition(key);
+                        if (vdef != null) {
+                            if (vdef.isPlayerScoped()) {
+                                plugin.getVariablesManager().invalidateL3Only(player, key);
+                                playerScopedCount++;
+                            } else if (vdef.isGlobal()) {
+                                plugin.getVariablesManager().invalidateL3Only(null, key);
+                                globalScopedCount++;
+                            } else {
+                                // 未知作用域，保守处理：仅清玩家上下文 L3，避免全局抖动
+                                plugin.getVariablesManager().invalidateL3Only(player, key);
+                                playerScopedCount++;
+                            }
+                        } else {
+                            // 未找到定义，保守处理：仅清玩家上下文 L3
+                            plugin.getVariablesManager().invalidateL3Only(player, key);
+                            playerScopedCount++;
+                        }
                     } catch (Exception ex) {
                         logger.debug("入服兜底刷新: 失效缓存失败 key=" + key + ", err=" + ex.getMessage());
                     }
                 }
+
+                long l2After = plugin.getVariablesManager().getL2InvalidationsTotal();
+                long l3After = plugin.getVariablesManager().getL3InvalidationsTotal();
+                long l2Delta = Math.max(0, l2After - l2Before);
+                long l3Delta = Math.max(0, l3After - l3Before);
+                long elapsedMs = (System.nanoTime() - startNs) / 1_000_000L;
 
                 // 可选预热：仅在开启且线程池可用时执行
                 boolean preheat = cfg.getBoolean("settings.join-refresh.preheat", false);
@@ -190,7 +221,13 @@ public class PlayerListener implements Listener {
                     }
                 }
 
-                logger.debug("玩家 " + player.getName() + " 入服兜底刷新完成，处理键数: " + keys.size());
+                logger.debug("玩家 " + player.getName() + " 入服兜底刷新完成，处理键数: " + keys.size()
+                        + ", 玩家作用域: " + playerScopedCount
+                        + ", 全局作用域: " + globalScopedCount
+                        + ", L2批量清理: " + l2BatchCleared
+                        + ", L2增量: " + l2Delta
+                        + ", L3增量: " + l3Delta
+                        + ", 耗时: " + elapsedMs + " ms");
             } catch (InterruptedException ie) {
                 Thread.currentThread().interrupt();
             } catch (Exception e) {

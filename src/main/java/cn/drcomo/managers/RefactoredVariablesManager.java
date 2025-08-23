@@ -539,15 +539,24 @@ public class RefactoredVariablesManager {
     }
 
     /**
-     * 清理指定变量的所有缓存
+     * 清理指定变量的全局上下文缓存（仅 server 上下文）
      */
-    public void invalidateAllCaches(String key) {
+    public void invalidateGlobalCaches(String key) {
         try {
             cacheManager.invalidateCache(null, key);
-            logger.debug("已清理变量缓存: " + key);
+            logger.debug("已清理全局上下文变量缓存: " + key);
         } catch (Exception e) {
-            logger.error("清理变量缓存失败: " + key, e);
+            logger.error("清理全局上下文变量缓存失败: " + key, e);
         }
+    }
+
+    /**
+     * 清理指定变量的所有缓存
+     * @deprecated 语义不清，等同于清理全局上下文缓存；请改用 {@link #invalidateGlobalCaches(String)}
+     */
+    @Deprecated
+    public void invalidateAllCaches(String key) {
+        invalidateGlobalCaches(key);
     }
 
     /**
@@ -559,6 +568,39 @@ public class RefactoredVariablesManager {
             logger.debug("已清理玩家上下文变量缓存: player=" + (player != null ? player.getName() : "null") + ", key=" + key);
         } catch (Exception e) {
             logger.error("清理玩家上下文变量缓存失败: " + key, e);
+        }
+    }
+
+    /**
+     * 一次性清理指定玩家上下文下的所有 L2 表达式缓存（不影响 L3）
+     * @return 实际清理的 L2 条目数
+     */
+    public int invalidateAllL2ForPlayer(OfflinePlayer player) {
+        try {
+            int n = cacheManager.invalidateAllL2ForPlayer(player);
+            logger.debug("已批量清理玩家 L2 表达式缓存: player=" + (player != null ? player.getName() : "SERVER") + ", 条目=" + n);
+            return n;
+        } catch (Exception e) {
+            logger.error("批量清理玩家 L2 表达式缓存失败: " + (player != null ? player.getName() : "SERVER"), e);
+            return 0;
+        }
+    }
+
+    /** 获取累计的 L2 清理条目数（自插件启动以来） */
+    public long getL2InvalidationsTotal() { return cacheManager.getL2InvalidationsTotal(); }
+
+    /** 获取累计的 L3 清理条目数（自插件启动以来） */
+    public long getL3InvalidationsTotal() { return cacheManager.getL3InvalidationsTotal(); }
+
+    /**
+     * 仅清理 L3（最终结果）缓存，不触碰 L2
+     */
+    public void invalidateL3Only(OfflinePlayer player, String key) {
+        try {
+            cacheManager.invalidateL3Only(player, key);
+            logger.debug("仅清L3缓存: player=" + (player != null ? player.getName() : "SERVER") + ", key=" + key);
+        } catch (Exception e) {
+            logger.error("仅清L3缓存失败: " + key, e);
         }
     }
 

@@ -4,6 +4,7 @@ import cn.drcomo.corelib.util.DebugUtil;
 import cn.drcomo.model.structure.Variable;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
+import com.github.benmanes.caffeine.cache.RemovalCause;
 import com.github.benmanes.caffeine.cache.stats.CacheStats;
 import org.bukkit.OfflinePlayer;
 
@@ -43,6 +44,12 @@ public class MultiLevelCacheManager {
 
     // 反向依赖映射：变量 -> 依赖它的缓存键集合
     private final Map<String, Set<String>> reverseDependencyMap = new ConcurrentHashMap<>();
+
+    // L2 反向依赖映射：变量 -> (上下文 -> 表达式缓存键集合)
+    private final Map<String, Map<String, Set<String>>> l2ReverseDependencyMap = new ConcurrentHashMap<>();
+
+    // L2 表达式键到其依赖项（变量|上下文）的映射，用于失效时快速清理索引
+    private final Map<String, Set<String>> l2ExprToDeps = new ConcurrentHashMap<>();
     
     // 表达式模式匹配器
     private final Pattern variablePattern = Pattern.compile("\\$\\{([^}]+)\\}");
@@ -54,6 +61,8 @@ public class MultiLevelCacheManager {
     private final AtomicLong l1Hits = new AtomicLong(0);
     private final AtomicLong l1Misses = new AtomicLong(0);
     private final AtomicLong totalRequests = new AtomicLong(0);
+    private final AtomicLong l2InvalidationsTotal = new AtomicLong(0);
+    private final AtomicLong l3InvalidationsTotal = new AtomicLong(0);
     
     /**
      * 构造函数
@@ -68,6 +77,11 @@ public class MultiLevelCacheManager {
                 .maximumSize(config.getL2MaximumSize())
                 .expireAfterWrite(Duration.ofMinutes(config.getL2ExpireMinutes()))
                 .recordStats()
+                .removalListener((String k, String v, RemovalCause cause) -> {
+                    try {
+                        removeMappingForExpressionKey(k);
+                    } catch (Exception ignore) {}
+                })
                 .build();
                 
         // 初始化L3结果缓存
@@ -151,7 +165,27 @@ public class MultiLevelCacheManager {
         try {
             if (expression != null && result != null && !containsPlaceholders(expression)) {
                 String expressionKey = buildExpressionKey(expression, player);
+                String playerContext = player != null ? player.getUniqueId().toString() : "server";
                 l2ExpressionCache.put(expressionKey, result);
+
+                // 建立 L2 反向索引
+                Set<String> deps = extractDependencies(expression);
+                if (deps != null && !deps.isEmpty()) {
+                    // 记录 expr -> deps 映射（变量|上下文）
+                    Set<String> depComposites = java.util.Collections.newSetFromMap(new ConcurrentHashMap<>());
+                    for (String depVar : deps) {
+                        depComposites.add(depVar + "|" + playerContext);
+                        l2ReverseDependencyMap
+                                .computeIfAbsent(depVar, k -> new ConcurrentHashMap<>())
+                                .compute(playerContext, (ctx, set) -> {
+                                    if (set == null) set = ConcurrentHashMap.newKeySet();
+                                    set.add(expressionKey);
+                                    return set;
+                                });
+                    }
+                    l2ExprToDeps.put(expressionKey, depComposites);
+                }
+
                 logger.debug("L2缓存表达式结果: " + expressionKey);
             } else if (containsPlaceholders(expression)) {
                 logger.debug("跳过L2缓存（包含PlaceholderAPI占位符）: " + expression);
@@ -166,16 +200,19 @@ public class MultiLevelCacheManager {
      */
     private void invalidateL2CacheForVariable(OfflinePlayer player, String key) {
         String playerContext = player != null ? player.getUniqueId().toString() : "server";
-        
-        // 清除直接相关的表达式缓存（更精确的匹配）
-        l2ExpressionCache.asMap().keySet().removeIf(cacheKey -> {
-            // 解析缓存键格式: "expr:hashCode:playerContext"
-            String[] parts = cacheKey.split(":", 3);
-            if (parts.length == 3 && "expr".equals(parts[0])) {
-                return playerContext.equals(parts[2]);
-            }
-            return false;
-        });
+        try {
+            Map<String, Set<String>> ctxMap = l2ReverseDependencyMap.get(key);
+            if (ctxMap == null) return;
+            Set<String> exprKeys = ctxMap.get(playerContext);
+            if (exprKeys == null || exprKeys.isEmpty()) return;
+            // 复制一份，避免并发修改
+            Set<String> toInvalidate = new HashSet<>(exprKeys);
+            l2ExpressionCache.invalidateAll(toInvalidate);
+            l2InvalidationsTotal.addAndGet(toInvalidate.size());
+            logger.debug("L2精准清理: key=" + key + ", ctx=" + playerContext + ", 条目=" + toInvalidate.size());
+        } catch (Exception e) {
+            logger.error("L2精准清理失败: key=" + key, e);
+        }
     }
 
     /**
@@ -265,6 +302,7 @@ public class MultiLevelCacheManager {
         for (String dependentCacheKey : dependentCacheKeys) {
             // 清除依赖变量的L3缓存
             l3ResultCache.invalidate(dependentCacheKey);
+            l3InvalidationsTotal.incrementAndGet();
 
             // 同步更新映射
             Set<String> deps = dependencyGraph.remove(dependentCacheKey);
@@ -298,6 +336,7 @@ public class MultiLevelCacheManager {
             
             // 清除L3缓存
             l3ResultCache.invalidate(cacheKey);
+            l3InvalidationsTotal.incrementAndGet();
 
             // 精确清除相关的L2表达式缓存
             invalidateL2CacheForVariable(player, key);
@@ -320,6 +359,77 @@ public class MultiLevelCacheManager {
             
         } catch (Exception e) {
             logger.error("清除缓存失败: " + key, e);
+        }
+    }
+
+    /**
+     * 仅清理 L3（最终结果）缓存，不触碰 L2 表达式缓存
+     */
+    public void invalidateL3Only(OfflinePlayer player, String key) {
+        try {
+            String cacheKey = buildCacheKey(player, key);
+            l3ResultCache.invalidate(cacheKey);
+            l3InvalidationsTotal.incrementAndGet();
+            logger.debug("仅清L3缓存: " + cacheKey);
+        } catch (Exception e) {
+            logger.error("清理L3缓存失败: " + key, e);
+        }
+    }
+
+    /**
+     * 一次性清除某玩家上下文下的所有 L2 表达式缓存（不影响 L3）
+     * @return 实际清除的 L2 条目数
+     */
+    public int invalidateAllL2ForPlayer(OfflinePlayer player) {
+        String playerContext = player != null ? player.getUniqueId().toString() : "server";
+        try {
+            Set<String> agg = new HashSet<>();
+            for (Map<String, Set<String>> ctxMap : l2ReverseDependencyMap.values()) {
+                Set<String> set = ctxMap.get(playerContext);
+                if (set != null && !set.isEmpty()) {
+                    agg.addAll(set);
+                }
+            }
+            if (!agg.isEmpty()) {
+                l2ExpressionCache.invalidateAll(agg);
+                l2InvalidationsTotal.addAndGet(agg.size());
+            }
+            logger.debug("一次性清除玩家上下文 L2: ctx=" + playerContext + ", 条目=" + agg.size());
+            return agg.size();
+        } catch (Exception e) {
+            logger.error("一次性清除玩家 L2 失败: ctx=" + playerContext, e);
+            return 0;
+        }
+    }
+
+    /**
+     * 获取累计的 L2/L3 清理次数（条目数）
+     */
+    public long getL2InvalidationsTotal() { return l2InvalidationsTotal.get(); }
+    public long getL3InvalidationsTotal() { return l3InvalidationsTotal.get(); }
+
+    /**
+     * 清理 L2 索引中关于指定表达式键的记录
+     */
+    private void removeMappingForExpressionKey(String expressionKey) {
+        Set<String> comps = l2ExprToDeps.remove(expressionKey);
+        if (comps == null || comps.isEmpty()) return;
+        for (String comp : comps) {
+            int idx = comp.lastIndexOf('|');
+            if (idx <= 0) continue;
+            String var = comp.substring(0, idx);
+            String ctx = comp.substring(idx + 1);
+            l2ReverseDependencyMap.computeIfPresent(var, (k, ctxMap) -> {
+                if (ctxMap == null) return null;
+                Set<String> set = ctxMap.get(ctx);
+                if (set != null) {
+                    set.remove(expressionKey);
+                    if (set.isEmpty()) {
+                        ctxMap.remove(ctx);
+                    }
+                }
+                return ctxMap.isEmpty() ? null : ctxMap;
+            });
         }
     }
     

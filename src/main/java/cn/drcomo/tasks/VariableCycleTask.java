@@ -636,7 +636,7 @@ public class VariableCycleTask {
     /** 清理内存和缓存并短暂等待，确保异步完成 */
     private void clearCachesAndWait(String key) {
         variablesManager.removeVariableFromMemoryAndCache(key);
-        variablesManager.invalidateAllCaches(key);
+        variablesManager.invalidateGlobalCaches(key);
         try {
             Thread.sleep(50); // 短暂等待确保缓存清理完成
         } catch (InterruptedException ie) {
