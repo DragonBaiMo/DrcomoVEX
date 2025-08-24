@@ -300,9 +300,17 @@ public class RefactoredVariablesManager {
                 }
 
                 if (isFormulaVariable(variable)) {
-                    String increment = calculateIncrementForSet(variable, processed, player);
-                    updateMemoryAndInvalidate(player, variable, increment);
-                    logger.debug("设置公式变量: " + key + " 增量= " + increment + " 最终值= " + processed + " (异步持久化中)");
+                    VariableValue memVal = getMemoryValue(player, variable);
+                    boolean useStrictFinal = variable.isStrictInitialMode() && memVal != null && memVal.isStrictEncoded();
+                    if (useStrictFinal) {
+                        // 严格模式下直接以最终显示值写入 STRICT 编码
+                        updateMemoryAndInvalidate(player, variable, "STRICT:" + processed + ":" + System.currentTimeMillis());
+                        logger.debug("设置公式变量(严格): " + key + " 最终值= " + processed + " (异步持久化中)");
+                    } else {
+                        String increment = calculateIncrementForSet(variable, processed, player);
+                        updateMemoryAndInvalidate(player, variable, increment);
+                        logger.debug("设置公式变量: " + key + " 增量= " + increment + " 最终值= " + processed + " (异步持久化中)");
+                    }
                 } else {
                     updateMemoryAndInvalidate(player, variable, processed);
                     logger.debug("设置变量: " + key + " = " + processed + " (异步持久化中)");
@@ -332,11 +340,37 @@ public class RefactoredVariablesManager {
 
                 if (isFormulaVariable(variable)) {
                     String resolvedAdd = resolveExpression(addValue, player, variable);
-                    String currInc = Optional.ofNullable(getMemoryValue(player, variable))
-                            .map(VariableValue::getActualValue).orElse("0");
-                    newIncrement = calculateFormulaIncrement(variable.getValueType(), currInc, resolvedAdd, true);
-                    String base = resolveExpression(variable.getInitial(), player, variable);
-                    displayValue = addFormulaIncrement(base, newIncrement, variable.getValueType());
+                    VariableValue memVal = getMemoryValue(player, variable);
+                    boolean useStrictFinal = variable.isStrictInitialMode() && memVal != null && memVal.isStrictEncoded();
+                    if (useStrictFinal) {
+                        // 基于当前显示值直接合成新的显示值，并以 STRICT 编码回写
+                        ValueType t = variable.getValueType();
+                        if (t == null) t = inferTypeFromValue(currentValue);
+                        String newDisplay = mergeByType(currentValue, resolvedAdd, t);
+                        // 校验/修正针对显示值
+                        if (!validateValue(variable, newDisplay)) {
+                            String adjusted = ValueLimiter.apply(variable, newDisplay);
+                            if (adjusted == null || !validateValue(variable, adjusted)) {
+                                return VariableResult.failure("加法结果超出限制", "ADD", key, playerName);
+                            }
+                            newDisplay = adjusted;
+                        }
+                        updateMemoryAndInvalidate(player, variable, "STRICT:" + newDisplay + ":" + System.currentTimeMillis());
+                        logger.debug("加法操作(严格公式): " + key + " = " + newDisplay + " (当前: " + currentValue + " + 增加: " + addValue + ")");
+                        return VariableResult.success(newDisplay, "ADD", key, playerName);
+                    } else {
+                        String currInc = Optional.ofNullable(getMemoryValue(player, variable))
+                                .map(VariableValue::getActualValue).orElse("0");
+                        ValueType t = variable.getValueType();
+                        if (t == null) t = inferTypeFromValue(resolvedAdd);
+                        boolean numeric = (t == ValueType.INT || t == ValueType.DOUBLE);
+                        String safeAdd = resolvedAdd == null ? "0" : resolvedAdd.trim();
+                        boolean neg = numeric && safeAdd.startsWith("-");
+                        String operand = neg ? safeAdd.substring(1) : safeAdd;
+                        newIncrement = calculateFormulaIncrement(t, currInc, operand, !neg);
+                        String base = resolveExpression(variable.getInitial(), player, variable);
+                        displayValue = addFormulaIncrement(base, newIncrement, t);
+                    }
                 } else {
                     String resolvedAdd = resolveExpression(addValue, player, variable);
                     newIncrement = calculateAddition(variable.getValueType(), currentValue, resolvedAdd);
@@ -381,12 +415,38 @@ public class RefactoredVariablesManager {
                 String displayValue;
 
                 if (isFormulaVariable(variable)) {
-                    newIncrement = calculateFormulaIncrement(
-                            variable.getValueType(),
-                            Optional.ofNullable(getMemoryValue(player, variable)).map(VariableValue::getActualValue).orElse("0"),
-                            removeValue, false);
-                    String base = resolveExpression(variable.getInitial(), player, variable);
-                    displayValue = addFormulaIncrement(base, newIncrement, variable.getValueType());
+                    String resolvedRemove = resolveExpression(removeValue, player, variable);
+                    VariableValue memVal = getMemoryValue(player, variable);
+                    boolean useStrictFinal = variable.isStrictInitialMode() && memVal != null && memVal.isStrictEncoded();
+                    if (useStrictFinal) {
+                        // 基于当前显示值直接执行删除/减法，并以 STRICT 编码回写
+                        ValueType t = variable.getValueType();
+                        if (t == null) t = inferTypeFromValue(currentValue);
+                        String newDisplay = calculateRemoval(t, currentValue, resolvedRemove);
+                        if (!validateValue(variable, newDisplay)) {
+                            String adjusted = ValueLimiter.apply(variable, newDisplay);
+                            if (adjusted == null || !validateValue(variable, adjusted)) {
+                                return VariableResult.failure("删除结果超出限制", "REMOVE", key, playerName);
+                            }
+                            newDisplay = adjusted;
+                        }
+                        updateMemoryAndInvalidate(player, variable, "STRICT:" + newDisplay + ":" + System.currentTimeMillis());
+                        logger.debug("删除操作(严格公式): " + key + " = " + newDisplay + " (删除: " + removeValue + ")");
+                        return VariableResult.success(newDisplay, "REMOVE", key, playerName);
+                    } else {
+                        ValueType t = variable.getValueType();
+                        if (t == null) t = inferTypeFromValue(resolvedRemove);
+                        String currInc = Optional.ofNullable(getMemoryValue(player, variable))
+                                .map(VariableValue::getActualValue).orElse("0");
+                        boolean numeric = (t == ValueType.INT || t == ValueType.DOUBLE);
+                        String safeRemove = resolvedRemove == null ? "0" : resolvedRemove.trim();
+                        boolean neg = numeric && safeRemove.startsWith("-");
+                        String operand = neg ? safeRemove.substring(1) : safeRemove;
+                        // remove 负数 => 等同 add
+                        newIncrement = calculateFormulaIncrement(t, currInc, operand, neg);
+                        String base = resolveExpression(variable.getInitial(), player, variable);
+                        displayValue = addFormulaIncrement(base, newIncrement, t);
+                    }
                 } else {
                     newIncrement = calculateRemoval(variable.getValueType(), currentValue, removeValue);
                     displayValue = newIncrement;
@@ -770,26 +830,15 @@ public class RefactoredVariablesManager {
                 } else {
                     // 首次严格计算
                     String calculatedValue = calculateStrictInitialValue(variable, player, init);
-                    String finalValue = calculatedValue;
+                    String finalValue;
 
-                    // 公式变量叠加当前增量
+                    // 公式变量：将当前增量与严格初始基值进行通用合成（支持多类型）
                     if (isFormula) {
-                        String currentVal = val.getActualValue();
-                        String defaultVal = getDefaultValueByType(variable.getValueType());
-                        try {
-                            double current = Double.parseDouble(currentVal);
-                            double defaultV = Double.parseDouble(defaultVal);
-                            double calculated = Double.parseDouble(calculatedValue);
-                            double increment = current - defaultV;
-                            if (variable.getValueType() == ValueType.INT) {
-                                finalValue = String.valueOf((int) (calculated + increment));
-                            } else {
-                                finalValue = String.valueOf(calculated + increment);
-                            }
-                            logger.debug("严格模式公式变量增量计算: " + calculatedValue + " + " + increment + " = " + finalValue);
-                        } catch (NumberFormatException ignored) {
-                            finalValue = calculatedValue;
-                        }
+                        String currentInc = val.getActualValue();
+                        finalValue = addFormulaIncrement(calculatedValue, currentInc, variable.getValueType());
+                        logger.debug("严格模式公式变量增量合成: base=" + calculatedValue + " + inc=" + currentInc + " => " + finalValue);
+                    } else {
+                        finalValue = calculatedValue;
                     }
 
                     // 标记完成严格计算

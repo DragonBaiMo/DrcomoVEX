@@ -22,6 +22,7 @@ public class ConfigsManager {
     private final YamlUtil yamlUtil;
     
     private MainConfigManager mainConfigManager;
+    private VariablesConfigManager variablesConfigManager;
     
     public ConfigsManager(DrcomoVEX plugin, DebugUtil logger, YamlUtil yamlUtil) {
         this.plugin = plugin;
@@ -40,9 +41,11 @@ public class ConfigsManager {
         
         // 初始化配置管理器
         mainConfigManager = new MainConfigManager(plugin, logger, yamlUtil);
+        variablesConfigManager = new VariablesConfigManager(plugin, logger, yamlUtil);
         
         // 初始化配置
         mainConfigManager.initialize();
+        variablesConfigManager.initialize();
         
         logger.info("配置管理系统初始化完成！");
     }
@@ -54,12 +57,13 @@ public class ConfigsManager {
         logger.info("正在重载所有配置...");
         
         mainConfigManager.reload();
+        variablesConfigManager.reload();
         
         logger.info("所有配置已重载完成！");
     }
     
     /**
-     * 创建需要的目录并初始化默认文件
+     * 创建需要的目录
      */
     private void createDirectories() {
         // 主目录
@@ -68,14 +72,7 @@ public class ConfigsManager {
             dataFolder.mkdirs();
         }
         
-        // 变量配置目录 - 动态判断是否需要拷贝默认文件
-        File variablesFolder = new File(dataFolder, "variables");
-        if (!variablesFolder.exists()) {
-            logger.info("首次运行，正在初始化变量配置目录...");
-            // 从 JAR 包拷贝整个 variables 目录的内容, ensureFolderAndCopyDefaults 会自动创建目录
-            yamlUtil.ensureFolderAndCopyDefaults("variables", "variables");
-            logger.info("默认变量配置文件已拷贝完成！");
-        }
+        // 变量配置目录现在由 VariablesConfigManager 负责处理
     }
     
     // Getter 方法
@@ -83,8 +80,21 @@ public class ConfigsManager {
         return mainConfigManager;
     }
     
+    public VariablesConfigManager getVariablesConfigManager() {
+        return variablesConfigManager;
+    }
+    
     // 快捷访问方法
     public FileConfiguration getMainConfig() {
         return mainConfigManager.getConfig();
+    }
+    
+    /**
+     * 获取变量配置统计信息
+     * 
+     * @return 配置统计信息字符串
+     */
+    public String getVariableConfigStats() {
+        return variablesConfigManager.getConfigStats();
     }
 }
