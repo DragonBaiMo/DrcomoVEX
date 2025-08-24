@@ -574,28 +574,6 @@ public class VariableCycleTask {
         }
     }
 
-    /** 计算变量下次应该重置的时间 */
-    private ZonedDateTime calculateNextResetTime(ZonedDateTime firstTime, String cycleType) {
-        switch (cycleType.toLowerCase()) {
-            case "minute":
-                return firstTime.truncatedTo(ChronoUnit.MINUTES).plusMinutes(1);
-            case "daily":
-                return firstTime.truncatedTo(ChronoUnit.DAYS).plusDays(1);
-            case "weekly":
-                return firstTime.with(TemporalAdjusters.next(DayOfWeek.MONDAY))
-                        .truncatedTo(ChronoUnit.DAYS);
-            case "monthly":
-                return firstTime.with(TemporalAdjusters.firstDayOfNextMonth())
-                        .truncatedTo(ChronoUnit.DAYS);
-            case "yearly":
-                return firstTime.with(TemporalAdjusters.firstDayOfNextYear())
-                        .truncatedTo(ChronoUnit.DAYS);
-            default:
-                logger.warn("未知的周期类型: " + cycleType + "，返回一天后");
-                return firstTime.plusDays(1);
-        }
-    }
-
     /** 记录边界条件信息 */
     private void logBoundaryConditionInfo(ZonedDateTime now, ZoneId zone) {
         try {
