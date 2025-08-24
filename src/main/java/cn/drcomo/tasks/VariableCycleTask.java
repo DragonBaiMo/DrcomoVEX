@@ -222,11 +222,15 @@ public class VariableCycleTask {
         private void performResets() {
             Set<String> keys = variablesManager.getAllVariableKeys();
             ZonedDateTime now = ZonedDateTime.now(getValidatedTimeZone());
+            // 对齐本次运行的“周期起点”，例如：
+            // minute: 当前分钟的00秒；daily: 当日00:00:00；weekly: 本周一00:00:00；
+            // monthly: 本月1日00:00:00；yearly: 本年1月1日00:00:00。
+            ZonedDateTime cycleStart = Instant.ofEpochMilli(startMillis).atZone(now.getZone());
 
             for (String key : keys) {
                 Variable var = variablesManager.getVariableDefinition(key);
                 if (var != null && cycleType.equalsIgnoreCase(var.getCycle())) {
-                    // 获取基准时间（首次修改或上次重置）
+                    // 读取首次修改时间（跨玩家取 MIN），用于避免“本周期新创建即被重置”
                     Long firstModified = null;
                     try {
                         firstModified = variablesManager
@@ -244,22 +248,22 @@ public class VariableCycleTask {
                         logger.debug("跳过重置(变量未曾修改): " + key);
                         continue;
                     }
-                    ZonedDateTime firstTime = Instant
-                            .ofEpochMilli(firstModified)
-                            .atZone(now.getZone());
-                    Long lastResetMillis = getLastResetTime(key);
-                    ZonedDateTime baseTime = (lastResetMillis != null)
-                            ? Instant.ofEpochMilli(lastResetMillis).atZone(now.getZone())
-                            : firstTime;
+                    ZonedDateTime firstTime = Instant.ofEpochMilli(firstModified).atZone(now.getZone());
 
-                    // 计算下次重置时间
-                    ZonedDateTime nextResetTime = calculateNextResetTime(baseTime, cycleType);
-                    if (now.isBefore(nextResetTime)) {
-                        logger.debug("跳过重置(未到重置时间): " + key +
-                                " 基准时间: " + baseTime +
-                                " 下次重置: " + nextResetTime +
-                                " 当前: " + now);
+                    // 若该变量在本周期起点之后(含)才出现/首次修改，则本周期不重置
+                    if (!firstTime.isBefore(cycleStart)) {
+                        logger.debug("跳过重置(本周期新创建): " + key + " 首改: " + firstTime + " 周期起: " + cycleStart);
                         continue;
+                    }
+
+                    // 已于本周期处理过则跳过（保证幂等，避免同日重复重置）
+                    Long lastResetMillis = getLastResetTime(key);
+                    if (lastResetMillis != null) {
+                        ZonedDateTime lastResetTime = Instant.ofEpochMilli(lastResetMillis).atZone(now.getZone());
+                        if (!lastResetTime.isBefore(cycleStart)) {
+                            logger.debug("跳过重置(本周期已处理): " + key + " 上次: " + lastResetTime + " 周期起: " + cycleStart);
+                            continue;
+                        }
                     }
 
                     // 安全重试删除并清理缓存
@@ -272,13 +276,12 @@ public class VariableCycleTask {
                         sleepMillis(100L * i);
                     }
                     if (success) {
-                        updateVariableResetTime(
-                                key, nextResetTime.toInstant().toEpochMilli()
-                        );
+                        // 将变量的 last-reset-time 对齐记录到“本周期起点”
+                        updateVariableResetTime(key, startMillis);
                         resetList.add(key);
                         logger.info("重置变量: " + key +
-                                " (基准时间: " + baseTime +
-                                " → 重置时间: " + nextResetTime +
+                                " 周期: " + cycleType +
+                                " 周期起点: " + cycleStart +
                                 " 当前: " + now + ")");
                     } else {
                         logger.warn("变量 " + key + " 重置失败，已重试3次");
