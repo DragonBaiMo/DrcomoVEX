@@ -259,11 +259,15 @@ public class RefactoredVariablesManager {
                 if (pre.isPresent()) return pre.get();
 
                 // 条件变量禁用缓存读，避免条件变化导致错误命中
+                CacheResult cacheResult = null;
                 if (!variable.hasConditions()) {
-                    CacheResult cacheResult = cacheManager.getFromCache(player, key, variable);
+                    cacheResult = cacheManager.getFromCache(player, key, variable);
                     if (cacheResult.isHit()) {
                         logger.debug("缓存命中(" + cacheResult.getLevel() + "): " + key);
-                        return VariableResult.success(cacheResult.getValue(), "GET", key, playerName);
+                        // 命中值若为严格编码，需解码后返回，避免泄漏编码串
+                        String hitVal = cacheResult.getValue();
+                        String decoded = (hitVal != null) ? new VariableValue(hitVal).getActualValue() : null;
+                        return VariableResult.success(decoded, "GET", key, playerName);
                     }
                 }
 
@@ -273,7 +277,16 @@ public class RefactoredVariablesManager {
                 }
                 // 条件变量禁用缓存写，避免在条件失效后残留不当缓存
                 if (!variable.hasConditions()) {
-                    cacheManager.cacheResult(player, key, finalValue, finalValue);
+                    // 使用 L1 原始值作为 originalValue（可能包含 STRICT 编码），使用最终解码值作为 result
+                    String originalValue = null;
+                    if (cacheResult != null) {
+                        originalValue = cacheResult.getValue(); // getFromCache 未命中时附带的 L1 原始值
+                    }
+                    if (originalValue == null) {
+                        VariableValue memVal = getMemoryValue(player, variable);
+                        originalValue = (memVal != null) ? memVal.getValue() : null;
+                    }
+                    cacheManager.cacheResult(player, key, originalValue, finalValue);
                 }
                 return VariableResult.success(finalValue, "GET", key, playerName);
             } catch (Exception e) {
