@@ -386,8 +386,27 @@ public class RefactoredVariablesManager {
                     }
                 } else {
                     String resolvedAdd = resolveExpression(addValue, player, variable);
-                    newIncrement = calculateAddition(variable.getValueType(), currentValue, resolvedAdd);
-                    displayValue = newIncrement;
+                    // 非公式变量在严格模式下：若内存为 STRICT，直接基于显示值计算并以 STRICT 编码写回
+                    VariableValue memVal = getMemoryValue(player, variable);
+                    boolean useStrictFinal = variable.isStrictInitialMode() && memVal != null && memVal.isStrictEncoded();
+                    if (useStrictFinal) {
+                        ValueType t = variable.getValueType();
+                        if (t == null) t = inferTypeFromValue(currentValue);
+                        String newDisplay = calculateAddition(t, currentValue, resolvedAdd);
+                        if (!validateValue(variable, newDisplay)) {
+                            String adjusted = ValueLimiter.apply(variable, newDisplay);
+                            if (adjusted == null || !validateValue(variable, adjusted)) {
+                                return VariableResult.failure("加法结果超出限制", "ADD", key, playerName);
+                            }
+                            newDisplay = adjusted;
+                        }
+                        updateMemoryAndInvalidate(player, variable, "STRICT:" + newDisplay + ":" + System.currentTimeMillis());
+                        logger.debug("加法操作(严格非公式): " + key + " = " + newDisplay + " (当前: " + currentValue + " + 增加: " + addValue + ")");
+                        return VariableResult.success(newDisplay, "ADD", key, playerName);
+                    } else {
+                        newIncrement = calculateAddition(variable.getValueType(), currentValue, resolvedAdd);
+                        displayValue = newIncrement;
+                    }
                 }
 
                 if (newIncrement == null) {
@@ -475,8 +494,28 @@ public class RefactoredVariablesManager {
                         displayValue = addFormulaIncrement(base, newIncrement, t);
                     }
                 } else {
-                    newIncrement = calculateRemoval(variable.getValueType(), currentValue, removeValue);
-                    displayValue = newIncrement;
+                    String resolvedRemove = resolveExpression(removeValue, player, variable);
+                    // 非公式变量在严格模式下：若内存为 STRICT，直接基于显示值计算并以 STRICT 编码写回
+                    VariableValue memVal = getMemoryValue(player, variable);
+                    boolean useStrictFinal = variable.isStrictInitialMode() && memVal != null && memVal.isStrictEncoded();
+                    if (useStrictFinal) {
+                        ValueType t = variable.getValueType();
+                        if (t == null) t = inferTypeFromValue(currentValue);
+                        String newDisplay = calculateRemoval(t, currentValue, resolvedRemove);
+                        if (!validateValue(variable, newDisplay)) {
+                            String adjusted = ValueLimiter.apply(variable, newDisplay);
+                            if (adjusted == null || !validateValue(variable, adjusted)) {
+                                return VariableResult.failure("删除结果超出限制", "REMOVE", key, playerName);
+                            }
+                            newDisplay = adjusted;
+                        }
+                        updateMemoryAndInvalidate(player, variable, "STRICT:" + newDisplay + ":" + System.currentTimeMillis());
+                        logger.debug("删除操作(严格非公式): " + key + " = " + newDisplay + " (删除: " + removeValue + ")");
+                        return VariableResult.success(newDisplay, "REMOVE", key, playerName);
+                    } else {
+                        newIncrement = calculateRemoval(variable.getValueType(), currentValue, resolvedRemove);
+                        displayValue = newIncrement;
+                    }
                 }
 
                 if (newIncrement == null) {
