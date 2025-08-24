@@ -573,14 +573,24 @@ public class RefactoredVariablesManager {
                     logger.debug("清理变量依赖快照: " + key);
                 }
 
-                // 对于严格模式变量，还需要清理内存中的 strict 状态
-                VariableValue resetVal = getMemoryValue(player, variable);
-                if (resetVal != null && variable.isStrictInitialMode()) {
-                    resetVal.resetStrictMode();
-                    logger.debug("重置变量严格模式状态: " + key);
+                // 严格模式：在重置后立即基于初始表达式重新计算并写回 STRICT 编码，确保后续操作读取到正确的严格值
+                String resetValue;
+                if (variable.isStrictInitialMode()) {
+                    String init = variable.getInitial();
+                    if (!isBlank(init)) {
+                        String calculatedValue = calculateStrictInitialValue(variable, player, init);
+                        updateMemoryAndInvalidate(player, variable, "STRICT:" + calculatedValue + ":" + System.currentTimeMillis());
+                        logger.debug("重置后写回严格初始值(STRICT): " + key + " = " + calculatedValue);
+                        resetValue = calculatedValue;
+                    } else {
+                        // 无初始表达式，退回统一路径
+                        resetValue = getVariableFromMemoryOrDefault(player, variable);
+                    }
+                } else {
+                    // 非严格模式：保持原有行为，由统一路径解析默认/初始值
+                    resetValue = getVariableFromMemoryOrDefault(player, variable);
                 }
 
-                String resetValue = getVariableFromMemoryOrDefault(player, variable);
                 if (isFormulaVariable(variable)) {
                     logger.debug("重置公式变量: " + key + " = " + resetValue + " (清空增量)");
                 } else {
