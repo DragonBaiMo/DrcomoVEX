@@ -380,13 +380,27 @@ public class RefactoredVariablesManager {
                 if (newIncrement == null) {
                     return VariableResult.failure("加法操作失败或超出约束", "ADD", key, playerName);
                 }
-                if (!validateValue(variable, newIncrement)) {
-                    String adjusted = ValueLimiter.apply(variable, newIncrement);
-                    if (adjusted == null || !validateValue(variable, adjusted)) {
-                        return VariableResult.failure("加法结果超出限制", "ADD", key, playerName);
+                if (isFormulaVariable(variable)) {
+                    // 公式变量（非严格模式）：应校验最终显示值 base+inc，而非“增量”本身
+                    if (!validateValue(variable, displayValue)) {
+                        String adjusted = ValueLimiter.apply(variable, displayValue);
+                        if (adjusted == null || !validateValue(variable, adjusted)) {
+                            return VariableResult.failure("加法结果超出限制", "ADD", key, playerName);
+                        }
+                        // 反推新的增量，使 base + newIncrement == adjusted
+                        newIncrement = calculateIncrementForSet(variable, adjusted, player);
+                        displayValue = adjusted;
                     }
-                    newIncrement = adjusted;
-                    displayValue = newIncrement;
+                } else {
+                    // 非公式变量：直接校验最终值（此处 newIncrement 即最终值）
+                    if (!validateValue(variable, newIncrement)) {
+                        String adjusted = ValueLimiter.apply(variable, newIncrement);
+                        if (adjusted == null || !validateValue(variable, adjusted)) {
+                            return VariableResult.failure("加法结果超出限制", "ADD", key, playerName);
+                        }
+                        newIncrement = adjusted;
+                        displayValue = newIncrement;
+                    }
                 }
 
                 updateMemoryAndInvalidate(player, variable, newIncrement);
@@ -455,13 +469,27 @@ public class RefactoredVariablesManager {
                 if (newIncrement == null) {
                     return VariableResult.failure("删除操作失败", "REMOVE", key, playerName);
                 }
-                if (!validateValue(variable, newIncrement)) {
-                    String adjusted = ValueLimiter.apply(variable, newIncrement);
-                    if (adjusted == null || !validateValue(variable, adjusted)) {
-                        return VariableResult.failure("删除结果超出限制", "REMOVE", key, playerName);
+                if (isFormulaVariable(variable)) {
+                    // 公式变量（非严格模式）：应校验最终显示值 base+inc，而非“增量”本身
+                    if (!validateValue(variable, displayValue)) {
+                        String adjusted = ValueLimiter.apply(variable, displayValue);
+                        if (adjusted == null || !validateValue(variable, adjusted)) {
+                            return VariableResult.failure("删除结果超出限制", "REMOVE", key, playerName);
+                        }
+                        // 反推新的增量，使 base + newIncrement == adjusted
+                        newIncrement = calculateIncrementForSet(variable, adjusted, player);
+                        displayValue = adjusted;
                     }
-                    newIncrement = adjusted;
-                    displayValue = newIncrement;
+                } else {
+                    // 非公式变量：直接校验最终值（此处 newIncrement 即最终值）
+                    if (!validateValue(variable, newIncrement)) {
+                        String adjusted = ValueLimiter.apply(variable, newIncrement);
+                        if (adjusted == null || !validateValue(variable, adjusted)) {
+                            return VariableResult.failure("删除结果超出限制", "REMOVE", key, playerName);
+                        }
+                        newIncrement = adjusted;
+                        displayValue = newIncrement;
+                    }
                 }
 
                 updateMemoryAndInvalidate(player, variable, newIncrement);
