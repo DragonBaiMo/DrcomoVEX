@@ -332,11 +332,18 @@ public class RefactoredVariablesManager {
 
                 if (isFormulaVariable(variable)) {
                     String resolvedAdd = resolveExpression(addValue, player, variable);
-                    String currInc = Optional.ofNullable(getMemoryValue(player, variable))
-                            .map(VariableValue::getActualValue).orElse("0");
+                    VariableValue memVal = getMemoryValue(player, variable);
+                    String currInc = (memVal == null || memVal.isStrictComputed()) ? "0" : memVal.getActualValue();
                     newIncrement = calculateFormulaIncrement(variable.getValueType(), currInc, resolvedAdd, true);
                     String base = resolveExpression(variable.getInitial(), player, variable);
                     displayValue = addFormulaIncrement(base, newIncrement, variable.getValueType());
+                    logger.debug("公式加法: key=" + key
+                            + ", strict=" + (memVal != null && memVal.isStrictComputed())
+                            + ", currInc=" + currInc
+                            + ", resolvedAdd=" + resolvedAdd
+                            + ", newInc=" + newIncrement
+                            + ", base=" + base
+                            + ", display=" + displayValue);
                 } else {
                     String resolvedAdd = resolveExpression(addValue, player, variable);
                     newIncrement = calculateAddition(variable.getValueType(), currentValue, resolvedAdd);
@@ -381,12 +388,22 @@ public class RefactoredVariablesManager {
                 String displayValue;
 
                 if (isFormulaVariable(variable)) {
+                    VariableValue memVal = getMemoryValue(player, variable);
+                    String currInc = (memVal == null || memVal.isStrictComputed()) ? "0" : memVal.getActualValue();
+                    String resolvedRemove = resolveExpression(removeValue, player, variable);
                     newIncrement = calculateFormulaIncrement(
                             variable.getValueType(),
-                            Optional.ofNullable(getMemoryValue(player, variable)).map(VariableValue::getActualValue).orElse("0"),
-                            removeValue, false);
+                            currInc,
+                            resolvedRemove, false);
                     String base = resolveExpression(variable.getInitial(), player, variable);
                     displayValue = addFormulaIncrement(base, newIncrement, variable.getValueType());
+                    logger.debug("公式删除: key=" + key
+                            + ", strict=" + (memVal != null && memVal.isStrictComputed())
+                            + ", currInc=" + currInc
+                            + ", resolvedRemove=" + resolvedRemove
+                            + ", newInc=" + newIncrement
+                            + ", base=" + base
+                            + ", display=" + displayValue);
                 } else {
                     newIncrement = calculateRemoval(variable.getValueType(), currentValue, removeValue);
                     displayValue = newIncrement;
@@ -1168,17 +1185,27 @@ public class RefactoredVariablesManager {
 
     /** 安全解析整型，失败返回 0 */
     private int parseIntOrDefault(String input) {
+        String s = (input == null ? "" : input.trim());
+        if (s.isEmpty()) return 0;
         try {
-            return Integer.parseInt(input);
+            // 优先按整数解析
+            return Integer.parseInt(s);
         } catch (Exception ignored) {
-            return 0;
+            // 兼容像 "180.0" 这样的浮点字符串；按照业务直觉进行四舍五入
+            try {
+                double d = Double.parseDouble(s);
+                return (int) Math.round(d);
+            } catch (Exception e2) {
+                return 0;
+            }
         }
     }
 
     /** 安全解析浮点，失败返回 0.0 */
     private double parseDoubleOrDefault(String input) {
         try {
-            return Double.parseDouble(input);
+            if (input == null) return 0D;
+            return Double.parseDouble(input.trim());
         } catch (Exception ignored) {
             return 0D;
         }
