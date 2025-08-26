@@ -139,9 +139,8 @@ public class VariablesConfigManager {
             // 构造相对于插件数据目录的路径
             String relativeFilePath = VARIABLES_DIR + "/" + (relativePath.isEmpty() ? "" : relativePath + "/") + configFile.getName();
             
-            // 使用 YamlUtil 加载配置
-            yamlUtil.loadConfig(configName);
-            YamlConfiguration config = yamlUtil.getConfig(configName);
+            // 直接从文件系统加载配置，不依赖JAR包内的资源
+            YamlConfiguration config = YamlConfiguration.loadConfiguration(configFile);
             
             if (config != null) {
                 variableConfigs.put(configName, config);
