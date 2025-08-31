@@ -64,6 +64,8 @@ public class VariablesConfigManager {
         variableConfigs.clear();
         pathToConfigName.clear();
         
+        // 在重载前，同步缺失的默认文件（包含子目录，不覆盖现有文件）
+        ensureVariablesDirectory();
         // 重新加载所有配置
         loadAllVariableConfigs();
         
@@ -79,7 +81,7 @@ public class VariablesConfigManager {
             logger.info("首次运行，正在初始化变量配置目录...");
             yamlUtil.ensureFolderAndCopyDefaults("variables", "variables", new String[0]);
             logger.info("默认变量配置文件已拷贝完成！");
-        }
+        } // 无需处理已存在的情况
     }
     
     /**

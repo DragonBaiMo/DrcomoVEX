@@ -28,6 +28,7 @@ import org.bukkit.configuration.ConfigurationSection;
 import org.bukkit.configuration.file.FileConfiguration;
 import org.bukkit.configuration.file.YamlConfiguration;
 
+import java.io.File;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashSet;
@@ -1216,26 +1217,54 @@ public class RefactoredVariablesManager {
     /** 加载所有变量定义（扫描 variables 目录） */
     private void loadAllVariableDefinitions() {
         try {
-            Map<String, YamlConfiguration> configs = yamlUtil.loadAllConfigsInFolder("variables");
-            for (String name : configs.keySet()) {
-                try {
-                    loadVariableDefinitionsFromFile(name);
-                    logger.debug("已加载变量文件: " + name);
-                } catch (Exception e) {
-                    logger.error("加载变量文件失败: " + name, e);
-                }
+            File variablesDir = new File(plugin.getDataFolder(), "variables");
+            if (!variablesDir.exists() || !variablesDir.isDirectory()) {
+                logger.warn("变量目录不存在: " + variablesDir.getAbsolutePath());
+                return;
             }
-            logger.info("变量目录扫描完成，共加载 " + configs.size() + " 个配置文件");
+
+            // 使用数组作为可变引用计数器
+            int[] loadedCount = new int[]{0};
+            scanVariablesRecursively(variablesDir, "", loadedCount);
+            logger.info("变量目录递归扫描完成，共加载 " + loadedCount[0] + " 个配置文件");
         } catch (Exception e) {
-            logger.error("扫描变量目录失败", e);
+            logger.error("递归扫描变量目录失败", e);
         }
     }
 
-    /** 从单个配置文件加载变量定义 */
-    private void loadVariableDefinitionsFromFile(String configName) {
-        FileConfiguration config = yamlUtil.getConfig(configName);
+    /** 递归扫描 variables 目录并加载所有 .yml */
+    private void scanVariablesRecursively(File directory, String relativePath, int[] loadedCount) {
+        File[] files = directory.listFiles();
+        if (files == null) return;
+
+        for (File f : files) {
+            if (f.isDirectory()) {
+                String sub = relativePath.isEmpty() ? f.getName() : relativePath + "/" + f.getName();
+                scanVariablesRecursively(f, sub, loadedCount);
+            } else if (f.isFile() && f.getName().toLowerCase().endsWith(".yml")) {
+                String base = f.getName().substring(0, f.getName().length() - 4);
+                String configName = relativePath.isEmpty() ? base : relativePath + "/" + base;
+                try {
+                    loadVariableDefinitionsFromFile(f, configName);
+                    loadedCount[0]++;
+                    logger.debug("已加载变量文件: " + configName + " (" + f.getAbsolutePath() + ")");
+                } catch (Exception e) {
+                    logger.error("加载变量文件失败: " + configName + " (" + f.getAbsolutePath() + ")", e);
+                }
+            }
+        }
+    }
+
+    /** 从磁盘文件直接加载并解析（支持子目录与中文路径） */
+    private void loadVariableDefinitionsFromFile(File configFile, String configName) {
+        FileConfiguration cfg = YamlConfiguration.loadConfiguration(configFile);
+        loadVariableDefinitionsFromConfig(configName, cfg);
+    }
+
+    /** 公共解析实现：从给定配置对象解析变量定义 */
+    private void loadVariableDefinitionsFromConfig(String configName, FileConfiguration config) {
         if (config == null) {
-            logger.warn("配置文件不存在: " + configName);
+            logger.warn("配置文件无法解析: " + configName);
             return;
         }
         ConfigurationSection section = config.getConfigurationSection("variables");
