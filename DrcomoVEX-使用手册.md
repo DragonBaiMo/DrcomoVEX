@@ -1,688 +1,789 @@
-## **文档一：DrcomoVEX 插件核心指南**
+## 变量用法
+#### [3. 变量的定义与详解](#aCqbj)
+#### [5. 高级功能指南](#LN76s)
+#### [6. 占位符集成 (PlaceholderAPI)](#hokFq)
+## 指令用法
+#### [4. 指令用法与权限参考](#HQG77)
+---
 
-### **1. 功能概述**
+## 1. 插件总览
+### 功能概述
+DrcomoVEX 是一款为 Minecraft 服务器设计的、功能强大的变量管理系统。它允许服务器管理员通过简单的配置文件，创建和管理各种动态的、可持久化的数据，而无需编写任何代码。
 
-`DrcomoVEX` 是一个为 Minecraft 服务器设计的、功能强大的变量管理系统。它允许服务器管理员创建、配置和操控各种动态或静态的数值、文本及列表，并将这些变量与玩家、服务器状态乃至其他插件（如 PlaceholderAPI）深度整合。
+这个插件的核心目标是提供一个“基于直觉”的变量解决方案，让服务器的数值系统、玩家状态、任务进度等内容的管理变得简单、灵活且高性能。
 
-**核心特性包括：**
+### 核心特性
++ **直观的变量定义**：通过 YAML 文件即可定义变量，支持多种数据类型（整数、浮点数、字符串、列表）。
++ **灵活的作用域**：变量可以绑定到玩家 (`player`) 或服务器全局 (`global`)。
++ **动态值与表达式**：变量的初始值可以是固定的，也可以是一个动态计算的表达式，支持数学运算，并能引用其他变量和 PlaceholderAPI 的占位符。
++ **周期性重置**：可以轻松实现变量的每日、每周、每月、每分钟重置，或使用 Cron 表达式自定义复杂的重置周期。
++ **强大的指令系统**：提供完整的后台指令，用于查询、设置、增减和重置变量，支持对单个或批量目标进行操作。
++ **高级控制功能**：
+    - **严格初始值模式 (Strict Initial Mode)**：控制动态初始值是一次性计算还是周期性更新。
+    - **条件门控 (Conditional Gating)**：变量的访问和操作可以被前置条件所限制。
+    - **持久化控制**：可将某些变量设置为非持久化，仅在内存中存活。
++ **高性能设计**：内置多级缓存和批量持久化机制，确保在高负载服务器上也能流畅运行。
++ **PlaceholderAPI 集成**：无缝对接 PlaceholderAPI，方便在其他插件中使用 DrcomoVEX 的变量。
 
-  * **多维变量体系**：支持创建玩家专属变量（`player`）和服务器全局变量（`global`）。
-  * **丰富的数据类型**：支持整数（`INT`）、浮点数（`DOUBLE`）、字符串（`STRING`）和列表（`LIST`）。
-  * **动态表达式计算**：变量的值可以是一个动态计算的表达式，例如 `${player_level} * 10`，实现数值的自动关联。
-  * **周期性自动重置**：可以设定变量按分钟、日、周、月、年或自定义 Cron 表达式自动重置为初始值，非常适合用于任务、签到等系统。
-  * **PlaceholderAPI 集成**：无缝对接 PlaceholderAPI，可以在变量定义中引用其他插件的占位符（如 `%player_level%`），也可以将本插件的变量作为占位符给其他插件使用。
-  * **强大的指令系统**：通过 `/vex` 指令，可以对单个或批量变量进行获取、设置、增减、重置等操作，支持通配符 `*` 和条件筛选。
-  * **精细的约束与限制**：可以为变量设置数值范围、长度限制、只读状态、是否持久化存储等高级属性。
+### 适用场景
++ 构建服务器经济系统（金币、点券）。
++ 创建玩家属性与统计数据（等级、经验、PVP分数）。
++ 实现每日/每周任务系统。
++ 管理活动状态与玩家进度。
++ 制作动态的服务器信息板（如显示在线人数、TPS）。
++ 任何需要动态、可配置、可持久化数据的场景。
 
-### **2. 典型应用场景**
+---
 
-  * **经济系统**：创建 `player_money`, `player_points` 等变量作为玩家货币。
-  * **等级与经验**：`player_level`, `player_exp` 记录玩家成长。
-  * **每日/每周任务**：利用 `daily_task_progress` 等周期性变量记录玩家任务进度，到点自动重置。
-  * **签到系统**：`daily_reward_claimed` 记录玩家当日是否已签到。
-  * **动态属性**：`player_combat_power` 根据玩家等级、装备等信息动态计算战斗力。
-  * **服务器状态监控**：`server_tps`, `server_online_count` 等全局变量实时反映服务器状态。
+## 2. 核心概念与配置结构
+### 核心概念
+在使用 DrcomoVEX 前，理解以下几个核心概念至关重要。
 
-### **3. 核心概念说明**
++ **变量 (Variable)**：插件管理的基本单位。每个变量都有一个唯一的键名（Key），并包含其类型、作用域、初始值等一系列定义。例如，`player_money` 就是一个变量。
++ **键 (Key)**：变量的唯一标识符，在所有配置文件中必须是唯一的。指令和占位符都通过键来操作变量。键名只能包含字母、数字和下划线。
++ **作用域 (Scope)**：决定变量的归属。
+    - `player`: 变量属于单个玩家。每个玩家都拥有自己独立的该变量值。
+    - `global`: 变量属于整个服务器，所有玩家共享同一个值。
++ **类型 (Type)**：定义变量存储的数据格式。
+    - `INT`: 整数。
+    - `DOUBLE`: 浮点数（小数）。
+    - `STRING`: 字符串（文本）。
+    - `LIST`: 字符串列表。
++ **周期 (Cycle)**：定义变量的自动重置规则。可以是预设的关键词，也可以是 Cron 表达式。
 
-| 概念 | 解释 | 示例 |
-| :--- | :--- | :--- |
-| **变量 (Variable)** | 一个可配置的数据单元，拥有唯一的键名（Key）和一系列属性。 | `player_money`, `server_motd` |
-| **键名 (Key)** | 变量的唯一标识符，在指令和配置中用于引用该变量。 | `player_level` |
-| **作用域 (Scope)** | 定义变量归属。`player` 表示每个玩家独立拥有一份；`global` 表示全服共享一份。 | `scope: "player"` |
-| **值类型 (Type)** | 变量存储的数据格式，如 `INT` (整数), `STRING` (字符串)。 | `type: "INT"` |
-| **初始值 (Initial)** | 变量被创建或重置时的默认值。可以是静态值，也可以是动态表达式。 | `initial: 0` 或 `initial: "${player_level} * 10"` |
-| **周期 (Cycle)** | 变量的自动重置规则。可以是预设周期（`daily`）或 Cron 表达式。 | `cycle: "daily"` 或 `cycle: "0 0 * * * ?"` |
-| **限制 (Limitations)** | 对变量行为的额外约束，如只读、数值范围等。 | `min: 0`, `max: 100`, `read-only: true` |
+### 配置文件结构
+DrcomoVEX 的配置主要由以下几个部分组成：
 
------
-
-## **文档二：主配置文件 `config.yml` 详解**
-
-`config.yml` 是 `DrcomoVEX` 的核心配置文件，负责数据库连接、数据保存策略、周期性任务和调试等级等基础设置。
-
-### **1. 配置结构说明**
+#### 1. 主配置文件: `config.yml`
+这是插件的全局配置文件，负责控制数据库连接、数据保存策略、周期任务等核心行为。
 
 ```yaml
+# /plugins/DrcomoVEX/config.yml
+
 # 数据库配置
 database:
-  type: "sqlite" # 数据库类型: sqlite 或 mysql
+  type: "sqlite" # 支持 "sqlite" 或 "mysql"
   
-  # SQLite 相关配置 (当 type 为 "sqlite" 时生效)
-  file: "drcomovex.db" # SQLite 数据库文件名
+  # SQLite 配置
+  file: "drcomovex.db"
   
-  # MySQL 相关配置 (当 type 为 "mysql" 时生效)
+  # MySQL 配置
   mysql:
     host: "localhost"
     port: 3306
-    database: "drcomovex"
-    username: "root"
-    password: "password"
-    useSSL: false
-  
-  # 数据库连接池配置 (主要用于 MySQL)
-  pool:
-    minimum-idle: 3
-    maximum-pool-size: 12
-    connection-timeout: 15000
-    idle-timeout: 300000
-    max-lifetime: 900000
+    # ... 其他MySQL连接信息
 
 # 数据保存配置
 data:
   auto-save: true # 是否启用自动保存
   save-interval-minutes: 3 # 自动保存间隔（分钟）
-  save-on-player-quit: true # 玩家退出时是否立即保存其数据
+  save-on-player-quit: true # 玩家退出时是否保存数据
 
 # 周期性重置配置
 cycle:
   enabled: true # 是否启用周期性重置功能
-  check-interval-seconds: 1 # 检查周期是否到达的时间间隔（秒）
-  timezone: "Asia/Shanghai" # 时区设置，影响 daily, weekly 等周期的计算
+  check-interval-seconds: 1 # 周期检查的频率（秒），建议保持为1以确保精度
+  timezone: "Asia/Shanghai" # 时区设置，影响daily, weekly等重置时间点
 
-# 基本设置
+# 其他设置
 settings:
-  check-updates: true # 是否检查插件更新
-  notify-ops: true # 是否通知 OP 更新信息
+  # ... 其他插件设置
 
 # 调试配置
 debug:
   level: "INFO" # 日志级别: DEBUG, INFO, WARN, ERROR
 ```
 
-### **2. 参数详解**
+#### 2. 变量定义目录: `variables/`
+这是定义所有变量的地方。你可以在 `/plugins/DrcomoVEX/variables/` 目录下创建任意多个 `.yml` 文件，插件会自动加载所有文件。支持子目录结构，便于分类管理。
 
-#### **`database` (数据库)**
+例如，你可以创建 `economy.yml`, `stats.yml`, `events/summer_event.yml` 等。
 
-  * `type`: 决定插件使用哪种数据库存储数据。
-      * `sqlite`: 轻量级文件数据库，无需额外安装，数据存储在 `plugins/DrcomoVEX/drcomovex.db` 文件中，适合中小型服务器。
-      * `mysql`: 关系型数据库，性能更强，适合大型或跨服服务器。需要您自行搭建 MySQL 服务。
-  * `mysql`: 仅当 `type` 为 `mysql` 时需要配置此部分，填入您的 MySQL 服务器连接信息。
-  * `pool`: 连接池配置，优化与 MySQL 的连接性能。通常保持默认即可，专业用户可根据服务器负载调整。
-
-#### **`data` (数据保存)**
-
-  * `auto-save`: 是否按 `save-interval-minutes` 定义的周期自动将内存中的变量数据保存到数据库。强烈建议保持 `true`。
-  * `save-interval-minutes`: 自动保存的周期，单位为分钟。较小的值能减少数据丢失风险，但会增加磁盘 I/O。
-  * `save-on-player-quit`: 玩家离开服务器时，是否立即将其所有变量数据写入数据库。建议保持 `true`，确保玩家数据不丢失。
-
-#### **`cycle` (周期性重置)**
-
-  * `enabled`: 周期性重置功能的总开关。若为 `false`，所有变量的 `cycle` 配置都将失效。
-  * `check-interval-seconds`: 插件检查是否有变量需要重置的频率。`1` 表示每秒检查一次，能保证重置的精确性。可以适当调大（如 `60`）以降低性能消耗，但这可能导致重置时间有最多 `60` 秒的延迟。
-  * `timezone`: **极为重要**。用于计算 `daily`, `weekly` 等预设周期的准确时间点。请设置为您服务器所在地的时区ID，如中国的 `Asia/Shanghai`，美国的 `America/New_York`。
-
-#### **`debug` (调试)**
-
-  * `level`: 控制插件在控制台输出日志的详细程度。
-      * `INFO`: 默认级别，只输出关键信息。
-      * `DEBUG`: 输出非常详细的调试信息，用于排查问题，平时不建议开启。
-      * `WARN`: 只输出警告信息。
-      * `ERROR`: 只输出错误信息。
-
------
-
-## **文档三：变量定义文件 `variables/*.yml` 详解**
-
-所有变量都在 `plugins/DrcomoVEX/variables/` 目录下的 `.yml` 文件中定义。您可以创建多个文件来分类管理变量，例如 `economy.yml`, `tasks.yml` 等。
-
-### **1. 文件结构**
-
-每个变量定义文件都以 `variables:` 作为根节点，其下是各个变量的定义。
+每个变量定义文件的基本结构如下：
 
 ```yaml
-variables:
-  # 变量1的定义
-  variable_key_1:
-    # ...属性...
+# /plugins/DrcomoVEX/variables/your_file_name.yml
 
-  # 变量2的定义
+variables:
+  # 变量1的键名
+  variable_key_1:
+    name: "变量的显示名称"
+    scope: "player" # 或 "global"
+    type: "INT"     # 或 DOUBLE, STRING, LIST
+    initial: "初始值或表达式"
+    # ... 其他可选配置
+
+  # 变量2的键名
   variable_key_2:
-    # ...属性...
+    # ... 定义
 ```
 
-### **2. 变量属性详解**
+#### 3. 消息配置文件: `messages.yml`
+该文件允许你完全自定义插件的所有指令反馈和提示信息，支持颜色代码和 PlaceholderAPI。
 
-| 属性 | 类型 | 是否必须 | 描述 |
-| :--- | :--- | :--- | :--- |
-| **`name`** | 字符串 | 否 | 变量的显示名称，方便识别。 |
-| **`scope`** | 字符串 | 否 | **作用域**。`"player"` (默认) 或 `"global"`。 |
-| **`type`** | 字符串 | 否 | **值类型**。`"INT"`, `"DOUBLE"`, `"STRING"`, `"LIST"`。若不填，会根据 `initial` 自动推断。 |
-| **`initial`** | 任意 | 是 | **初始值**。可以是静态值，也可以是包含占位符和计算的动态表达式字符串。 |
-| **`cycle`** | 字符串 | 否 | **重置周期**。预设值：`"minute"`, `"daily"`, `"weekly"`, `"monthly"`, `"yearly"`；或 Quartz Cron 表达式。 |
-| **`conditions`** | 字符串/字符串列表 | 否 | **条件门控**。全部条件为 `true` 才允许访问；配置此属性时将禁用该变量的缓存读写，以确保条件变化立即生效。 |
-| **`min`** | 数值 | 否 | **最小值**。仅对 `INT` 和 `DOUBLE` 类型有效。 |
-| **`max`** | 数值 | 否 | **最大值** 或 **最大长度/数量**。对 `INT`, `DOUBLE` 是最大值；对 `STRING` 是最大长度；对 `LIST` 是最大条目数。 |
-| **`limitations`** | 对象 | 否 | **高级限制**。 |
-| `limitations.read-only` | 布尔 | 否 | `true` 则变量无法通过指令修改。 |
-| `limitations.persistable` | 布尔 | 否 | `false` 则变量的值不会被保存到数据库，每次重启都恢复初始值。 |
+```yaml
+# /plugins/DrcomoVEX/messages.yml
 
-### **2.1 条件门控（conditions）**
+messages:
+  success:
+    # {variable}, {value} 是可被替换的占位符
+    get: "&a变量 &e{variable} &a的值: &f{value}"
+    set: "&a已将变量 &e{variable} &a设置为: &f{value}"
+  error:
+    no-permission: "&c你没有权限执行这个操作！"
+    variable-not-found: "&c变量 &e{variable} &c不存在！"
+  # ... 其他消息
+```
 
-* __类型与语义__
-  - 支持两种写法：字符串 或 字符串列表（列表按“与”逻辑，需全部为真）。
-  - 空或空白条件视为不通过；字段缺失不会产生警告。
+---
 
-* __布尔解释规则__
-  - `"true"`（忽略大小写）或 非零数字 视为 `true`。
-  - `"false"`、`0`、无法解析为数字的字符串、`null` 等视为 `false`。
+## 3. 变量的定义与详解
+所有变量都在 `/plugins/DrcomoVEX/variables/` 目录下的 `.yml` 文件中定义。本篇文档将详细解释每个配置项的含义和用法。
 
-* __评估与保护__
-  - 对外操作：`GET/SET/ADD/REMOVE/RESET` 在执行前统一评估，未通过则拒绝操作。
-  - 内部解析：用于表达式解析的内部读取也会评估；未通过时返回空字符串，避免连锁失败。
-  - 递归保护：检测到自引用/循环引用时视为未通过。
-
-* __缓存策略__
-  - 配置了 `conditions` 的变量禁用缓存读写与预热，确保条件变化立即生效。
-
-**示例（与 `variables/default.yml` 一致）：**
+### 基础结构
+一个最基础的变量定义包含 `scope`, `type`, 和 `initial`。
 
 ```yaml
 variables:
-  # 开关变量示例（玩家PVP开关）
-  pvp_enabled:
-    name: "PVP开关"
+  # 变量的唯一键名
+  player_money:
+    # [可选] 变量的友好显示名称
+    name: "玩家金币"
+    
+    # [必填] 作用域 (player / global)
     scope: "player"
-    type: "STRING"
-    initial: "true"
+    
+    # [必填] 数据类型 (INT / DOUBLE / STRING / LIST)
+    type: "DOUBLE"
+    
+    # [必填] 初始值或动态表达式
+    initial: "100.0" 
+```
 
-  # 全局活动开关（双倍经验）
-  double_exp_event:
-    name: "双倍经验活动"
+### 详细配置项说明
+#### `name`
++ **类型**: `String`
++ **说明**: 变量的显示名称，主要用于未来可能的UI展示或日志，非必需。
+
+#### `scope`
++ **类型**: `String`
++ **必填**: 是
++ **可选值**:
+    - `player`: 玩家变量。每个玩家独立存储一份数据。
+    - `global`: 全局变量。全服共享一份数据。
+
+#### `type`
++ **类型**: `String`
++ **必填**: 是
++ **可选值**:
+    - `INT`: 整数。例如 `10`, `-5`。
+    - `DOUBLE`: 浮点数（小数）。例如 `10.5`, `0.01`。
+    - `STRING`: 字符串。可以是任意文本。
+    - `LIST`: 字符串列表。在 `add` 和 `remove` 操作中表现为元素的增删。
+
+#### `initial`
++ **类型**: `String` 或 `List` (当 `type` 为 `LIST` 时)
++ **必填**: 是
++ **说明**: 定义变量的初始值。这个值非常强大，可以是：
+    1. **静态值**: 一个固定的值。
+
+```yaml
+initial: "100" # 对于 INT/DOUBLE
+initial: "Welcome!" # 对于 STRING
+initial: # 对于 LIST
+  - "item1"
+  - "item2"
+```
+
+    2. **动态表达式**: 一个包含数学运算、其他变量引用或 PlaceholderAPI 占位符的字符串。
+        * **数学运算**: 支持 `+`, `-`, `*`, `/`, `^`, `()`。
+
+```yaml
+initial: "(10 + 5) * 2"
+```
+
+        * **引用其他DrcomoVEX变量**: 使用 `${variable_key}` 格式。
+
+```yaml
+# 假设已定义 player_level 变量
+initial: "${player_level} * 100 + 50"
+```
+
+        * **引用PlaceholderAPI占位符**: 使用 `%placeholder%` 格式。
+
+```yaml
+initial: "%server_online%"
+initial: "%vault_eco_balance%"
+```
+
+#### `min` / `max`
++ **类型**: `Number`
++ **说明**: 为 `INT` 或 `DOUBLE` 类型的变量设置数值范围约束。当通过指令修改值超出这个范围时，操作会失败。
++ **示例**:
+
+```yaml
+player_level:
+  type: "INT"
+  initial: "1"
+  min: 1
+  max: 100
+```
+
+#### `cycle`
++ **类型**: `String`
++ **说明**: 设置变量的自动重置周期。到重置时间点，变量的值将恢复为其 `initial` 值。
++ **预设值**:
+    - `minute`: 每分钟的第0秒重置。
+    - `daily`: 每日重置（根据 `config.yml` 的时区，在 00:00:00 重置）。
+    - `weekly`: 每周重置（在周一 00:00:00 重置）。
+    - `monthly`: 每月重置（在每月第一天 00:00:00 重置）。
+    - `yearly`: 每年重置（在每年第一天 00:00:00 重置）。
++ **Cron 表达式**: 支持标准的 Quartz Cron 表达式，用于实现复杂的周期。
+    - `"0 0 12 * * ?"`: 每天中午12点重置。
+    - `"0 0/30 * * * ?"`: 每30分钟重置一次。
++ **示例**:
+
+```yaml
+daily_task_progress:
+  type: "INT"
+  initial: "0"
+  cycle: "daily"
+```
+
+#### `limitations`
++ **类型**: `Object`
++ **说明**: 一个包含高级限制与行为控制的配置块。
++ **子选项**:
+    - `read-only` (`Boolean`): 如果为 `true`，该变量将变为只读，无法通过 `set/add/remove/reset` 指令修改。通常用于纯动态计算的变量。
+    - `persistable` (`Boolean`): 如果为 `false`，该变量将不会被保存到数据库，其生命周期仅限于服务器本次运行。
+    - `strict-initial-mode` (`Boolean`): **[高级]** 严格初始值模式。详见高级功能指南。
++ **示例**:
+
+```yaml
+server_version:
+  scope: "global"
+  type: "STRING"
+  initial: "%server_version%"
+  limitations:
+    read-only: true
+
+session_playtime:
+  scope: "player"
+  type: "INT"
+  initial: "0"
+  limitations:
+    persistable: false
+```
+
+#### `conditions`
++ **类型**: `String` 或 `List<String>`
++ **说明**: **[高级]** 条件门控。设置一个或多个条件表达式，只有当所有条件都返回 `true` 时，该变量才能被获取或修改。布尔解释规则: `"true"` (忽略大小写) 或非零数字为 `true`；其他情况 (如 `"false"`, `0`, 空字符串) 均为 `false`。
++ **注意**: 启用了 `conditions` 的变量会禁用缓存，以确保每次访问都重新评估条件。
++ **示例**:
+
+```yaml
+# 假设已定义全局变量 event_switch (值为 "true" 或 "false")
+event_reward:
+  scope: "player"
+  type: "INT"
+  initial: "100"
+  # 只有当全局活动开关打开时，才能操作此奖励变量
+  conditions: "${event_switch}" 
+
+# 多个条件（AND逻辑）
+vip_exclusive_kit:
+  scope: "player"
+  type: "STRING"
+  initial: "claimed"
+  conditions:
+    - "%player_has_permission_vip.kit%" # 检查PAPI权限
+    - "${event_switch}" # 检查活动开关
+```
+
+---
+
+## 4. 指令用法与权限参考
+DrcomoVEX 提供了强大而灵活的指令系统来管理所有变量。
+
+**主指令**: `/vex` (别名: `/dvex`, `/drcomo`)
+
+### 玩家变量操作 (`/vex player ...`)
+用于操作 `scope: player` 的变量。
+
+#### 1. 获取玩家变量
++ **指令**: `/vex player get <玩家名|UUID> <变量键> [--offline]`
++ **权限**: `drcomovex.command.player.get`
++ **操作他人权限**: `drcomovex.command.player.get.others`
++ **说明**: 获取指定玩家的变量值。
++ **参数**:
+    - `--offline`: 允许查询离线玩家的数据。
+
+#### 2. 设置玩家变量
++ **指令**: `/vex player set <玩家名|UUID> <变量键> <值> [--offline]`
++ **权限**: `drcomovex.command.player.set`
++ **操作他人权限**: `drcomovex.command.player.set.others`
++ **说明**: 直接设定玩家的变量值。
+
+#### 3. 增加玩家变量值
++ **指令**: `/vex player add <玩家名|UUID> <变量键> <值> [--offline]`
++ **权限**: `drcomovex.command.player.add`
++ **操作他人权限**: `drcomovex.command.player.add.others`
++ **说明**:
+    - **数值类型 (INT/DOUBLE)**: 将原值与 `<值>` 相加。
+    - **字符串类型 (STRING)**: 将 `<值>` 附加到原字符串末尾。
+    - **列表类型 (LIST)**: 将 `<值>` 作为一个新元素添加到列表中。
+
+#### 4. 移除玩家变量值
++ **指令**: `/vex player remove <玩家名|UUID> <变量键> <值> [--offline]`
++ **权限**: `drcomovex.command.player.remove`
++ **操作他人权限**: `drcomovex.command.player.remove.others`
++ **说明**:
+    - **数值类型 (INT/DOUBLE)**: 将原值减去 `<值>`。
+    - **字符串类型 (STRING)**: 从原字符串中移除所有匹配的 `<值>`。
+    - **列表类型 (LIST)**: 从列表中移除第一个完全匹配 `<值>` 的元素。
+
+#### 5. 重置玩家变量
++ **指令**: `/vex player reset <玩家名|UUID> <变量键> [--offline]`
++ **权限**: `drcomovex.command.player.reset`
++ **操作他人权限**: `drcomovex.command.player.reset.others`
++ **说明**: 将玩家的变量值恢复到其配置的 `initial` 值。
+
+### 全局变量操作 (`/vex global ...`)
+用于操作 `scope: global` 的变量。用法与玩家变量指令类似，但无需指定玩家名。
+
++ `/vex global get <变量键>` (权限: `drcomovex.command.global.get`)
++ `/vex global set <变量键> <值>` (权限: `drcomovex.command.global.set`)
++ `/vex global add <变量键> <值>` (权限: `drcomovex.command.global.add`)
++ `/vex global remove <变量键> <值>` (权限: `drcomovex.command.global.remove`)
++ `/vex global reset <变量键>` (权限: `drcomovex.command.global.reset`)
+
+### 批量与通配符操作
+指令支持使用通配符 `*` 和条件进行批量操作，极大提升管理效率。
+
+#### 批量查询
++ **指令**: `/vex player get * <变量通配[:条件]> [--out:文件名.yml] [--db-only | --online-only]`
++ **说明**:
+    - `<变量通配>`: 可以是 `*` (所有变量), `*_money` (以后缀结尾), `prefix_*` (以前缀开头), `*word*` (包含)。
+    - `[:条件]`: 可选，用于筛选数值。例如 `player_score:>=100` (查询分数大于等于100的)。支持 `>` `>=` `<` `<=` `==` `!=`。
+    - `--out:文件名.yml`: 将查询结果导出到 `plugins/DrcomoVEX/exports/` 目录。
+    - `--db-only`: 仅查询数据库中的数据。
+    - `--online-only`: 仅查询在线玩家内存中的数据。
+
+#### 批量写入
++ **指令**: `/vex player <set|add|remove|reset> * <变量通配> [<值>] [-n] [--limit N]`
++ **说明**:
+    - `-n` 或 `--dry-run`: 预演模式。只显示会受影响的玩家和变量，不实际执行操作。
+    - `--limit N`: 限制本次操作最多影响的玩家数量。
+
+### 管理指令
+#### 重载插件
++ **指令**: `/vex reload`
++ **权限**: `drcomovex.admin.reload`
++ **说明**: 完全重载插件的配置，包括 `config.yml`, `messages.yml` 和所有 `variables/` 下的变量定义。
+
+#### 查看帮助
++ **指令**: `/vex help`
++ **权限**: `drcomovex.command.help`
++ **说明**: 显示所有可用指令的帮助信息。
+
+---
+
+## 5. 高级功能指南
+DrcomoVEX 提供了一些高级功能，用于处理复杂的逻辑和性能优化。
+
+### 严格初始值模式 (Strict Initial Mode)
+此模式用于精确控制**动态初始值** (`initial` 包含表达式) 的计算时机。
+
++ **配置**: 在变量的 `limitations` 块中设置 `strict-initial-mode: true`。
+
+#### 行为区别
+| 场景 | 默认模式 (strict-initial-mode: false) | 严格模式 (strict-initial-mode: true) |
+| --- | --- | --- |
+| **无 **`cycle`** 配置** | `initial` 表达式的值会**实时变化**。每次获取变量时都会重新计算。 | `initial` 表达式的值**只在变量首次被创建时计算一次**，之后其值便固定下来。 |
+| **有 **`cycle`** 配置 (例如 **`daily`**)** | `initial` 表达式的值**实时变化**，并且在周期点重置。 | `initial` 表达式的值是固定的，**只在每个重置周期点（如每日0点）重新计算一次**。 |
+
+
+#### 用途与案例
+##### 案例1: 一次性新手礼包等级奖励
+**需求**: 玩家首次加入服务器时，根据他当时的等级 (`player_level`) 给予一次性的金币奖励，此后即使等级提升，这个奖励值也不再改变。
+
+**实现**:
+
+```yaml
+variables:
+  first_join_bonus:
+    name: "首次加入奖励金币"
+    scope: "player"
+    type: "INT"
+    initial: "100 + ${player_level} * 50" # 动态计算
+    limitations:
+      strict-initial-mode: true # 启用严格模式，无cycle
+      read-only: true # 设为只读，防止被修改
+```
+
++ **效果**: 当玩家首次触发 `first_join_bonus` 变量时，插件会计算 `100 + ${player_level} * 50` 并将结果永久存下。之后无论玩家等级如何变化，`first_join_bonus` 的值都保持不变。
+
+##### 案例2: 每日任务奖励
+**需求**: 每日任务的奖励金额根据玩家每天首次上线时的等级决定，当天内保持不变。
+
+**实现**:
+
+```yaml
+variables:
+  daily_mission_reward:
+    name: "每日任务奖励"
+    scope: "player"
+    type: "INT"
+    initial: "200 + ${player_level} * 10"
+    cycle: "daily" # 每日重置
+    limitations:
+      strict-initial-mode: true # 启用严格模式，有cycle
+```
+
++ **效果**: 在每日0点重置后，玩家当天第一次获取此变量时，插件会根据其当前等级计算奖励金额并固定下来。在第二天的0点之前，即使玩家升级，这个奖励值也不会变。到了第二天0点，会再次重新计算。
+
+### 条件门控 (Conditional Gating)
+此功能允许你为变量设置访问和操作的前置条件。
+
++ **配置**: 在变量定义中添加 `conditions` 字段。
+
+#### 工作原理
++ 在对变量进行任何操作（get, set, add, remove, reset）之前，插件会首先解析 `conditions` 中的所有表达式。
++ 只有当**所有**表达式的最终结果都为 `true` 时，操作才会继续。
++ 任何一个条件不满足，操作就会失败，并提示“不满足访问条件”。
++ **布尔解释规则**: `"true"` (忽略大小写) 或非零数字被视为 `true`。 `"false"`, `0`, 空字符串或无法解析为数字的文本被视为 `false`。
+
+#### 用途与案例
+##### 案例1: VIP 专属每日礼包
+**需求**: 只有拥有 `myplugin.vip` 权限的玩家才能领取每日礼包。
+
+**实现**:
+
+```yaml
+variables:
+  # 礼包领取状态变量
+  daily_vip_kit_claimed:
+    name: "VIP每日礼包领取状态"
+    scope: "player"
+    type: "STRING" # 使用 "true"/"false" 字符串
+    initial: "false"
+    cycle: "daily"
+    # 条件: 玩家必须有 myplugin.vip 权限
+    conditions: "%player_has_permission_myplugin.vip%"
+```
+
++ **效果**:
+    - 非VIP玩家尝试 `get`, `set` 此变量时，会直接失败。
+    - 你可以让另一个插件在玩家执行 `/kit vip` 时，先检查 `daily_vip_kit_claimed` 的值。如果为 `false`，则发放礼包并将其 `set` 为 `true`。非VIP玩家因为无法通过条件检查，所以永远不能操作此变量。
+
+##### 案例2: 全局活动期间的特殊商店
+**需求**: 只有当一个全局变量 `global_event_active` 为 `true` 时，玩家才能购买特殊商品（通过修改一个 `purchased_special_item` 变量来记录）。
+
+**实现**:
+
+```yaml
+variables:
+  # 全局活动开关
+  global_event_active:
     scope: "global"
     type: "STRING"
     initial: "false"
 
-  # 门控示例1：字符串写法（单条件）
-  gated_pvp_bonus:
-    name: "PVP奖励（门控）"
+  # 玩家购买记录
+  purchased_special_item:
     scope: "player"
-    type: "INT"
-    initial: 10
-    # 仅当 pvp_enabled == true 时可访问
-    conditions: "${pvp_enabled}"
-
-  # 门控示例2：列表写法（多条件全部通过）
-  gated_double_exp_reward:
-    name: "双倍经验奖励（门控）"
-    scope: "player"
-    type: "DOUBLE"
-    initial: "100 + ${player_level} * 5"
-    # 仅当双倍经验活动开启，且玩家 PVP 开启时可访问
-    conditions:
-      - "${double_exp_event}"
-      - "${pvp_enabled}"
-```
-
-> 提示：为获得最佳性能，建议将 `conditions` 条件保持简洁；复杂逻辑可拆分为中间变量，再由目标变量通过 `conditions` 引用这些中间变量。
-
-### **3. 实际配置示例**
-
-#### **示例1：基础玩家金币变量**
-
-```yaml
-variables:
-  player_money:
-    name: "玩家金币"
-    scope: "player"
-    type: "DOUBLE"
-    initial: 100.0
-    min: 0
-    max: 1000000.0
-```
-
-  * **解读**：
-      * 这是一个名为 `player_money` 的玩家变量。
-      * 每个玩家初始拥有 `100.0` 金币。
-      * 金币数量不能低于 `0`，不能高于 `1,000,000.0`。
-
-#### **示例2：每日任务进度（每日重置）**
-
-```yaml
-variables:
-  daily_kill_zombies:
-    name: "每日击杀僵尸数"
-    scope: "player"
-    type: "INT"
-    initial: 0
-    cycle: "daily"
-```
-
-  * **解读**：
-      * `daily_kill_zombies` 用于记录玩家每日击杀僵尸的数量。
-      * `cycle: "daily"` 确保这个变量在 `config.yml` 设定的时区的每天零点自动重置为 `0`。
-
-#### **示例3：动态计算的玩家战斗力**
-
-```yaml
-variables:
-  player_level:
-    name: "玩家等级"
-    scope: "player"
-    type: "INT"
-    initial: 1
-    
-  player_combat_power:
-    name: "玩家战斗力"
-    scope: "player"
-    type: "INT"
-    initial: "${player_level} * 100 + %player_health% * 10"
-    limitations:
-      read-only: true
-```
-
-  * **解读**：
-      * `player_combat_power` 是一个只读的动态变量。
-      * 它的值由公式 `${player_level} * 100 + %player_health% * 10` 实时计算得出。
-          * `${player_level}` 引用了本插件定义的另一个变量 `player_level`。
-          * `%player_health%` 引用了 PlaceholderAPI 提供的玩家生命值占位符。
-
-#### **示例4：使用 Cron 表达式的全局变量**
-
-```yaml
-variables:
-  event_status:
-    name: "活动状态"
-    scope: "global"
     type: "STRING"
-    initial: "未开始"
-    # Cron 表达式：每周六、周日的18点到22点之间，每5分钟
-    cycle: "0 */5 18-22 * * SAT,SUN"
+    initial: "false"
+    conditions:
+      - "${global_event_active}" # 必须全局活动开启
+      - "%vault_eco_balance_formatted% >= 1000" # 且玩家金币>=1000
 ```
 
-  * **解读**：
-      * `event_status` 是一个全局变量，用于标识服务器活动状态。
-      * 通过 Cron 表达式，这个变量会在每周六、日的 18:00 至 22:55 之间，每隔5分钟就被重置为 `"未开始"`。您可以在活动开始时通过指令修改它，活动期间它会保持您修改的值，直到下个5分钟周期点再次被重置。
++ **效果**: 只有在服务器管理员将 `global_event_active` 设为 `true`，并且玩家有足够金币时，才能成功地将 `purchased_special_item` 变量从 `false` 设为 `true`，从而完成购买逻辑。
 
------
+---
 
-## **文档四：指令用法 `/vex` 大全**
+## 6. 占位符集成 (PlaceholderAPI)
+DrcomoVEX 与 [PlaceholderAPI](https://www.spigotmc.org/resources/placeholderapi.6245/) (PAPI) 进行了深度集成。你不仅可以在 DrcomoVEX 的 `initial` 表达式中使用 PAPI 的占位符，还可以将 DrcomoVEX 的变量作为 PAPI 占位符在其他插件（如计分板、聊天格式插件）中使用。
 
-`/vex` 是插件的主指令，用于管理所有变量。别名：`/dvex`, `/drcomo`。
+### 使用 DrcomoVEX 变量作为占位符
+安装 PlaceholderAPI后，你可以在任何支持 PAPI 的插件中使用以下格式的占位符。
 
-### **1. 指令结构**
+#### 格式
++ **通用格式**: `%drcomovex_[var]_[变量键]%`
+    - 这个格式会自动判断变量是 `player` 还是 `global` 作用域。
+    - **示例**: `%drcomovex_[var]_player_money%`
++ **玩家变量专用**: `%drcomovex_[player]_[变量键]%`
+    - 明确指定获取玩家变量。
+    - **示例**: `%drcomovex_[player]_player_level%`
++ **全局变量专用**: `%drcomovex_[global]_[变量键]%`
+    - 明确指定获取全局变量。
+    - **示例**: `%drcomovex_[global]_server_motd%`
++ **(兼容) 短格式**: `var`, `player`, `global` 两边的方括号 `[]` 是可选的。
+    - `%drcomovex_var_player_money%` 也是有效的。
 
-```
-/vex <scope> <operation> [parameters...] [flags]
-```
+#### 获取其他玩家的变量值
+PAPI 的标准格式也支持获取其他玩家的数据，DrcomoVEX 同样支持此功能。
 
-  * **`scope`**: `player` 或 `global`
-  * **`operation`**: `get`, `set`, `add`, `remove`, `reset`
-  * **`parameters`**: 操作所需的参数，如玩家名、变量名、值。
-  * **`flags`**: 可选标志，如 `-n` (预演) 或 `--limit N` (限制数量)。
++ **格式**: `%drcomovex_[player]_[变量键]_[玩家名]%`
++ **示例**: `%drcomovex_[player]_player_money_Notch%` 将会显示玩家 `Notch` 的金币数量。
 
-### **2. 玩家变量操作 (`/vex player ...`)**
-
-| 指令 | 权限 | 描述 |
-| :--- | :--- | :--- |
-| `/vex player get <玩家> <变量>` | `drcomovex.command.player.get` | 获取指定玩家的变量值。 |
-| `/vex player set <玩家> <变量> <值>` | `drcomovex.command.player.set` | 设置玩家变量的值。 |
-| `/vex player add <玩家> <变量> <值>` | `drcomovex.command.player.add` | 为玩家的数值或列表变量增加值。 |
-| `/vex player remove <玩家> <变量> <值>`| `drcomovex.command.player.remove`| 从玩家的数值或列表变量移除值。 |
-| `/vex player reset <玩家> <变量>` | `drcomovex.command.player.reset`| 将玩家的变量重置为初始值。 |
-
-  * 操作其他玩家需要额外权限，如 `drcomovex.command.player.set.others`。
-
-### **3. 全局变量操作 (`/vex global ...`)**
-
-| 指令 | 权限 | 描述 |
-| :--- | :--- | :--- |
-| `/vex global get <变量>` | `drcomovex.command.global.get` | 获取全局变量的值。 |
-| `/vex global set <变量> <值>` | `drcomovex.command.global.set` | 设置全局变量的值。 |
-| `/vex global add <变量> <值>` | `drcomovex.command.global.add` | 为全局变量增加值。 |
-| `/vex global remove <变量> <值>` | `drcomovex.command.global.remove`| 从全局变量移除值。 |
-| `/vex global reset <变量> <值>` | `drcomovex.command.global.reset`| 将全局变量重置为初始值。 |
-
-### **4. 批量与通配符操作**
-
-这是 `DrcomoVEX` 非常强大的功能，允许对多个玩家或变量进行批量操作。
-
-  * **玩家通配符**: 在玩家名字段使用 `*` 代表所有在线玩家。
-  * **变量通配符**: 在变量名中使用 `*` 匹配任意字符序列。
-      * `*_money` 匹配所有以 `_money` 结尾的变量。
-      * `daily_*` 匹配所有以 `daily_` 开头的变量。
-      * `*kill*` 匹配所有包含 `kill` 的变量。
-  * **条件筛选**: 在变量通配符后附加 `:[条件]` 来筛选数值。支持 `>` `>=` `<` `<=` `==` `!=`。
-  * **预演模式**: 在指令末尾添加 `-n` 或 `--dry-run`，指令将只显示会影响哪些目标，而不会实际执行。
-  * **数量限制**: 在指令末尾添加 `--limit <数量>` 来限制批量操作影响的目标数量。
-
-#### **批量操作示例**
-
-  * **查询所有在线玩家的金币**
-
-    ```
-    /vex player get * player_money
-    ```
-
-  * **给所有在线玩家增加 100 经验值，但只影响前 50 人**
-
-    ```
-    /vex player add * player_exp 100 --limit 50
-    ```
-
-  * **重置所有每日任务变量**
-
-    ```
-    /vex player reset * daily_*
-    ```
-
-  * **查询所有金币大于 10000 的玩家的金币数量**
-
-    ```
-    /vex player get * player_money:>10000
-    ```
-
-  * **预演：将所有玩家等级低于10级的玩家等级设置为10**
-
-    ```
-    /vex player set * player_level:<10 10 -n
-    ```
-
-### **5. 其他指令**
-
-| 指令 | 权限 | 描述 |
-| :--- | :--- | :--- |
-| `/vex reload` | `drcomovex.admin.reload` | 重载所有配置文件。 |
-| `/vex help` | `drcomovex.command.help` | 显示帮助信息。 |
-
------
-
-## **文档五：PlaceholderAPI 集成指南**
-
-`DrcomoVEX` 与 PlaceholderAPI 深度集成，既能“消费”也能“生产”占位符。
-
-### **1. 在 DrcomoVEX 中使用其他插件的占位符**
-
-您可以在变量的 `initial` 表达式中直接使用标准的 PlaceholderAPI 占位符。
-
-**示例：创建一个显示玩家 Vault 插件余额的变量**
+### 实际应用案例
+#### 案例1: 在计分板上显示玩家数据
+假设你在计分板插件 (如 DeluxeScoreboard) 中配置记分板：
 
 ```yaml
-# 在 variables/default.yml 中
-variables:
-  player_vault_balance:
-    name: "玩家Vault余额"
-    scope: "player"
-    type: "DOUBLE"
-    initial: "%vault_eco_balance%" # 直接引用 Vault 的占位符
-    limitations:
-      read-only: true
+# DeluxeScoreboard config.yml
+...
+lines:
+- '&e&l个人信息'
+- '&7等级: &f%drcomovex_var_player_level%'
+- '&7金币: &6%drcomovex_var_player_money%'
+- '&7战斗力: &c%drcomovex_var_player_combat_power%'
+- ''
+- '&e&l服务器信息'
+- '&7在线: &f%drcomovex_global_server_online_count%'
+- '&7公告: &a%drcomovex_global_server_motd%'
 ```
 
-现在，`player_vault_balance` 的值会实时反映玩家的 Vault 余额。
-
-### **2. 将 DrcomoVEX 变量作为占位符给其他插件使用**
-
-`DrcomoVEX` 提供了三种格式的占位符供其他插件（如计分板、聊天格式化插件）使用。
-
-| 占位符格式 | 描述 | 示例 |
-| :--- | :--- | :--- |
-| `%drcomovex_[var]_[变量名]%` | **通用格式**。自动判断变量是 `player` 还是 `global` 类型并返回值。对于 `player` 变量，它会根据当前上下文的玩家返回值。 | `%drcomovex_[var]_player_money%` |
-| `%drcomovex_[global]_[变量名]%` | **全局变量专用**。强制获取一个 `global` 变量的值。 | `%drcomovex_[global]_server_motd%` |
-| `%drcomovex_[player]_[变量名]%` | **玩家变量专用**。强制获取一个 `player` 变量的值。 | `%drcomovex_[player]_player_level%` |
-| `%drcomovex_[player]_[变量名]_[玩家名]%` | **指定玩家的变量**。获取指定玩家的变量值，而不是当前上下文的玩家。 | `%drcomovex_[player]_player_level_Notch%` |
-
-  * **注意**: `[var]`, `[global]`, `[player]` 两侧的方括号是占位符格式的一部分，必须保留。
-
-**使用场景示例（以 DeluxeMenus 为例）**
+#### 案例2: 在聊天格式中显示称号
+假设你在聊天插件 (如 EssentialsXChat) 中配置聊天格式：
 
 ```yaml
-# 在 DeluxeMenus 的菜单配置中
-item:
-  material: GOLD_INGOT
-  display_name: '&e我的金币'
-  lore:
-    - '&7当前金币: &f%drcomovex_[var]_player_money%'
-    - '&7服务器公告: &a%drcomovex_[global]_server_motd%'
+# EssentialsXChat config.yml
+...
+format: '[&f%drcomovex_list_player_titles_0%&r] {DISPLAYNAME}: {MESSAGE}'
 ```
-  
-  -----
-  
-  ## **文档六：缓存失效 API 命名与使用规范**
-  
-  为保证跨服一致性与高性能，本插件实现多级缓存（L1 原始、L2 表达式解析、L3 最终结果）与精确失效策略。以下为对外可用的缓存相关 API 与推荐实践。
-  
-  ### 1. API 总览（RefactoredVariablesManager）
-  
-  - **invalidateGlobalCaches(String key)**
-    - 清理“全局上下文”的缓存（影响该 key 的 L3 以及关联的 L2）。
-    - 仅用于 `global` 作用域变量。
-    - 为了语义清晰，取代旧方法 `invalidateAllCaches(key)`（旧方法已 `@Deprecated` 并委托到本方法）。
-  
-  - **invalidateCachesForPlayer(OfflinePlayer player, String key)**
-    - 清理“玩家上下文”的缓存（影响该 key 的 L3 以及关联的 L2）。
-    - 用于 `player` 作用域变量；当 `player == null` 时等价于全局上下文，但不推荐这样使用，改用 `invalidateGlobalCaches` 以免混淆。
-  
-  - **invalidateAllL2ForPlayer(OfflinePlayer player)**
-    - 一次性批量清理该玩家上下文下的所有 L2 表达式缓存（不影响 L3）。
-    - 适合“先批量清 L2、后按键仅清 L3”的高效策略。
-  
-  - **invalidateL3Only(OfflinePlayer player, String key)**
-    - 仅清理 L3（最终结果），不触碰 L2。
-    - `player != null` 表示玩家上下文；`player == null` 表示全局上下文。
-  
-  - **getL2InvalidationsTotal() / getL3InvalidationsTotal()**
-    - 自插件启动以来累计的 L2/L3 清理条目数（原子计数，用于观测与排障）。
-  
-  ### 2. 作用域与参数约定
-  
-  - **玩家上下文**：传入对应的 `OfflinePlayer`（或在线 `Player`）。
-  - **全局上下文**：统一以 `player == null` 表示（内部等价于 `SERVER` 上下文）。
-  - 所有方法均为线程安全，可在异步线程调用；但请避免在主线程内大量循环清理，以免卡顿。
-  
-  ### 3. 推荐用法：玩家入服一致性刷新
-  
-  入服时建议使用“先批量 L2、再按键仅清 L3”的策略，避免重复清 L2：
-  
-  ```java
-  // 1) 批量清理该玩家的 L2（一次）
-  int l2Batch = variablesManager.invalidateAllL2ForPlayer(player);
-  
-  // 2) 遍历需要刷新的键
-  for (String key : keysToRefresh) {
-      if (isPlayerScoped(key)) {
-          // 仅清该玩家上下文的 L3
-          variablesManager.invalidateL3Only(player, key);
-      } else if (isGlobalScoped(key)) {
-          // 仅清全局上下文的 L3
-          variablesManager.invalidateL3Only(null, key);
-      } else {
-          // 作用域不明时，保守处理为玩家上下文
-          variablesManager.invalidateL3Only(player, key);
-      }
-  }
-  ```
-  
-  该流程已在 `PlayerListener.scheduleJoinConsistencyRefresh()` 中实现，适用于多子服共库的跨服一致性场景。
-  
-  ### 4. 迁移指引（向后兼容）
-  
-  - 旧方法 `invalidateAllCaches(key)` 已废弃但仍可使用；建议**全部迁移**为：
-    - `invalidateGlobalCaches(key)`（全局变量）。
-    - `invalidateCachesForPlayer(player, key)`（玩家变量，若需同时清 L2 和 L3）。
-    - 若已提前批量清 L2，请改用 `invalidateL3Only(...)` 进行精确 L3 失效，避免重复清 L2。
-  
-  ### 5. 注意事项
-  
-  - **避免重复清 L2**：批量清过 L2 后，请在循环中使用 `invalidateL3Only(...)`，不要再次调用会触碰 L2 的 API。
-  - **禁用缓存的变量**（配置了 `conditions`）读取默认不走缓存；对其执行失效通常不会产生有效清理条目。
-  - **日志与观测**：如需排障，短时将日志级别调整为 `DEBUG`，并观察 L2/L3 累计增量与耗时。
-  
-  -----
-  
-  ## **示例配置文件合集**
-  
-  ### **示例一：基础经济与等级系统 (`economy.yml`)**
-  ```yaml
-# /plugins/DrcomoVEX/variables/economy.yml
+
++ **注意**: 对于 `LIST` 类型的变量，使用 `%drcomovex_list_<变量键>_<索引>%` 可以获取列表中特定位置的元素（索引从0开始）。
+
+### PAPI 重新加载
+如果你在服务器运行时修改了 DrcomoVEX 的变量定义，需要执行 `/papi reload` 来让 PlaceholderAPI 重新识别新的占位符。
+
+---
+
+## 7. 示例配置文件
+以下是多个场景的示例变量定义文件，你可以将它们直接放入 `plugins/DrcomoVEX/variables/` 目录中进行学习和修改。
+
+### 示例 1: 基础经济变量 (`economy.yml`)
+```yaml
+# 示例1: 基础经济系统
+# 包含两种核心货币：金币 (可游戏内获取) 和点券 (通常通过充值获取)。
+
 variables:
   # 玩家金币
-  player_money:
+  # - 作用域: player (每个玩家独立)
+  # - 类型: DOUBLE (支持小数)
+  # - 初始值: 100.0
+  # - 约束: 最小为0，最大为1亿
+  player_coins:
     name: "玩家金币"
     scope: "player"
     type: "DOUBLE"
-    initial: 100.0
+    initial: "100.0"
     min: 0
-    max: 9999999.0
-    
+    max: 100000000
+
   # 玩家点券
+  # - 作用域: player
+  # - 类型: INT (通常为整数)
+  # - 初始值: 0
+  # - 约束: 最小为0
   player_points:
     name: "玩家点券"
     scope: "player"
     type: "INT"
-    initial: 0
+    initial: "0"
     min: 0
 
-  # 玩家等级
-  player_level:
-    name: "玩家等级"
-    scope: "player"
-    type: "INT"
-    initial: 1
-    min: 1
-    max: 100
+  # 全局税率
+  # - 作用域: global (全服统一)
+  # - 类型: DOUBLE
+  # - 初始值: 0.05 (代表5%)
+  # - 约束: 范围在0到1之间
+  # - 高级: 设置为只读，只能通过后台指令修改，防止游戏内逻辑意外更改
+  global_tax_rate:
+    name: "全局交易税率"
+    scope: "global"
+    type: "DOUBLE"
+    initial: "0.05"
+    min: 0.0
+    max: 1.0
+    limitations:
+      read-only: true
 
-  # 玩家经验
-  player_exp:
-    name: "玩家经验"
+  # 玩家交易税后收入 (动态计算)
+  # - 这是一个只读的动态变量，它引用了其他变量
+  # - 用于方便地在其他插件中通过占位符获取计算结果
+  # - 假设有一个场景需要计算玩家出售物品价值1000金币时的税后收入
+  player_trade_income_example:
+    name: "交易收入示例"
     scope: "player"
-    type: "INT"
-    initial: 0
-    min: 0
-
-  # 升级所需经验（动态计算）
-  exp_to_next_level:
-    name: "升级所需经验"
-    scope: "player"
-    type: "INT"
-    # 表达式：100 * (玩家等级 ^ 1.5)
-    initial: "100 * pow(${player_level}, 1.5)"
+    type: "DOUBLE"
+    initial: "1000 * (1 - ${global_tax_rate})" # 引用全局税率变量
     limitations:
       read-only: true
 ```
 
-### **示例二：任务与签到系统 (`tasks.yml`)**
-
+### 示例 2: 玩家统计与段位 (`stats.yml`)
 ```yaml
-# /plugins/DrcomoVEX/variables/tasks.yml
+# 示例2: 玩家统计与段位系统
+# 描述玩家的PVP数据，并根据分数动态计算段位。
+
 variables:
-  # 每日签到状态
-  daily_check_in:
-    name: "每日签到"
+  # 玩家PVP击杀数
+  player_pvp_kills:
+    name: "PVP击杀数"
     scope: "player"
-    type: "STRING" # 使用 "true" / "false"
+    type: "INT"
+    initial: "0"
+    min: 0
+
+  # 玩家PVP死亡数
+  player_pvp_deaths:
+    name: "PVP死亡数"
+    scope: "player"
+    type: "INT"
+    initial: "0"
+    min: 0
+
+  # 玩家PVP分数 (动态计算)
+  # - 每次击杀得10分，每次死亡扣5分
+  player_pvp_score:
+    name: "PVP分数"
+    scope: "player"
+    type: "INT"
+    initial: "(${player_pvp_kills} * 10) - (${player_pvp_deaths} * 5)"
+    limitations:
+      read-only: true # 分数是计算出来的，应该是只读的
+
+  # 玩家KDA (Kill/Death/Assist) (动态计算)
+  # - 死亡为0时，KDA等于击杀数，避免除以0的错误
+  player_pvp_kda:
+    name: "PVP KDA"
+    scope: "player"
+    type: "DOUBLE"
+    # 使用 PlaceholderAPI 的 %math_...% 来实现条件逻辑
+    initial: "%math_(${player_pvp_deaths} > 0) ? ${player_pvp_kills}/${player_pvp_deaths} : ${player_pvp_kills}%"
+    limitations:
+      read-only: true
+
+  # 玩家段位 (动态计算)
+  # - 这是一个更复杂的例子，使用 PAPI 的 Relational Placeholders
+  # - 根据PVP分数显示不同的段位名称
+  player_pvp_rank:
+    name: "PVP段位"
+    scope: "player"
+    type: "STRING"
+    initial: >-
+      %rel_drcomovex_var_player_pvp_score_>=_2000_?_&c&l王者%
+      %rel_drcomovex_var_player_pvp_score_>=_1500_&_<%_2000_?_&e&l钻石%
+      %rel_drcomovex_var_player_pvp_score_>=_1000_&_<%_1500_?_&b&l铂金%
+      %rel_drcomovex_var_player_pvp_score_>=_500_&_<%_1000_?_&a&l黄金%
+      %rel_drcomovex_var_player_pvp_score_>=_0_&_<%_500_?_&f&l白银%
+      %rel_drcomovex_var_player_pvp_score_<_0_?_&8&l青铜%
+    limitations:
+      read-only: true
+```
+
+### 示例 3: 活动与任务变量 (`events.yml`)
+```yaml
+# 示例3: 活动与任务系统变量
+# 用于管理一个夏日活动的状态和玩家的每日任务进度。
+
+variables:
+  # 全局夏日活动开关
+  # - 管理员通过指令 /vex global set summer_event_active true 开启活动
+  summer_event_active:
+    name: "夏日活动开关"
+    scope: "global"
+    type: "STRING" # 使用 "true" 或 "false" 字符串作为布尔值
     initial: "false"
+
+  # 每日任务: 收集西瓜
+  # - 每日自动重置为0
+  player_daily_quest_watermelon:
+    name: "每日任务-收集西瓜"
+    scope: "player"
+    type: "INT"
+    initial: "0"
     cycle: "daily" # 每日重置
+    min: 0
+    max: 50 # 任务目标是50个
 
-  # 每日击杀10个僵尸的任务进度
-  task_kill_10_zombies:
-    name: "任务-击杀僵尸"
-    scope: "player"
-    type: "INT"
-    initial: 0
-    cycle: "daily"
-    max: 10
-    
-  # 每周在线时长（分钟）
-  weekly_playtime:
-    name: "周在线时长"
-    scope: "player"
-    type: "INT"
-    initial: 0
-    cycle: "weekly" # 每周重置
-
-  # 每小时可领取的在线奖励状态
-  hourly_reward_status:
-    name: "每小时在线奖励"
+  # 每日任务完成状态 (动态计算)
+  # - 当收集数量达到50时，状态变为 "true"
+  player_daily_quest_watermelon_completed:
+    name: "每日任务-西瓜-完成状态"
     scope: "player"
     type: "STRING"
-    initial: "available" # 可领取
-    # Cron: 每小时的0分0秒重置
-    cycle: "0 0 * * * ?"
+    initial: "%math_(${player_daily_quest_watermelon} >= 50) ? true : false%"
+    limitations:
+      read-only: true
+
+  # 夏日活动积分
+  # - 玩家在活动期间通过各种行为获得，活动结束后可能会清空
+  player_event_points_summer:
+    name: "夏日活动积分"
+    scope: "player"
+    type: "INT"
+    initial: "0"
+    min: 0
+    # 条件门控：只有在夏日活动开启时，才能获取或修改此积分
+    conditions: "${summer_event_active}"
 ```
 
-### **示例三：服务器状态监控 (`server_stats.yml`)**
-
+### 示例 4: 高级逻辑与组合用法 (`advanced.yml`)
 ```yaml
-# /plugins/DrcomoVEX/variables/server_stats.yml
+# 示例4: 高级逻辑与组合用法
+# 展示 strict-initial-mode, conditions 和 复杂周期的组合使用。
+
 variables:
-  # 服务器公告
-  server_motd:
-    name: "服务器公告"
+  # 一次性的开服元老称号
+  # - 需求: 只有在服务器开服第一周内加入的玩家才能获得一个 "开服元老" 称号。
+  # - 实现: 使用 PAPI 的 %server_time_yyyy-MM-dd% 和条件判断。
+  #   这里假设你有办法记录玩家首次加入时间 (例如另一个PAPI变量 %firstplayed_...%)
+  #   为了简化，我们用一个严格模式变量来模拟这个效果。
+  player_is_veteran:
+    name: "是否为开服元老"
+    scope: "player"
+    type: "STRING"
+    # 假设服务器开服日期为 2024-01-01
+    # 使用PAPI的JavaScript占位符进行日期比较
+    initial: "%javascript_new Date() < new Date('2024-01-08') ? 'true' : 'false'%"
+    limitations:
+      strict-initial-mode: true # 关键！只在玩家首次被记录时计算一次
+      read-only: true
+
+  # 每周末双倍金币开关 (Cron周期)
+  # - 每周六和周日的0点开启，周一0点关闭
+  # - 这通常由外部任务调度插件控制，这里用一个变量来代表其状态
+  global_weekend_bonus_active:
+    name: "周末双倍金币开关"
     scope: "global"
     type: "STRING"
-    initial: "&a欢迎来到我们的服务器！&e祝您游戏愉快！"
-    
-  # 服务器TPS（动态只读）
-  server_tps:
-    name: "服务器TPS"
-    scope: "global"
-    type: "DOUBLE"
-    initial: "%server_tps_1%"
-    limitations:
-      read-only: true
-      
-  # 在线人数（动态只读）
-  server_online:
-    name: "在线人数"
-    scope: "global"
-    type: "INT"
-    initial: "%server_online%"
-    limitations:
-      read-only: true
-      
-  # 是否开启双倍经验活动
-  double_exp_event:
-    name: "双倍经验活动"
-    scope: "global"
-    type: "STRING" # 使用 "true" / "false"
     initial: "false"
-```
+    # 通过外部脚本或指令在周六0点设为true, 周一0点设为false
 
-### **示例四：PVP 与玩家属性 (`pvp.yml`)**
-
-```yaml
-# /plugins/DrcomoVEX/variables/pvp.yml
-variables:
-  # 玩家击杀数
-  player_kills:
-    name: "玩家击杀数"
+  # 玩家在线奖励
+  # - 基础奖励为10金币，如果恰逢周末双倍活动，则奖励翻倍
+  player_online_reward:
+    name: "在线奖励"
     scope: "player"
     type: "INT"
-    initial: 0
-    min: 0
-
-  # 玩家死亡数
-  player_deaths:
-    name: "玩家死亡数"
-    scope: "player"
-    type: "INT"
-    initial: 0
-    min: 0
-    
-  # K/D 比率 (动态计算)
-  player_kdr:
-    name: "K/D 比率"
-    scope: "player"
-    type: "DOUBLE"
-    # 表达式: 击杀数 / (死亡数，但如果死亡数为0则视为1，避免除零错误)
-    initial: "${player_kills} / max(1, ${player_deaths})"
+    initial: "%math_(${global_weekend_bonus_active} == true) ? 20 : 10%"
     limitations:
       read-only: true
 
-  # 玩家 PVP 开关
-  pvp_enabled:
-    name: "PVP开关"
-    scope: "player"
-    type: "STRING"
-    initial: "true"
-    
-  # 不会被保存的临时PVP保护状态
-  pvp_protection_temp:
+  # 临时PVP保护状态
+  # - 玩家复活后获得，仅在内存中有效，持续1分钟
+  #   (注意：此插件本身不计时，需要外部机制配合)
+  player_pvp_protection:
     name: "临时PVP保护"
     scope: "player"
     type: "STRING"
     initial: "false"
     limitations:
-      persistable: false # 重启后失效
+      persistable: false # 不保存到数据库
 ```
+
