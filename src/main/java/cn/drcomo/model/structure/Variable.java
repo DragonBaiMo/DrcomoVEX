@@ -27,6 +27,7 @@ public class Variable {
     private final String cycle;
     private final Limitations limitations;
     private final List<String> conditions;
+    private final List<String> cycleActions;
     
     // 编译时计算的元数据
     private final boolean isDynamic;
@@ -47,6 +48,9 @@ public class Variable {
         this.conditions = builder.conditions == null
                 ? Collections.emptyList()
                 : Collections.unmodifiableList(new ArrayList<>(builder.conditions));
+        this.cycleActions = builder.cycleActions == null
+                ? Collections.emptyList()
+                : Collections.unmodifiableList(new ArrayList<>(builder.cycleActions));
         
         // 计算元数据
         this.isDynamic = variableType.isDynamic();
@@ -105,10 +109,24 @@ public class Variable {
     }
 
     /**
+     * 获取周期/重置后的动作列表
+     */
+    public List<String> getCycleActions() {
+        return cycleActions;
+    }
+
+    /**
      * 是否配置了条件门控
      */
     public boolean hasConditions() {
         return conditions != null && !conditions.isEmpty();
+    }
+
+    /**
+     * 是否配置了周期动作
+     */
+    public boolean hasCycleActions() {
+        return cycleActions != null && !cycleActions.isEmpty();
     }
     
     public boolean isDynamic() {
@@ -324,6 +342,7 @@ public class Variable {
         private String cycle;
         private Limitations limitations;
         private List<String> conditions;
+        private List<String> cycleActions;
         
         public Builder(String key) {
             this.key = key;
@@ -383,6 +402,18 @@ public class Variable {
             } else {
                 // 防御性拷贝，避免外部修改
                 this.conditions = new ArrayList<>(conditions);
+            }
+            return this;
+        }
+
+        /**
+         * 设置周期/重置后的动作列表
+         */
+        public Builder cycleActions(List<String> actions) {
+            if (actions == null) {
+                this.cycleActions = null;
+            } else {
+                this.cycleActions = new ArrayList<>(actions);
             }
             return this;
         }

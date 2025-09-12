@@ -12,6 +12,8 @@ import cn.drcomo.model.structure.Limitations;
 import cn.drcomo.model.structure.ScopeType;
 import cn.drcomo.model.structure.ValueType;
 import cn.drcomo.model.structure.Variable;
+import cn.drcomo.managers.components.ActionExecutor;
+import cn.drcomo.managers.components.VariableDefinitionLoader;
 import cn.drcomo.storage.BatchPersistenceManager;
 import cn.drcomo.storage.BatchPersistenceManager.PersistenceConfig;
 import cn.drcomo.storage.MultiLevelCacheManager;
@@ -24,11 +26,10 @@ import cn.drcomo.util.ValueLimiter;
 import cn.drcomo.corelib.math.FormulaCalculator;
 import org.bukkit.Bukkit;
 import org.bukkit.OfflinePlayer;
-import org.bukkit.configuration.ConfigurationSection;
-import org.bukkit.configuration.file.FileConfiguration;
-import org.bukkit.configuration.file.YamlConfiguration;
+ 
 
-import java.io.File;
+ 
+
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashSet;
@@ -78,6 +79,8 @@ public class RefactoredVariablesManager {
     private final BatchPersistenceManager persistenceManager;
     private final MultiLevelCacheManager cacheManager;
     private final DependencyResolver dependencyResolver;
+    private final ActionExecutor actionExecutor;
+    private final VariableDefinitionLoader definitionLoader;
 
     // 变量定义注册表
     private final ConcurrentHashMap<String, Variable> variableRegistry = new ConcurrentHashMap<>();
@@ -125,6 +128,12 @@ public class RefactoredVariablesManager {
                 .setMaxRetries(3);
         this.persistenceManager = new BatchPersistenceManager(
                 logger, database, memoryStorage, asyncTaskManager, persistenceConfig);
+
+        // 初始化周期动作执行组件（仅解析内部变量，PAPI 解析在组件内处理）
+        this.actionExecutor = new ActionExecutor(this.plugin, this.logger, this.placeholderUtil, this::resolveInternalVariables);
+
+        // 初始化变量定义加载组件
+        this.definitionLoader = new VariableDefinitionLoader(this.plugin, this.logger);
     }
 
     // ======================== 生命周期管理 ========================
@@ -146,6 +155,19 @@ public class RefactoredVariablesManager {
             }
         }, asyncTaskManager.getExecutor());
     }
+
+    // ======================== 周期动作执行 ========================
+
+    /**
+     * 在变量重置后执行 cycle-actions
+     * - 当变量作用域为 player 时：对指定玩家执行；若未传入玩家（如周期任务批量重置），对所有在线玩家各执行一次
+     * - 当变量作用域为 global 时：仅以控制台身份执行一次；占位符解析上下文使用传入玩家，若为空则任选一个在线玩家
+     */
+    public void executeCycleActionsOnReset(Variable variable, OfflinePlayer contextPlayer) {
+        actionExecutor.executeCycleActionsOnReset(variable, contextPlayer);
+    }
+
+    
 
     /**
      * 关闭变量管理器
@@ -332,19 +354,10 @@ public class RefactoredVariablesManager {
                 String displayValue;
 
                 if (isFormulaVariable(variable)) {
-                    String resolvedAdd = resolveExpression(addValue, player, variable);
-                    VariableValue memVal = getMemoryValue(player, variable);
-                    String currInc = (memVal == null || memVal.isStrictComputed()) ? "0" : memVal.getActualValue();
-                    newIncrement = calculateFormulaIncrement(variable.getValueType(), currInc, resolvedAdd, true);
-                    String base = resolveExpression(variable.getInitial(), player, variable);
-                    displayValue = addFormulaIncrement(base, newIncrement, variable.getValueType());
-                    logger.debug("公式加法: key=" + key
-                            + ", strict=" + (memVal != null && memVal.isStrictComputed())
-                            + ", currInc=" + currInc
-                            + ", resolvedAdd=" + resolvedAdd
-                            + ", newInc=" + newIncrement
-                            + ", base=" + base
-                            + ", display=" + displayValue);
+                    // 使用统一的公式加法计算
+                    FormulaOpResult r = computeFormulaAdd(variable, player, addValue);
+                    newIncrement = r.newIncrement;
+                    displayValue = r.displayValue;
                 } else {
                     String resolvedAdd = resolveExpression(addValue, player, variable);
                     newIncrement = calculateAddition(variable.getValueType(), currentValue, resolvedAdd);
@@ -354,14 +367,14 @@ public class RefactoredVariablesManager {
                 if (newIncrement == null) {
                     return VariableResult.failure("加法操作失败或超出约束", "ADD", key, playerName);
                 }
-                if (!validateValue(variable, newIncrement)) {
-                    String adjusted = ValueLimiter.apply(variable, newIncrement);
-                    if (adjusted == null || !validateValue(variable, adjusted)) {
-                        return VariableResult.failure("加法结果超出限制", "ADD", key, playerName);
-                    }
-                    newIncrement = adjusted;
-                    displayValue = newIncrement;
+
+                // 统一进行限制适配：先校验，失败再尝试 ValueLimiter
+                String fitted = fitValueWithinLimitOrNull(variable, newIncrement);
+                if (fitted == null) {
+                    return VariableResult.failure("加法结果超出限制", "ADD", key, playerName);
                 }
+                newIncrement = fitted;
+                displayValue = fitted;
 
                 updateMemoryAndInvalidate(player, variable, newIncrement);
                 logger.debug("加法操作: " + key + " = " + displayValue + " (当前: " + currentValue + " + 增加: " + addValue + ")");
@@ -389,22 +402,10 @@ public class RefactoredVariablesManager {
                 String displayValue;
 
                 if (isFormulaVariable(variable)) {
-                    VariableValue memVal = getMemoryValue(player, variable);
-                    String currInc = (memVal == null || memVal.isStrictComputed()) ? "0" : memVal.getActualValue();
-                    String resolvedRemove = resolveExpression(removeValue, player, variable);
-                    newIncrement = calculateFormulaIncrement(
-                            variable.getValueType(),
-                            currInc,
-                            resolvedRemove, false);
-                    String base = resolveExpression(variable.getInitial(), player, variable);
-                    displayValue = addFormulaIncrement(base, newIncrement, variable.getValueType());
-                    logger.debug("公式删除: key=" + key
-                            + ", strict=" + (memVal != null && memVal.isStrictComputed())
-                            + ", currInc=" + currInc
-                            + ", resolvedRemove=" + resolvedRemove
-                            + ", newInc=" + newIncrement
-                            + ", base=" + base
-                            + ", display=" + displayValue);
+                    // 使用统一的公式删除计算
+                    FormulaOpResult r = computeFormulaRemove(variable, player, removeValue);
+                    newIncrement = r.newIncrement;
+                    displayValue = r.displayValue;
                 } else {
                     newIncrement = calculateRemoval(variable.getValueType(), currentValue, removeValue);
                     displayValue = newIncrement;
@@ -413,14 +414,14 @@ public class RefactoredVariablesManager {
                 if (newIncrement == null) {
                     return VariableResult.failure("删除操作失败", "REMOVE", key, playerName);
                 }
-                if (!validateValue(variable, newIncrement)) {
-                    String adjusted = ValueLimiter.apply(variable, newIncrement);
-                    if (adjusted == null || !validateValue(variable, adjusted)) {
-                        return VariableResult.failure("删除结果超出限制", "REMOVE", key, playerName);
-                    }
-                    newIncrement = adjusted;
-                    displayValue = newIncrement;
+
+                // 统一进行限制适配：先校验，失败再尝试 ValueLimiter
+                String fitted = fitValueWithinLimitOrNull(variable, newIncrement);
+                if (fitted == null) {
+                    return VariableResult.failure("删除结果超出限制", "REMOVE", key, playerName);
                 }
+                newIncrement = fitted;
+                displayValue = fitted;
 
                 updateMemoryAndInvalidate(player, variable, newIncrement);
                 logger.debug("删除操作: " + key + " = " + displayValue + " (删除: " + removeValue + ")");
@@ -436,6 +437,7 @@ public class RefactoredVariablesManager {
      * 重置变量为初始值（完全异步）
      */
     public CompletableFuture<VariableResult> resetVariable(OfflinePlayer player, String key) {
+
         final String playerName = getPlayerName(player);
         return CompletableFuture.supplyAsync(() -> {
             try {
@@ -451,7 +453,6 @@ public class RefactoredVariablesManager {
                     logger.debug("清理变量依赖快照: " + key);
                 }
 
-                // 对于严格模式变量，还需要清理内存中的 strict 状态
                 VariableValue resetVal = getMemoryValue(player, variable);
                 if (resetVal != null && variable.isStrictInitialMode()) {
                     resetVal.resetStrictMode();
@@ -463,6 +464,12 @@ public class RefactoredVariablesManager {
                     logger.debug("重置公式变量: " + key + " = " + resetValue + " (清空增量)");
                 } else {
                     logger.debug("重置变量: " + key + " = " + resetValue);
+                }
+                // 触发周期/重置后的动作
+                try {
+                    executeCycleActionsOnReset(variable, player);
+                } catch (Exception exAct) {
+                    logger.error("执行重置动作失败: " + key, exAct);
                 }
                 return VariableResult.success(resetValue, "RESET", key, playerName);
             } catch (Exception e) {
@@ -566,6 +573,58 @@ public class RefactoredVariablesManager {
         } catch (Exception e) {
             logger.error("清理全局上下文变量缓存失败: " + key, e);
         }
+    }
+
+    /**
+     * 获取当前公式增量值：
+     * - 若不存在或处于严格模式计算结果，返回 "0"；
+     * - 否则返回当前内存中的实际值（作为增量）。
+     */
+    private String getCurrentIncrementForFormula(VariableValue memVal) {
+        return (memVal == null || memVal.isStrictComputed()) ? "0" : memVal.getActualValue();
+    }
+
+    /**
+     * 统一封装：公式变量的加法计算
+     * 返回新增量与用于展示的最终值
+     */
+    private FormulaOpResult computeFormulaAdd(Variable variable, OfflinePlayer player, String addValue) {
+        String resolvedAdd = resolveExpression(addValue, player, variable);
+        VariableValue memVal = getMemoryValue(player, variable);
+        String currInc = getCurrentIncrementForFormula(memVal);
+        String newIncrement = calculateFormulaIncrement(variable.getValueType(), currInc, resolvedAdd, true);
+        String base = resolveExpression(variable.getInitial(), player, variable);
+        String displayValue = addFormulaIncrement(base, newIncrement, variable.getValueType());
+        logger.debug("公式加法: key=" + variable.getKey()
+                + ", strict=" + (memVal != null && memVal.isStrictComputed())
+                + ", currInc=" + currInc
+                + ", resolvedAdd=" + resolvedAdd
+                + ", newInc=" + newIncrement
+                + ", base=" + base
+                + ", display=" + displayValue);
+        return new FormulaOpResult(newIncrement, displayValue);
+    }
+
+    /**
+     * 统一封装：公式变量的删除/减法计算
+     * 返回新增量与用于展示的最终值
+     */
+    private FormulaOpResult computeFormulaRemove(Variable variable, OfflinePlayer player, String removeValue) {
+        VariableValue memVal = getMemoryValue(player, variable);
+        String currInc = getCurrentIncrementForFormula(memVal);
+        String resolvedRemove = resolveExpression(removeValue, player, variable);
+        String newIncrement = calculateFormulaIncrement(
+                variable.getValueType(), currInc, resolvedRemove, false);
+        String base = resolveExpression(variable.getInitial(), player, variable);
+        String displayValue = addFormulaIncrement(base, newIncrement, variable.getValueType());
+        logger.debug("公式删除: key=" + variable.getKey()
+                + ", strict=" + (memVal != null && memVal.isStrictComputed())
+                + ", currInc=" + currInc
+                + ", resolvedRemove=" + resolvedRemove
+                + ", newInc=" + newIncrement
+                + ", base=" + base
+                + ", display=" + displayValue);
+        return new FormulaOpResult(newIncrement, displayValue);
     }
 
     /**
@@ -911,7 +970,7 @@ public class RefactoredVariablesManager {
 
         String result = expression;
         int depth = 0;
-        Set<String> seen = allowCircular ? null : new HashSet<>();
+        Set<String> seen = new HashSet<>();
 
         while (depth < maxDepth
                 && (PLACEHOLDER_PATTERN.matcher(result).find()
@@ -953,6 +1012,21 @@ public class RefactoredVariablesManager {
 
         cacheManager.cacheExpression(expression, player, result);
         return result;
+    }
+
+    /**
+     * 将候选值按变量限制进行适配：
+     * - 先调用 {@link #validateValue(Variable, String)} 校验；
+     * - 若失败，尝试通过 {@link ValueLimiter#apply(Variable, String)} 进行修正；
+     * - 若修正后仍不通过，返回 null。
+     */
+    private String fitValueWithinLimitOrNull(Variable variable, String candidate) {
+        if (validateValue(variable, candidate)) return candidate;
+        String adjusted = ValueLimiter.apply(variable, candidate);
+        if (adjusted != null && validateValue(variable, adjusted)) {
+            return adjusted;
+        }
+        return null;
     }
 
     /** 解析内部变量占位符 ${var} */
@@ -1001,7 +1075,13 @@ public class RefactoredVariablesManager {
         if (value != null) {
             try {
                 if (type == ValueType.INT) {
-                    Integer.parseInt(value);
+                    // 使用与 parseIntOrDefault 相同的逻辑，支持小数四舍五入
+                    try {
+                        Integer.parseInt(value);
+                    } catch (NumberFormatException e) {
+                        // 兼容小数，如 "90.00" -> 90
+                        Double.parseDouble(value);
+                    }
                 } else if (type == ValueType.DOUBLE) {
                     Double.parseDouble(value);
                 }
@@ -1214,135 +1294,12 @@ public class RefactoredVariablesManager {
 
     // ======================== 变量定义加载与验证 ========================
 
-    /** 加载所有变量定义（扫描 variables 目录） */
+    /** 加载所有变量定义（委托到组件） */
     private void loadAllVariableDefinitions() {
-        try {
-            File variablesDir = new File(plugin.getDataFolder(), "variables");
-            if (!variablesDir.exists() || !variablesDir.isDirectory()) {
-                logger.warn("变量目录不存在: " + variablesDir.getAbsolutePath());
-                return;
-            }
-
-            // 使用数组作为可变引用计数器
-            int[] loadedCount = new int[]{0};
-            scanVariablesRecursively(variablesDir, "", loadedCount);
-            logger.info("变量目录递归扫描完成，共加载 " + loadedCount[0] + " 个配置文件");
-        } catch (Exception e) {
-            logger.error("递归扫描变量目录失败", e);
-        }
+        definitionLoader.loadAll(this::registerVariable);
     }
 
-    /** 递归扫描 variables 目录并加载所有 .yml */
-    private void scanVariablesRecursively(File directory, String relativePath, int[] loadedCount) {
-        File[] files = directory.listFiles();
-        if (files == null) return;
-
-        for (File f : files) {
-            if (f.isDirectory()) {
-                String sub = relativePath.isEmpty() ? f.getName() : relativePath + "/" + f.getName();
-                scanVariablesRecursively(f, sub, loadedCount);
-            } else if (f.isFile() && f.getName().toLowerCase().endsWith(".yml")) {
-                String base = f.getName().substring(0, f.getName().length() - 4);
-                String configName = relativePath.isEmpty() ? base : relativePath + "/" + base;
-                try {
-                    loadVariableDefinitionsFromFile(f, configName);
-                    loadedCount[0]++;
-                    logger.debug("已加载变量文件: " + configName + " (" + f.getAbsolutePath() + ")");
-                } catch (Exception e) {
-                    logger.error("加载变量文件失败: " + configName + " (" + f.getAbsolutePath() + ")", e);
-                }
-            }
-        }
-    }
-
-    /** 从磁盘文件直接加载并解析（支持子目录与中文路径） */
-    private void loadVariableDefinitionsFromFile(File configFile, String configName) {
-        FileConfiguration cfg = YamlConfiguration.loadConfiguration(configFile);
-        loadVariableDefinitionsFromConfig(configName, cfg);
-    }
-
-    /** 公共解析实现：从给定配置对象解析变量定义 */
-    private void loadVariableDefinitionsFromConfig(String configName, FileConfiguration config) {
-        if (config == null) {
-            logger.warn("配置文件无法解析: " + configName);
-            return;
-        }
-        ConfigurationSection section = config.getConfigurationSection("variables");
-        if (section == null) {
-            logger.warn("未找到 variables 节: " + configName);
-            return;
-        }
-        for (String key : section.getKeys(false)) {
-            try {
-                ConfigurationSection varSec = section.getConfigurationSection(key);
-                if (varSec != null) {
-                    Variable var = parseVariableDefinition(key, varSec);
-                    registerVariable(var);
-                }
-            } catch (Exception e) {
-                logger.error("解析变量定义失败: " + key, e);
-            }
-        }
-    }
-
-    /** 解析单个变量定义（补充了空值安全与字段校验） */
-    private Variable parseVariableDefinition(String key, ConfigurationSection section) {
-        Variable.Builder builder = new Variable.Builder(key);
-        Limitations.Builder lb = new Limitations.Builder();
-
-        builder.name(section.getString("name"))
-                .scope(section.getString("scope", "player"))
-                .initial(section.getString("initial"))
-                .cycle(section.getString("cycle"));
-
-        String typeStr = section.getString("type");
-        if (!isBlank(typeStr)) {
-            ValueType vt = ValueType.fromString(typeStr);
-            if (vt != null) {
-                builder.valueType(vt);
-            } else {
-                logger.warn("变量 " + key + " 定义了无效的类型: " + typeStr);
-            }
-        }
-
-        if (section.contains("min")) lb.minValue(section.getString("min"));
-        if (section.contains("max")) lb.maxValue(section.getString("max"));
-
-        if (section.isConfigurationSection("limitations")) {
-            ConfigurationSection limSec = section.getConfigurationSection("limitations");
-            applyLimitationsFromSection(limSec, lb);
-        }
-
-        // 解析 conditions：支持字符串或列表
-        if (section.contains("conditions")) {
-            List<String> conds = new java.util.ArrayList<>();
-            if (section.isList("conditions")) {
-                conds = section.getStringList("conditions");
-            } else if (section.isString("conditions")) {
-                String c = section.getString("conditions");
-                if (c != null && !c.trim().isEmpty()) conds.add(c);
-            } else {
-                logger.warn("变量 " + key + " 的 conditions 字段类型无效，已忽略");
-            }
-            if (!conds.isEmpty()) {
-                builder.conditions(conds);
-            }
-        }
-
-        builder.limitations(lb.build());
-        return builder.build();
-    }
-
-    /** 从配置节填充 Limitations.Builder（减少重复 null 判断） */
-    private void applyLimitationsFromSection(ConfigurationSection limSec, Limitations.Builder lb) {
-        if (limSec == null) return;
-        if (limSec.contains("read-only")) lb.readOnly(limSec.getBoolean("read-only"));
-        if (limSec.contains("persistable")) lb.persistable(limSec.getBoolean("persistable"));
-        if (limSec.contains("strict-initial-mode")) lb.strictInitialMode(limSec.getBoolean("strict-initial-mode"));
-        if (limSec.contains("max-recursion-depth")) lb.maxRecursionDepth(limSec.getInt("max-recursion-depth"));
-        if (limSec.contains("max-expression-length")) lb.maxExpressionLength(limSec.getInt("max-expression-length"));
-        if (limSec.contains("allow-circular-references")) lb.allowCircularReferences(limSec.getBoolean("allow-circular-references"));
-    }
+    
 
     /** 注册变量到内存定义表 */
     private void registerVariable(Variable variable) {
@@ -1554,7 +1511,9 @@ public class RefactoredVariablesManager {
                     return initialExpression;
                 }
 
-                return snapshot.getCalculatedValue();
+                // 对快照结果再进行一次通用解析，确保 PAPI 与数学表达式被最终计算
+                String snapped = snapshot.getCalculatedValue();
+                return resolveExpression(snapped, player, variable);
             } else {
                 // 不需要快照，直接解析表达式
                 return resolveExpression(initialExpression, player, variable);
@@ -1580,6 +1539,20 @@ public class RefactoredVariablesManager {
             this.value = value;
             this.updatedAt = updatedAt;
             this.firstModifiedAt = firstModifiedAt;
+        }
+    }
+
+    /**
+     * 内部封装：公式操作计算结果
+     * newIncrement 为需要写入内存的增量值；displayValue 为用户可见的最终值
+     */
+    private static final class FormulaOpResult {
+        final String newIncrement;
+        final String displayValue;
+
+        FormulaOpResult(String newIncrement, String displayValue) {
+            this.newIncrement = newIncrement;
+            this.displayValue = displayValue;
         }
     }
 

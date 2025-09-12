@@ -300,6 +300,65 @@ vip_exclusive_kit:
     - "${event_switch}" # 检查活动开关
 ```
 
+#### `cycle-actions`
++ **类型**: `String` 或 `List<String>`
++ **说明**: 在变量被“重置（reset）”之后执行的动作列表。支持三种执行身份前缀：
+  - `[player]`：以玩家身份执行指令
+  - `[op]`：以玩家 OP 权限执行指令（执行期间临时授予，结束后恢复）
+  - `[console]`：以控制台身份执行指令
++ **执行规则**:
+  - 当 `scope: "player"` 时：每个玩家的该变量重置时，对该玩家各执行一次动作；占位符解析上下文为“触发重置的玩家”。
+  - 当 `scope: "global"` 时：仅执行一次动作，并以“控制台”身份执行；占位符解析上下文会选取任意一个在线玩家（若调用方传入了玩家上下文，则优先使用）。
++ **占位符支持**:
+  - 支持 PlaceholderAPI 占位符（形如 `%...%`）。
+  - 支持引用其他 DrcomoVEX 变量（形如 `${other_key}`）。
++ **语法与示例**:
+
+ 单条动作（字符串写法）
+
+ ```yaml
+variables:
+  daily_reward_claimed:
+    scope: "player"
+    type: "STRING"
+    initial: "false"
+    cycle: "daily"
+    cycle-actions: "[player] tell %player_name% 你的每日奖励状态已重置为 ${daily_reward_claimed}"
+ ```
+
+ 多条动作（列表写法）
+
+ ```yaml
+variables:
+  weekly_score:
+    scope: "player"
+    type: "INT"
+    initial: 0
+    cycle: "weekly"
+    cycle-actions:
+      - "[player] title %player_name% title &a周积分已重置"
+      - "[op] give %player_name% diamond 1"
+      - "[console] broadcast &e玩家 %player_name% 的周积分已重置"
+ ```
+
+ 全局变量动作（仅执行一次，控制台执行）
+
+ ```yaml
+variables:
+  minute_reset_variable:
+    scope: "global"
+    type: "INT"
+    initial: 0
+    cycle: "0 * * * * ?" # 每分钟
+    cycle-actions:
+      - "[console] broadcast &a全局变量 minute_reset_variable 已在本周期点重置"
+ ```
+
+ **注意事项**
+ - 指令前导斜杠可写可不写（如 `/say hi` 与 `say hi` 均可），插件会自动处理。
+ - `[op]` 模式仅在执行动作期间临时授予 OP，执行完毕立即恢复玩家原有 OP 状态。
+ - 若动作依赖玩家上下文（如 `%player_name%`），在 `scope: "global"` 的场景中会选择任意在线玩家作为占位符解析上下文；如需可控上下文，请从手动重置路径传入一个玩家。
+
 ---
 
 ## 4. 指令用法与权限参考

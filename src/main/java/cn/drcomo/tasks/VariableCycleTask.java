@@ -283,6 +283,12 @@ public class VariableCycleTask {
                                 " 周期: " + cycleType +
                                 " 周期起点: " + cycleStart +
                                 " 当前: " + now + ")");
+                        // 执行周期动作（玩家作用域：对所有在线玩家各执行一次；全局作用域：仅控制台执行一次）
+                        try {
+                            variablesManager.executeCycleActionsOnReset(var, null);
+                        } catch (Exception actEx) {
+                            logger.error("执行重置动作失败: " + key, actEx);
+                        }
                     } else {
                         logger.warn("变量 " + key + " 重置失败，已重试3次");
                     }
@@ -425,6 +431,12 @@ public class VariableCycleTask {
                     // 对齐记录到“上次计划执行时间”，确保同一分钟内只重置一次
                     updateVariableResetTime(key, lastScheduledExec.toInstant().toEpochMilli());
                     resetList.add(key);
+                    // 执行周期动作（玩家作用域：对所有在线玩家各执行一次；全局作用域：仅控制台执行一次）
+                    try {
+                        variablesManager.executeCycleActionsOnReset(var, null);
+                    } catch (Exception actEx) {
+                        logger.error("执行重置动作失败: " + key, actEx);
+                    }
                 }
             }
         }

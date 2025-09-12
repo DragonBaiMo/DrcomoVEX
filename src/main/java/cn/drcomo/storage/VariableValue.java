@@ -230,22 +230,21 @@ public class VariableValue {
     public boolean isStrictEncoded() {
         return value != null && value.startsWith(STRICT_PREFIX);
     }
-    
+
     /**
-     * 解码严格模式的实际值
+     * 解码严格模式的实际值（允许实际值中包含冒号，使用最后一个分隔符定位时间戳）
      */
     public String getActualValue() {
         if (!isStrictEncoded()) {
             return value;
         }
-        
-        String[] parts = value.split(STRICT_SEPARATOR, 3);
-        if (parts.length >= 2) {
-            return parts[1]; // 返回实际值部分
+        int lastSep = value.lastIndexOf(STRICT_SEPARATOR);
+        if (lastSep > STRICT_PREFIX.length()) {
+            return value.substring(STRICT_PREFIX.length(), lastSep);
         }
-        return value; // 格式异常时返回原始值
+        return value;
     }
-    
+
     /**
      * 获取严格模式的计算时间戳
      */
@@ -253,18 +252,17 @@ public class VariableValue {
         if (!isStrictEncoded()) {
             return 0;
         }
-        
-        String[] parts = value.split(STRICT_SEPARATOR, 3);
-        if (parts.length >= 3) {
+        int lastSep = value.lastIndexOf(STRICT_SEPARATOR);
+        if (lastSep > STRICT_PREFIX.length() && lastSep + 1 < value.length()) {
             try {
-                return Long.parseLong(parts[2]);
+                return Long.parseLong(value.substring(lastSep + STRICT_SEPARATOR.length()));
             } catch (NumberFormatException e) {
                 return 0;
             }
         }
         return 0;
     }
-    
+
     /**
      * 检查是否已完成严格模式计算
      */
