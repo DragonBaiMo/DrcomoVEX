@@ -97,11 +97,29 @@ public class DrcomoVEX extends JavaPlugin {
         // 2. 关闭高性能变量管理器（会自动持久化所有数据并关闭数据库）
         if (variablesManager != null) {
             try {
-                // 阻塞等待关闭流程完成，确保数据完全持久化
-                variablesManager.shutdown().join();
+                // 使用超时等待关闭流程完成，确保数据完全持久化但避免无限阻塞
+                variablesManager.shutdown().get(15, java.util.concurrent.TimeUnit.SECONDS);
                 logger.info("变量管理器已安全关闭");
+            } catch (java.util.concurrent.TimeoutException e) {
+                logger.error("变量管理器关闭超时，强制继续关闭流程", e);
+                // 超时时直接关闭数据库
+                if (database != null) {
+                    try {
+                        database.close();
+                    } catch (Exception dbEx) {
+                        logger.error("强制关闭数据库时发生异常", dbEx);
+                    }
+                }
             } catch (Exception e) {
                 logger.error("变量管理器关闭异常", e);
+                // 异常时也尝试关闭数据库
+                if (database != null) {
+                    try {
+                        database.close();
+                    } catch (Exception dbEx) {
+                        logger.error("异常情况下关闭数据库时发生异常", dbEx);
+                    }
+                }
             }
         } else {
             // 如果变量管理器为空，直接关闭数据库

@@ -117,24 +117,49 @@ public class BatchPersistenceManager {
     public void shutdown() {
         logger.info("正在关闭批量持久化管理器...");
         running = false;
+        
+        // 取消定时任务
         if (scheduledPersistenceTask != null) {
             scheduledPersistenceTask.cancel(false);
         }
+        
+        // 先关闭调度器
+        scheduler.shutdown();
         try {
-            flushAllDirtyData().get(30, TimeUnit.SECONDS);
+            if (!scheduler.awaitTermination(3, TimeUnit.SECONDS)) {
+                scheduler.shutdownNow();
+            }
+        } catch (InterruptedException e) {
+            scheduler.shutdownNow();
+            Thread.currentThread().interrupt();
+        }
+        
+        // 执行最终数据持久化（在执行器关闭前完成）
+        try {
+            logger.debug("执行关闭前最终数据持久化...");
+            CompletableFuture<Void> finalFlush = flushAllDirtyData();
+            finalFlush.get(8, TimeUnit.SECONDS);
+            logger.debug("关闭前数据持久化完成");
         } catch (Exception e) {
             logger.error("关闭时持久化数据失败", e);
         }
-        scheduler.shutdown();
+        
+        // 关闭持久化执行器
         persistenceExecutor.shutdown();
         try {
-            if (!persistenceExecutor.awaitTermination(10, TimeUnit.SECONDS)) {
+            if (!persistenceExecutor.awaitTermination(5, TimeUnit.SECONDS)) {
+                logger.warn("持久化执行器未在5秒内关闭，强制终止");
                 persistenceExecutor.shutdownNow();
+                // 再等待2秒确保强制终止完成
+                if (!persistenceExecutor.awaitTermination(2, TimeUnit.SECONDS)) {
+                    logger.warn("强制终止后仍有任务未完成");
+                }
             }
         } catch (InterruptedException e) {
             persistenceExecutor.shutdownNow();
             Thread.currentThread().interrupt();
         }
+        
         logger.info("批量持久化管理器已关闭");
     }
 
@@ -359,23 +384,32 @@ public class BatchPersistenceManager {
                 futures);
 
         totalPersistedVariables.addAndGet(futures.size());
+        
+        // 基于任务数量动态计算超时时间：基础30秒 + 每100个任务额外10秒，最多120秒
+        int timeoutSeconds = Math.min(30 + (allTasks.size() / 100) * 10, 120);
+        logger.debug("SQLite 批量持久化任务数: " + allTasks.size() + "，超时设置: " + timeoutSeconds + "秒");
+        
         // 异步等待完成并清除标记
         CompletableFuture<Void> allComplete = CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]))
-            .orTimeout(15, TimeUnit.SECONDS)  // 减少单次操作超时时间
+            .orTimeout(timeoutSeconds, TimeUnit.SECONDS)
             .thenRun(() -> {
                 clearDirtyFlags(allTasks);
                 logger.debug("SQLite 批量持久化完成，处理任务数: " + allTasks.size());
             })
             .exceptionally(throwable -> {
-                logger.error("SQLite 批量持久化执行失败", throwable);
+                if (throwable.getCause() instanceof java.util.concurrent.TimeoutException) {
+                    logger.warn("SQLite 批量持久化超时(" + timeoutSeconds + "秒)，任务数: " + allTasks.size() + "，可能存在数据库阻塞");
+                } else {
+                    logger.error("SQLite 批量持久化执行失败", throwable);
+                }
                 // 发生异常时，部分数据可能已保存，但为安全起见不清除脏标记
                 handleRetriesOnFailure(allTasks, new RuntimeException("批量持久化异常", throwable));
                 return null;
             });
         
-        // 同步等待 - 但时间更短，避免长时间阻塞
+        // 同步等待 - 给予额外缓冲时间
         try {
-            allComplete.get(20, TimeUnit.SECONDS);
+            allComplete.get(timeoutSeconds + 10, TimeUnit.SECONDS);
         } catch (Exception e) {
             logger.error("SQLite 批量持久化最终等待失败", e);
             throw new RuntimeException("SQLite 批量持久化最终等待失败", e);

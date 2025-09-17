@@ -1,0 +1,261 @@
+[16:29:24 INFO]:  BaiMo_ 加入游戏
+[16:29:24 INFO]: BaiMo_[/61.144.33.74:8582] logged in with entity id 4 at ([spawn]189.69999998807907, 119.0, 29.709204677011677)
+[16:29:26 INFO]: [DrcomoMotionCast] §f[§bDrcomoMotionCast§r]§f [DEBUG] 玩家 BaiMo_ 没有关联的模型ID，跳过规则处理
+[16:29:27 INFO]: [DrcomoMotionCast] §f[§bDrcomoMotionCast§r]§f [DEBUG] 玩家 BaiMo_ 没有关联的模型ID，跳过规则处理
+[16:29:28 INFO]: BaiMo_ issued server command: /vex reload
+[16:29:28 INFO]: [DrcomoVEX] §f[§aDrcomoVEX§f]§r 开始执行完全重载（onDisable + onEnable）...
+[16:29:28 INFO]: [DrcomoVEX] §f[§aDrcomoVEX§f]§r 正在关闭 DrcomoVEX 变量扩展系统...
+[16:29:28 INFO]: [DrcomoVEX] §f[§aDrcomoVEX§f]§r 数据自动保存任务已停止
+[16:29:28 INFO]: [DrcomoVEX] §f[§aDrcomoVEX§f]§r 关闭前执行最终数据保存...
+[16:29:28 INFO]: [DrcomoVEX] §f[§aDrcomoVEX§f]§r 正在保存所有变量数据...
+[16:29:28 INFO]: [DrcomoVEX] §f[§aDrcomoVEX§f]§r 所有变量数据保存完成！
+[16:29:28 INFO]: [DrcomoVEX] §f[§aDrcomoVEX§f]§r 关闭前数据保存完成，耗时: 1ms
+[16:29:28 INFO]: [DrcomoVEX] §f[§aDrcomoVEX§f]§r 周期变量检测任务已停止
+[16:29:28 INFO]: [DrcomoVEX] §f[§aDrcomoVEX§f]§r 正在关闭变量管理系统...
+[16:29:28 INFO]: [DrcomoVEX] §f[§aDrcomoVEX§f]§r 正在关闭批量持久化管理器...
+[16:29:28 INFO]: [DrcomoVEX] §f[§aDrcomoVEX§f]§r 批量持久化管理器已关闭
+[16:29:28 INFO]: [DrcomoVEX] §f[§aDrcomoVEX§f]§r 持久化管理器关闭完成
+[16:29:28 INFO]: [DrcomoVEX] §f[§aDrcomoVEX§f]§r 正在关闭数据库连接...
+[16:29:28 INFO]: [com.zaxxer.hikari.HikariDataSource] DrcomoVEX-SQLitePool - Shutdown initiated...
+[16:29:28 INFO]: [com.zaxxer.hikari.HikariDataSource] DrcomoVEX-SQLitePool - Shutdown completed.
+[16:29:28 INFO]: [DrcomoVEX] §f[§aDrcomoVEX§f]§r SQLite 数据库连接已关闭
+[16:29:28 INFO]: [DrcomoVEX] §f[§aDrcomoVEX§f]§r 数据库连接关闭完成
+[16:29:28 INFO]: [DrcomoVEX] §f[§aDrcomoVEX§f]§r 变量管理系统关闭完成
+[16:29:28 INFO]: [DrcomoVEX] §f[§aDrcomoVEX§f]§r 清空L1内存缓存完成: 0个玩家, 0个玩家变量, 0个服务器变量, 0个脏数据 标记
+[16:29:28 INFO]: [DrcomoVEX] §f[§aDrcomoVEX§f]§r 清空所有多级缓存完成（含L1/L2/L3缓存和占位符优化）
+[16:29:28 INFO]: [DrcomoVEX] §f[§aDrcomoVEX§f]§r 变量管理器已安全关闭
+[16:29:28 INFO]: [DrcomoVEX] §f[§aDrcomoVEX§f]§r YamlUtil 资源已关闭
+[16:29:28 INFO]: [DrcomoVEX] §f[§aDrcomoVEX§f]§r DrcomoVEX 已安全关闭，感谢使用！
+[16:29:28 INFO]: [PlaceholderAPI] Successfully registered internal expansion: drcomovex [1.0.0]
+[16:29:28 INFO]: [DrcomoVEX] §f[§aDrcomoVEX§f]§r 加载语言文件: messages | 共 77 条
+[16:29:28 INFO]: [DrcomoVEX] §f[§aDrcomoVEX§f]§r 正在初始化配置管理系统...
+[16:29:28 INFO]: [DrcomoVEX] §f[§aDrcomoVEX§f]§r 正在初始化主配置...
+[16:29:28 INFO]: [DrcomoVEX] §f[§aDrcomoVEX§f]§r 主配置结构校验通过
+[16:29:28 INFO]: [DrcomoVEX] §f[§aDrcomoVEX§f]§r 主配置初始化完成！
+[16:29:28 INFO]: [DrcomoVEX] §f[§aDrcomoVEX§f]§r 正在初始化变量配置管理器...
+[16:29:28 INFO]: [DrcomoVEX] §f[§aDrcomoVEX§f]§r 变量配置管理器初始化完成，已加载 2 个配置文件
+[16:29:28 INFO]: [DrcomoVEX] §f[§aDrcomoVEX§f]§r 配置管理系统初始化完成！
+[16:29:28 INFO]: [DrcomoVEX] §f[§aDrcomoVEX§f]§r 日志级别已设置为: INFO
+[16:29:28 INFO]: [DrcomoVEX] §f[§aDrcomoVEX§f]§r 已应用日志级别: INFO
+[16:29:28 INFO]: [DrcomoVEX] §f[§aDrcomoVEX§f]§r 正在初始化数据库连接...
+[16:29:28 INFO]: [com.zaxxer.hikari.HikariDataSource] DrcomoVEX-SQLitePool - Starting...
+[16:29:28 INFO]: [com.zaxxer.hikari.pool.HikariPool] DrcomoVEX-SQLitePool - Added connection org.sqlite.jdbc4.JDBC4Connection@1d84f539
+[16:29:28 INFO]: [com.zaxxer.hikari.HikariDataSource] DrcomoVEX-SQLitePool - Start completed.
+[16:29:31 INFO]: [Not Secure]  e  BaiMo_  &#F0F8FF>>
+[16:29:33 WARN]: [DrcomoVEX] §f[§aDrcomoVEX§f]§r 关闭阶段触发SQLite刷盘失败或超时(忽略继续): 未知错误
+[16:29:38 ERROR]: --- DO NOT REPORT THIS TO PAPER - THIS IS NOT A BUG OR A CRASH  - 1.21.4-211-6ea4202 (MC: 1.21.4) ---
+[16:29:38 ERROR]: The server has not responded for 10 seconds! Creating thread dump
+[16:29:38 ERROR]: ------------------------------
+[16:29:38 ERROR]: Server thread dump (Look for plugins here before reporting to Paper!):
+[16:29:38 ERROR]: ------------------------------
+[16:29:38 ERROR]: Current Thread: Server thread
+[16:29:38 ERROR]:       PID: 41 | Suspended: false | Native: false | State: WAITING
+[16:29:38 ERROR]:       Stack:
+[16:29:38 ERROR]:               java.base@21.0.4/jdk.internal.misc.Unsafe.park(Native Method)
+[16:29:38 ERROR]:               java.base@21.0.4/java.util.concurrent.locks.LockSupport.park(LockSupport.java:221)
+[16:29:38 ERROR]:               java.base@21.0.4/java.util.concurrent.CompletableFuture$Signaller.block(CompletableFuture.java:1864)
+[16:29:38 ERROR]:               java.base@21.0.4/java.util.concurrent.ForkJoinPool.unmanagedBlock(ForkJoinPool.java:3780)
+[16:29:38 ERROR]:               java.base@21.0.4/java.util.concurrent.ForkJoinPool.managedBlock(ForkJoinPool.java:3725)
+[16:29:38 ERROR]:               java.base@21.0.4/java.util.concurrent.CompletableFuture.waitingGet(CompletableFuture.java:1898)
+[16:29:38 ERROR]:               java.base@21.0.4/java.util.concurrent.CompletableFuture.join(CompletableFuture.java:2117)
+[16:29:38 ERROR]:               DrcomoVEX-1.0.0.jar//cn.drcomo.database.HikariConnection.initializeSQLite(HikariConnection.java:124)
+[16:29:38 ERROR]:               DrcomoVEX-1.0.0.jar//cn.drcomo.database.HikariConnection.initialize(HikariConnection.java:82)
+[16:29:38 ERROR]:               DrcomoVEX-1.0.0.jar//cn.drcomo.DrcomoVEX.initializeDatabase(DrcomoVEX.java:175)
+[16:29:38 ERROR]:               DrcomoVEX-1.0.0.jar//cn.drcomo.DrcomoVEX.onEnable(DrcomoVEX.java:63)
+[16:29:38 ERROR]:               DrcomoVEX-1.0.0.jar//cn.drcomo.MainCommand.lambda$handleReload$13(MainCommand.java:453)
+[16:29:38 ERROR]:               DrcomoVEX-1.0.0.jar//cn.drcomo.MainCommand$$Lambda/0x0000019d034288d0.run(Unknown Source)
+[16:29:38 ERROR]:               org.bukkit.craftbukkit.scheduler.CraftTask.run(CraftTask.java:78)
+[16:29:38 ERROR]:               org.bukkit.craftbukkit.scheduler.CraftScheduler.mainThreadHeartbeat(CraftScheduler.java:474)
+[16:29:38 ERROR]:               net.minecraft.server.MinecraftServer.tickChildren(MinecraftServer.java:1659)
+[16:29:38 ERROR]:               net.minecraft.server.MinecraftServer.tickServer(MinecraftServer.java:1529)
+[16:29:38 ERROR]:               net.minecraft.server.MinecraftServer.runServer(MinecraftServer.java:1251)
+[16:29:38 ERROR]:               net.minecraft.server.MinecraftServer.lambda$spin$2(MinecraftServer.java:310)
+[16:29:38 ERROR]:               net.minecraft.server.MinecraftServer$$Lambda/0x0000019d01e29160.run(Unknown Source)
+[16:29:38 ERROR]:               java.base@21.0.4/java.lang.Thread.runWith(Thread.java:1596)
+[16:29:38 ERROR]:               java.base@21.0.4/java.lang.Thread.run(Thread.java:1583)
+[16:29:38 ERROR]: ------------------------------
+[16:29:38 ERROR]: --- DO NOT REPORT THIS TO PAPER - THIS IS NOT A BUG OR A CRASH ---
+[16:29:38 ERROR]: ------------------------------
+[16:29:43 ERROR]: --- DO NOT REPORT THIS TO PAPER - THIS IS NOT A BUG OR A CRASH  - 1.21.4-211-6ea4202 (MC: 1.21.4) ---
+[16:29:43 ERROR]: The server has not responded for 15 seconds! Creating thread dump
+[16:29:43 ERROR]: ------------------------------
+[16:29:43 ERROR]: Server thread dump (Look for plugins here before reporting to Paper!):
+[16:29:43 ERROR]: ------------------------------
+[16:29:43 ERROR]: Current Thread: Server thread
+[16:29:43 ERROR]:       PID: 41 | Suspended: false | Native: false | State: WAITING
+[16:29:43 ERROR]:       Stack:
+[16:29:43 ERROR]:               java.base@21.0.4/jdk.internal.misc.Unsafe.park(Native Method)
+[16:29:43 ERROR]:               java.base@21.0.4/java.util.concurrent.locks.LockSupport.park(LockSupport.java:221)
+[16:29:43 ERROR]:               java.base@21.0.4/java.util.concurrent.CompletableFuture$Signaller.block(CompletableFuture.java:1864)
+[16:29:43 ERROR]:               java.base@21.0.4/java.util.concurrent.ForkJoinPool.unmanagedBlock(ForkJoinPool.java:3780)
+[16:29:43 ERROR]:               java.base@21.0.4/java.util.concurrent.ForkJoinPool.managedBlock(ForkJoinPool.java:3725)
+[16:29:43 ERROR]:               java.base@21.0.4/java.util.concurrent.CompletableFuture.waitingGet(CompletableFuture.java:1898)
+[16:29:43 ERROR]:               java.base@21.0.4/java.util.concurrent.CompletableFuture.join(CompletableFuture.java:2117)
+[16:29:43 ERROR]:               DrcomoVEX-1.0.0.jar//cn.drcomo.database.HikariConnection.initializeSQLite(HikariConnection.java:124)
+[16:29:43 ERROR]:               DrcomoVEX-1.0.0.jar//cn.drcomo.database.HikariConnection.initialize(HikariConnection.java:82)
+[16:29:43 ERROR]:               DrcomoVEX-1.0.0.jar//cn.drcomo.DrcomoVEX.initializeDatabase(DrcomoVEX.java:175)
+[16:29:43 ERROR]:               DrcomoVEX-1.0.0.jar//cn.drcomo.DrcomoVEX.onEnable(DrcomoVEX.java:63)
+[16:29:43 ERROR]:               DrcomoVEX-1.0.0.jar//cn.drcomo.MainCommand.lambda$handleReload$13(MainCommand.java:453)
+[16:29:43 ERROR]:               DrcomoVEX-1.0.0.jar//cn.drcomo.MainCommand$$Lambda/0x0000019d034288d0.run(Unknown Source)
+[16:29:43 ERROR]:               org.bukkit.craftbukkit.scheduler.CraftTask.run(CraftTask.java:78)
+[16:29:43 ERROR]:               org.bukkit.craftbukkit.scheduler.CraftScheduler.mainThreadHeartbeat(CraftScheduler.java:474)
+[16:29:43 ERROR]:               net.minecraft.server.MinecraftServer.tickChildren(MinecraftServer.java:1659)
+[16:29:43 ERROR]:               net.minecraft.server.MinecraftServer.tickServer(MinecraftServer.java:1529)
+[16:29:43 ERROR]:               net.minecraft.server.MinecraftServer.runServer(MinecraftServer.java:1251)
+[16:29:43 ERROR]:               net.minecraft.server.MinecraftServer.lambda$spin$2(MinecraftServer.java:310)
+[16:29:43 ERROR]:               net.minecraft.server.MinecraftServer$$Lambda/0x0000019d01e29160.run(Unknown Source)
+[16:29:43 ERROR]:               java.base@21.0.4/java.lang.Thread.runWith(Thread.java:1596)
+[16:29:43 ERROR]:               java.base@21.0.4/java.lang.Thread.run(Thread.java:1583)
+[16:29:43 ERROR]: ------------------------------
+[16:29:43 ERROR]: --- DO NOT REPORT THIS TO PAPER - THIS IS NOT A BUG OR A CRASH ---
+[16:29:43 ERROR]: ------------------------------
+[16:29:48 ERROR]: --- DO NOT REPORT THIS TO PAPER - THIS IS NOT A BUG OR A CRASH  - 1.21.4-211-6ea4202 (MC: 1.21.4) ---
+[16:29:48 ERROR]: The server has not responded for 20 seconds! Creating thread dump
+[16:29:48 ERROR]: ------------------------------
+[16:29:48 ERROR]: Server thread dump (Look for plugins here before reporting to Paper!):
+[16:29:48 ERROR]: ------------------------------
+[16:29:48 ERROR]: Current Thread: Server thread
+[16:29:48 ERROR]:       PID: 41 | Suspended: false | Native: false | State: WAITING
+[16:29:48 ERROR]:       Stack:
+[16:29:48 ERROR]:               java.base@21.0.4/jdk.internal.misc.Unsafe.park(Native Method)
+[16:29:48 ERROR]:               java.base@21.0.4/java.util.concurrent.locks.LockSupport.park(LockSupport.java:221)
+[16:29:48 ERROR]:               java.base@21.0.4/java.util.concurrent.CompletableFuture$Signaller.block(CompletableFuture.java:1864)
+[16:29:48 ERROR]:               java.base@21.0.4/java.util.concurrent.ForkJoinPool.unmanagedBlock(ForkJoinPool.java:3780)
+[16:29:48 ERROR]:               java.base@21.0.4/java.util.concurrent.ForkJoinPool.managedBlock(ForkJoinPool.java:3725)
+[16:29:48 ERROR]:               java.base@21.0.4/java.util.concurrent.CompletableFuture.waitingGet(CompletableFuture.java:1898)
+[16:29:48 ERROR]:               java.base@21.0.4/java.util.concurrent.CompletableFuture.join(CompletableFuture.java:2117)
+[16:29:48 ERROR]:               DrcomoVEX-1.0.0.jar//cn.drcomo.database.HikariConnection.initializeSQLite(HikariConnection.java:124)
+[16:29:48 ERROR]:               DrcomoVEX-1.0.0.jar//cn.drcomo.database.HikariConnection.initialize(HikariConnection.java:82)
+[16:29:48 ERROR]:               DrcomoVEX-1.0.0.jar//cn.drcomo.DrcomoVEX.initializeDatabase(DrcomoVEX.java:175)
+[16:29:48 ERROR]:               DrcomoVEX-1.0.0.jar//cn.drcomo.DrcomoVEX.onEnable(DrcomoVEX.java:63)
+[16:29:48 ERROR]:               DrcomoVEX-1.0.0.jar//cn.drcomo.MainCommand.lambda$handleReload$13(MainCommand.java:453)
+[16:29:48 ERROR]:               DrcomoVEX-1.0.0.jar//cn.drcomo.MainCommand$$Lambda/0x0000019d034288d0.run(Unknown Source)
+[16:29:48 ERROR]:               org.bukkit.craftbukkit.scheduler.CraftTask.run(CraftTask.java:78)
+[16:29:48 ERROR]:               org.bukkit.craftbukkit.scheduler.CraftScheduler.mainThreadHeartbeat(CraftScheduler.java:474)
+[16:29:48 ERROR]:               net.minecraft.server.MinecraftServer.tickChildren(MinecraftServer.java:1659)
+[16:29:48 ERROR]:               net.minecraft.server.MinecraftServer.tickServer(MinecraftServer.java:1529)
+[16:29:48 ERROR]:               net.minecraft.server.MinecraftServer.runServer(MinecraftServer.java:1251)
+[16:29:48 ERROR]:               net.minecraft.server.MinecraftServer.lambda$spin$2(MinecraftServer.java:310)
+[16:29:48 ERROR]:               net.minecraft.server.MinecraftServer$$Lambda/0x0000019d01e29160.run(Unknown Source)
+[16:29:48 ERROR]:               java.base@21.0.4/java.lang.Thread.runWith(Thread.java:1596)
+[16:29:48 ERROR]:               java.base@21.0.4/java.lang.Thread.run(Thread.java:1583)
+[16:29:48 ERROR]: ------------------------------
+[16:29:48 ERROR]: --- DO NOT REPORT THIS TO PAPER - THIS IS NOT A BUG OR A CRASH ---
+[16:29:48 ERROR]: ------------------------------
+[16:29:53 ERROR]: --- DO NOT REPORT THIS TO PAPER - THIS IS NOT A BUG OR A CRASH  - 1.21.4-211-6ea4202 (MC: 1.21.4) ---
+[16:29:53 ERROR]: The server has not responded for 25 seconds! Creating thread dump
+[16:29:53 ERROR]: ------------------------------
+[16:29:53 ERROR]: Server thread dump (Look for plugins here before reporting to Paper!):
+[16:29:53 ERROR]: ------------------------------
+[16:29:53 ERROR]: Current Thread: Server thread
+[16:29:53 ERROR]:       PID: 41 | Suspended: false | Native: false | State: WAITING
+[16:29:53 ERROR]:       Stack:
+[16:29:53 ERROR]:               java.base@21.0.4/jdk.internal.misc.Unsafe.park(Native Method)
+[16:29:53 ERROR]:               java.base@21.0.4/java.util.concurrent.locks.LockSupport.park(LockSupport.java:221)
+[16:29:53 ERROR]:               java.base@21.0.4/java.util.concurrent.CompletableFuture$Signaller.block(CompletableFuture.java:1864)
+[16:29:53 ERROR]:               java.base@21.0.4/java.util.concurrent.ForkJoinPool.unmanagedBlock(ForkJoinPool.java:3780)
+[16:29:53 ERROR]:               java.base@21.0.4/java.util.concurrent.ForkJoinPool.managedBlock(ForkJoinPool.java:3725)
+[16:29:53 ERROR]:               java.base@21.0.4/java.util.concurrent.CompletableFuture.waitingGet(CompletableFuture.java:1898)
+[16:29:53 ERROR]:               java.base@21.0.4/java.util.concurrent.CompletableFuture.join(CompletableFuture.java:2117)
+[16:29:53 ERROR]:               DrcomoVEX-1.0.0.jar//cn.drcomo.database.HikariConnection.initializeSQLite(HikariConnection.java:124)
+[16:29:53 ERROR]:               DrcomoVEX-1.0.0.jar//cn.drcomo.database.HikariConnection.initialize(HikariConnection.java:82)
+[16:29:53 ERROR]:               DrcomoVEX-1.0.0.jar//cn.drcomo.DrcomoVEX.initializeDatabase(DrcomoVEX.java:175)
+[16:29:53 ERROR]:               DrcomoVEX-1.0.0.jar//cn.drcomo.DrcomoVEX.onEnable(DrcomoVEX.java:63)
+[16:29:53 ERROR]:               DrcomoVEX-1.0.0.jar//cn.drcomo.MainCommand.lambda$handleReload$13(MainCommand.java:453)
+[16:29:53 ERROR]:               DrcomoVEX-1.0.0.jar//cn.drcomo.MainCommand$$Lambda/0x0000019d034288d0.run(Unknown Source)
+[16:29:53 ERROR]:               org.bukkit.craftbukkit.scheduler.CraftTask.run(CraftTask.java:78)
+[16:29:53 ERROR]:               org.bukkit.craftbukkit.scheduler.CraftScheduler.mainThreadHeartbeat(CraftScheduler.java:474)
+[16:29:53 ERROR]:               net.minecraft.server.MinecraftServer.tickChildren(MinecraftServer.java:1659)
+[16:29:53 ERROR]:               net.minecraft.server.MinecraftServer.tickServer(MinecraftServer.java:1529)
+[16:29:53 ERROR]:               net.minecraft.server.MinecraftServer.runServer(MinecraftServer.java:1251)
+[16:29:53 ERROR]:               net.minecraft.server.MinecraftServer.lambda$spin$2(MinecraftServer.java:310)
+[16:29:53 ERROR]:               net.minecraft.server.MinecraftServer$$Lambda/0x0000019d01e29160.run(Unknown Source)
+[16:29:53 ERROR]:               java.base@21.0.4/java.lang.Thread.runWith(Thread.java:1596)
+[16:29:53 ERROR]:               java.base@21.0.4/java.lang.Thread.run(Thread.java:1583)
+[16:29:53 ERROR]: ------------------------------
+[16:29:53 ERROR]: --- DO NOT REPORT THIS TO PAPER - THIS IS NOT A BUG OR A CRASH ---
+[16:29:53 ERROR]: ------------------------------
+[16:29:54 ERROR]: [DrcomoVEX] §f[§aDrcomoVEX§f]§r 加载玩家变量失败: 9307f115-0cea-3ea4-a02e-67aa7069c1e8 - temp_status
+java.util.concurrent.CompletionException: java.sql.SQLTransientConnectionException: DrcomoVEX-SQLitePool - Connection is not available, request timed out after 30000ms (total=0, active=0, idle=0, waiting=1)
+        at DrcomoCoreLib-1.0.jar/cn.drcomo.corelib.database.SQLiteDB.lambda$runAsync$10(SQLiteDB.java:451) ~[DrcomoCoreLib-1.0.jar:?]
+        at java.base/java.util.concurrent.CompletableFuture$AsyncSupply.run(CompletableFuture.java:1768) ~[?:?]
+        at java.base/java.util.concurrent.CompletableFuture$AsyncSupply.exec(CompletableFuture.java:1760) ~[?:?]
+        at java.base/java.util.concurrent.ForkJoinTask.doExec(ForkJoinTask.java:387) ~[?:?]
+        at java.base/java.util.concurrent.ForkJoinPool$WorkQueue.topLevelExec(ForkJoinPool.java:1312) ~[?:?]
+        at java.base/java.util.concurrent.ForkJoinPool.scan(ForkJoinPool.java:1843) ~[?:?]
+        at java.base/java.util.concurrent.ForkJoinPool.runWorker(ForkJoinPool.java:1808) ~[?:?]
+        at java.base/java.util.concurrent.ForkJoinWorkerThread.run(ForkJoinWorkerThread.java:188) ~[?:?]
+Caused by: java.sql.SQLTransientConnectionException: DrcomoVEX-SQLitePool - Connection is not available, request timed out after 30000ms (total=0, active=0, idle=0, waiting=1)
+        at com.zaxxer.hikari.pool.HikariPool.createTimeoutException(HikariPool.java:710) ~[?:?]
+        at com.zaxxer.hikari.pool.HikariPool.getConnection(HikariPool.java:189) ~[?:?]
+        at com.zaxxer.hikari.pool.HikariPool.getConnection(HikariPool.java:147) ~[?:?]
+        at com.zaxxer.hikari.HikariDataSource.getConnection(HikariDataSource.java:99) ~[?:?]
+        at DrcomoCoreLib-1.0.jar/cn.drcomo.corelib.database.SQLiteDB.getPreparedStatement(SQLiteDB.java:517) ~[DrcomoCoreLib-1.0.jar:?]
+        at DrcomoCoreLib-1.0.jar/cn.drcomo.corelib.database.SQLiteDB.queryOne(SQLiteDB.java:231) ~[DrcomoCoreLib-1.0.jar:?]
+        at DrcomoCoreLib-1.0.jar/cn.drcomo.corelib.database.SQLiteDB.lambda$queryOneAsync$4(SQLiteDB.java:318) ~[DrcomoCoreLib-1.0.jar:?]
+        at DrcomoCoreLib-1.0.jar/cn.drcomo.corelib.database.SQLiteDB.lambda$runAsync$10(SQLiteDB.java:449) ~[DrcomoCoreLib-1.0.jar:?]
+        ... 7 more
+[16:29:54 ERROR]: [DrcomoVEX] §f[§aDrcomoVEX§f]§r 加载玩家变量失败: 9307f115-0cea-3ea4-a02e-67aa7069c1e8 - strict_vip_status
+java.util.concurrent.CompletionException: java.sql.SQLTransientConnectionException: DrcomoVEX-SQLitePool - Connection is not available, request timed out after 30001ms (total=0, active=0, idle=0, waiting=1)
+        at DrcomoCoreLib-1.0.jar/cn.drcomo.corelib.database.SQLiteDB.lambda$runAsync$10(SQLiteDB.java:451) ~[DrcomoCoreLib-1.0.jar:?]
+        at java.base/java.util.concurrent.CompletableFuture$AsyncSupply.run(CompletableFuture.java:1768) ~[?:?]
+        at java.base/java.util.concurrent.CompletableFuture$AsyncSupply.exec(CompletableFuture.java:1760) ~[?:?]
+        at java.base/java.util.concurrent.ForkJoinTask.doExec(ForkJoinTask.java:387) ~[?:?]
+        at java.base/java.util.concurrent.ForkJoinPool$WorkQueue.topLevelExec(ForkJoinPool.java:1312) ~[?:?]
+        at java.base/java.util.concurrent.ForkJoinPool.scan(ForkJoinPool.java:1843) ~[?:?]
+        at java.base/java.util.concurrent.ForkJoinPool.runWorker(ForkJoinPool.java:1808) ~[?:?]
+        at java.base/java.util.concurrent.ForkJoinWorkerThread.run(ForkJoinWorkerThread.java:188) ~[?:?]
+Caused by: java.sql.SQLTransientConnectionException: DrcomoVEX-SQLitePool - Connection is not available, request timed out after 30001ms (total=0, active=0, idle=0, waiting=1)
+        at com.zaxxer.hikari.pool.HikariPool.createTimeoutException(HikariPool.java:710) ~[?:?]
+        at com.zaxxer.hikari.pool.HikariPool.getConnection(HikariPool.java:189) ~[?:?]
+        at com.zaxxer.hikari.pool.HikariPool.getConnection(HikariPool.java:147) ~[?:?]
+        at com.zaxxer.hikari.HikariDataSource.getConnection(HikariDataSource.java:99) ~[?:?]
+        at DrcomoCoreLib-1.0.jar/cn.drcomo.corelib.database.SQLiteDB.getPreparedStatement(SQLiteDB.java:517) ~[DrcomoCoreLib-1.0.jar:?]
+        at DrcomoCoreLib-1.0.jar/cn.drcomo.corelib.database.SQLiteDB.queryOne(SQLiteDB.java:231) ~[DrcomoCoreLib-1.0.jar:?]
+        at DrcomoCoreLib-1.0.jar/cn.drcomo.corelib.database.SQLiteDB.lambda$queryOneAsync$4(SQLiteDB.java:318) ~[DrcomoCoreLib-1.0.jar:?]
+        at DrcomoCoreLib-1.0.jar/cn.drcomo.corelib.database.SQLiteDB.lambda$runAsync$10(SQLiteDB.java:449) ~[DrcomoCoreLib-1.0.jar:?]
+        ... 7 more
+[16:29:54 WARN]: [DrcomoVEX] §f[§aDrcomoVEX§f]§r SQLite PRAGMA 设置失败，继续启动: java.sql.SQLException: Query does not return results
+[16:29:54 INFO]: [DrcomoVEX] §f[§aDrcomoVEX§f]§r SQLite 数据库连接成功: drcomovex.db
+[16:29:54 INFO]: [DrcomoVEX] §f[§aDrcomoVEX§f]§r 数据库连接初始化完成！类型: SQLITE
+[16:29:54 INFO]: [DrcomoVEX] §f[§aDrcomoVEX§f]§r 内存存储系统初始化完成，最大内存限制: 256MB
+[16:29:54 ERROR]: [DrcomoVEX] §f[§aDrcomoVEX§f]§r 玩家变量数据预加载失败: BaiMo_
+java.util.concurrent.CompletionException: java.util.concurrent.RejectedExecutionException: Task java.util.concurrent.CompletableFuture$UniRun@5d30c49a rejected from java.util.concurrent.ThreadPoolExecutor@77489c02[Shutting down, pool size = 1, active threads = 1, queued tasks = 0, completed tasks = 5]
+        at java.base/java.util.concurrent.CompletableFuture.encodeThrowable(CompletableFuture.java:315) ~[?:?]
+        at java.base/java.util.concurrent.CompletableFuture.completeThrowable(CompletableFuture.java:320) ~[?:?]
+        at java.base/java.util.concurrent.CompletableFuture$UniRun.tryFire(CompletableFuture.java:791) ~[?:?]
+        at java.base/java.util.concurrent.CompletableFuture.postComplete(CompletableFuture.java:510) ~[?:?]
+        at java.base/java.util.concurrent.CompletableFuture$AsyncRun.run(CompletableFuture.java:1810) ~[?:?]
+        at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1144) ~[?:?]
+        at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:642) ~[?:?]
+        at java.base/java.lang.Thread.run(Thread.java:1583) ~[?:?]
+Caused by: java.util.concurrent.RejectedExecutionException: Task java.util.concurrent.CompletableFuture$UniRun@5d30c49a rejected from java.util.concurrent.ThreadPoolExecutor@77489c02[Shutting down, pool size = 1, active threads = 1, queued tasks = 0, completed tasks = 5]
+        at java.base/java.util.concurrent.ThreadPoolExecutor$AbortPolicy.rejectedExecution(ThreadPoolExecutor.java:2081) ~[?:?]
+        at java.base/java.util.concurrent.ThreadPoolExecutor.reject(ThreadPoolExecutor.java:841) ~[?:?]
+        at java.base/java.util.concurrent.ThreadPoolExecutor.execute(ThreadPoolExecutor.java:1376) ~[?:?]
+        at java.base/java.util.concurrent.CompletableFuture$UniCompletion.claim(CompletableFuture.java:572) ~[?:?]
+        at java.base/java.util.concurrent.CompletableFuture$UniRun.tryFire(CompletableFuture.java:784) ~[?:?]
+        ... 5 more
+[16:29:54 INFO]: [DrcomoVEX] §f[§aDrcomoVEX§f]§r 多级缓存管理器初始化完成，L2容量: 10000, L3容量: 5000
+[16:29:54 INFO]: [DrcomoVEX] §f[§aDrcomoVEX§f]§r 正在初始化消息管理器...
+[16:29:54 INFO]: [DrcomoVEX] §f[§aDrcomoVEX§f]§r 消息管理器初始化完成！
+[16:29:54 INFO]: [DrcomoVEX] §f[§aDrcomoVEX§f]§r 正在初始化重构后的变量管理系统...
+[16:29:54 INFO]: [DrcomoVEX] §f[§aDrcomoVEX§f]§r 正在初始化服务器变量管理器...
+[16:29:54 INFO]: [DrcomoVEX] §f[§aDrcomoVEX§f]§r 服务器变量管理器初始化完成！
+[16:29:54 INFO]: [DrcomoVEX] §f[§aDrcomoVEX§f]§r 正在初始化玩家变量管理器...
+[16:29:54 INFO]: [DrcomoVEX] §f[§aDrcomoVEX§f]§r 玩家变量管理器初始化完成！
+[16:29:54 INFO]: [DrcomoVEX] §f[§aDrcomoVEX§f]§r 已启动数据自动保存任务，间隔: 3 分钟
+[16:29:54 INFO]: [DrcomoVEX] §f[§aDrcomoVEX§f]§r 变量目录递归扫描完成，共加载 2 个配置文件
+[16:29:54 INFO]: [DrcomoVEX] §f[§aDrcomoVEX§f]§r 启动批量持久化管理器...
+[16:29:54 INFO]: [DrcomoVEX] §f[§aDrcomoVEX§f]§r 已启动周期变量检测任务，间隔: 1 秒
+[16:29:54 INFO]: [DrcomoVEX] §f[§aDrcomoVEX§f]§r 正在注册 DrcomoVEX PlaceholderAPI 占位符...
+[16:29:54 INFO]: [DrcomoVEX] §f[§aDrcomoVEX§f]§r DrcomoVEX PlaceholderAPI 占位符注册完成
+[16:29:54 INFO]: [DrcomoVEX] §f[§aDrcomoVEX§f]§r DrcomoVEX 变量扩展系统已成功启动！
+[16:29:54 INFO]: [DrcomoVEX] §f[§aDrcomoVEX§f]§r 批量持久化管理器启动完成，间隔: 30秒
+[16:29:54 INFO]: [DrcomoVEX] §f[§aDrcomoVEX§f]§r 变量管理系统初始化完成！已加载 34 个变量定义
+[16:29:54 INFO]: [DrcomoVEX] §f[§aDrcomoVEX§f]§r 高性能变量管理器初始化完成！
+[16:29:54 INFO]: [DrcomoVEX] §f[§aDrcomoVEX§f]§r 开始加载数据库持久化数据到内存...
+[16:29:54 INFO]: [DrcomoVEX] §f[§aDrcomoVEX§f]§r 版本: 1.0.0 (代号: 直觉)
+[16:29:54 INFO]: [DrcomoVEX] §f[§aDrcomoVEX§f]§r 感谢使用 DrcomoVEX - 让变量管理变得直观而强大！
+[16:29:54 INFO]: [DrcomoVEX] §f[§aDrcomoVEX§f]§r 完全重载成功，执行者: BaiMo_
+[16:29:54 INFO]: [DrcomoVEX] §f[§aDrcomoVEX§f]§r 加载完成: MemoryStats{players=0, playerVars=0, serverVars=0, dirty=0, memory=0.0MB(0.0%), hitRate=0.0%}

@@ -1313,6 +1313,10 @@ public class RefactoredVariablesManager {
             currentValidatingVariable.set(v.getKey());
             List<String> errs = v.validate();
             for (String err : errs) {
+                // 对“不持久化”的变量，放行“初始值为空”类提示（不做错误输出）
+                if (shouldSuppressInitialEmptyError(v, err)) {
+                    continue;
+                }
                 if (err.startsWith("警告:")) {
                     logger.warn("变量 " + v.getKey() + ": " + err);
                 } else {
@@ -1321,6 +1325,22 @@ public class RefactoredVariablesManager {
             }
         }
         currentValidatingVariable.remove();
+    }
+
+    /**
+     * 当变量为不持久化（persistable=false）时，忽略“初始值为空”类校验报错。
+     */
+    private boolean shouldSuppressInitialEmptyError(Variable v, String err) {
+        try {
+            if (v == null || err == null) return false;
+            Limitations lim = v.getLimitations();
+            if (lim != null && Boolean.FALSE.equals(lim.getPersistable())) {
+                String s = err;
+                // 兼容不同文案/编码情况：只要包含“初始值”和“空”字样就认为是该类提示
+                return s.contains("初始值") && s.contains("空");
+            }
+        } catch (Exception ignored) { }
+        return false;
     }
 
     // ======================== 数据加载 ========================

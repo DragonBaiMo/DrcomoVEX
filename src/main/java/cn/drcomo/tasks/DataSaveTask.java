@@ -74,13 +74,24 @@ public class DataSaveTask {
         logger.info("关闭前执行最终数据保存...");
         try {
             long startTime = System.currentTimeMillis();
-            
-            // 关闭时强制刷新数据库，确保数据真实写入磁盘
-            variablesManager.saveAllData(true).get(30, TimeUnit.SECONDS);
-            
+
+            // 仅等待持久化写入完成，最多阻塞 10 秒，避免主线程长时间卡死
+            variablesManager.saveAllData(false).get(10, TimeUnit.SECONDS);
+
             long duration = System.currentTimeMillis() - startTime;
             logger.info("关闭前数据保存完成，耗时: " + duration + "ms");
-            
+
+            // 异步触发 SQLite 刷盘，关闭时使用简化操作，避免阻塞主线程
+            try {
+                plugin.getDatabase().flushDatabase(true)  // 关闭时使用简化版本
+                        .exceptionally(t -> {
+                            logger.warn("关闭阶段触发SQLite刷盘失败或超时(忽略继续): " + (t.getMessage() != null ? t.getMessage() : String.valueOf(t)));
+                            return null;
+                        });
+            } catch (Exception ignore) {
+                // 忽略刷盘触发中的异常，保证关闭流程继续
+            }
+
         } catch (TimeoutException e) {
             logger.error("关闭前数据保存超时！可能存在数据丢失风险", e);
         } catch (Exception e) {
