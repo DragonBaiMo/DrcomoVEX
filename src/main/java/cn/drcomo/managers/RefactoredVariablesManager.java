@@ -40,6 +40,7 @@ import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
@@ -84,6 +85,9 @@ public class RefactoredVariablesManager {
 
     // 变量定义注册表
     private final ConcurrentHashMap<String, Variable> variableRegistry = new ConcurrentHashMap<>();
+
+    // 初始化完成状态
+    private final AtomicBoolean initialized = new AtomicBoolean(false);
 
     // 验证过程中传递当前变量键的线程本地变量
     private final ThreadLocal<String> currentValidatingVariable = new ThreadLocal<>();
@@ -143,6 +147,7 @@ public class RefactoredVariablesManager {
      */
     public CompletableFuture<Void> initialize() {
         logger.info("正在初始化重构后的变量管理系统...");
+        initialized.set(false);
         return CompletableFuture.runAsync(() -> {
             try {
                 loadAllVariableDefinitions();
@@ -174,6 +179,7 @@ public class RefactoredVariablesManager {
      */
     public CompletableFuture<Void> shutdown() {
         logger.info("正在关闭变量管理系统...");
+        initialized.set(false);
         return CompletableFuture.runAsync(() -> {
             try {
                 persistenceManager.shutdown();
@@ -1356,7 +1362,16 @@ public class RefactoredVariablesManager {
             logger.info("加载完成: " + stats);
         } catch (Exception e) {
             logger.error("加载数据库数据失败", e);
+        } finally {
+            initialized.set(true);
         }
+    }
+
+    /**
+     * 判断变量管理器是否已初始化完成
+     */
+    public boolean isInitialized() {
+        return initialized.get();
     }
 
     /** 加载所有全局变量（抽取查询三元组的复用逻辑） */
