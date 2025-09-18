@@ -29,7 +29,7 @@ import java.util.concurrent.TimeoutException;
  * 周期变量检测任务
  *
  * 定期检查带有 cycle 配置的变量，按需重置其值。
- * 支持标准周期（minute, daily, weekly, monthly, yearly）和自定义Cron表达式。
+ * 支持标准周期（minute, hour, daily, weekly, monthly, yearly）和自定义Cron表达式。
  *
  * 优化说明：
  * 1. 提取重复逻辑到私有方法，如缓存清理、Cron解析等。
@@ -49,6 +49,7 @@ public class VariableCycleTask {
     private final CronParser cronParser;
     private static final String DATA_CONFIG = "data";
     private ScheduledFuture<?> task;
+    private volatile boolean waitForInitializationLogged;
 
     // 数据库异步调用的并发与超时控制
     private final int dbMaxConcurrency;
@@ -118,10 +119,12 @@ public class VariableCycleTask {
             return;
         }
         int interval = getCheckInterval();
+        int initialDelay = Math.max(0, configsManager.getMainConfig()
+                .getInt("cycle.initial-delay-seconds", 0));
         task = plugin.getAsyncTaskManager().scheduleAtFixedRate(
-                this::checkCycles, 0, interval, TimeUnit.SECONDS
+                this::checkCycles, initialDelay, interval, TimeUnit.SECONDS
         );
-        logger.info("已启动周期变量检测任务，间隔: " + interval + " 秒");
+        logger.info("已启动周期变量检测任务，间隔: " + interval + " 秒，初始延迟: " + initialDelay + " 秒");
     }
 
     /** 停止周期检测任务 */
@@ -134,10 +137,23 @@ public class VariableCycleTask {
 
     /** 核心检查流程 */
     private void checkCycles() {
+        if (!variablesManager.isInitialized()) {
+            if (!waitForInitializationLogged) {
+                logger.info("变量管理器尚未初始化完成，暂缓周期重置检查");
+                waitForInitializationLogged = true;
+            }
+            return;
+        }
+        if (waitForInitializationLogged) {
+            logger.info("变量管理器初始化完成，开始执行周期重置检查");
+            waitForInitializationLogged = false;
+        }
+
         ZoneId zone = getValidatedTimeZone();
         ZonedDateTime now = ZonedDateTime.now(zone);
         try {
             runSafeReset("minute", calculateMinuteCycleStart(now));
+            runSafeReset("hour", calculateHourlyCycleStart(now));
             runSafeReset("daily", calculateDailyCycleStart(now));
             runSafeReset("weekly", calculateWeeklyCycleStart(now));
             runSafeReset("monthly", calculateMonthlyCycleStart(now));
@@ -344,6 +360,7 @@ public class VariableCycleTask {
         private long getDangerousThreshold(String type) {
             switch (type.toLowerCase()) {
                 case "minute":  return 60L * 60_000;        // 60分钟
+                case "hour":    return 72L * 3_600_000;     // 72小时
                 case "daily":   return 7L * 24 * 3_600_000; // 7天
                 case "weekly":  return 28L * 24 * 3_600_000;
                 case "monthly": return 180L * 24 * 3_600_000;
@@ -546,6 +563,11 @@ public class VariableCycleTask {
     /** 每分钟周期开始 */
     private ZonedDateTime calculateMinuteCycleStart(ZonedDateTime now) {
         return now.truncatedTo(ChronoUnit.MINUTES);
+    }
+
+    /** 每小时周期开始 */
+    private ZonedDateTime calculateHourlyCycleStart(ZonedDateTime now) {
+        return now.truncatedTo(ChronoUnit.HOURS);
     }
 
     /** 每日周期开始 */
