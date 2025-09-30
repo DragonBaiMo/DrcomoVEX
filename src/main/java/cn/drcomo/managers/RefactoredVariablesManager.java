@@ -292,7 +292,10 @@ public class RefactoredVariablesManager {
                     CacheResult cacheResult = cacheManager.getFromCache(player, key, variable);
                     if (cacheResult.isHit()) {
                         logger.debug("缓存命中(" + cacheResult.getLevel() + "): " + key);
-                        return VariableResult.success(cacheResult.getValue(), "GET", key, playerName);
+                        String cachedValue = cacheResult.getValue();
+                        // 对缓存值也进行类型规范化
+                        cachedValue = normalizeValueByType(cachedValue, variable.getValueType());
+                        return VariableResult.success(cachedValue, "GET", key, playerName);
                     }
                 }
 
@@ -300,6 +303,8 @@ public class RefactoredVariablesManager {
                 if (!isFormulaVariable(variable)) {
                     finalValue = resolveExpression(finalValue, player, variable);
                 }
+                // 确保最终返回值经过类型规范化
+                finalValue = normalizeValueByType(finalValue, variable.getValueType());
                 // 条件变量禁用缓存写，避免在条件失效后残留不当缓存
                 if (!variable.hasConditions()) {
                     cacheManager.cacheResult(player, key, finalValue, finalValue);
@@ -865,7 +870,8 @@ public class RefactoredVariablesManager {
                             double calculated = Double.parseDouble(calculatedValue);
                             double increment = current - defaultV;
                             if (variable.getValueType() == ValueType.INT) {
-                                finalValue = String.valueOf((int) (calculated + increment));
+                                int result = (int) Math.round(calculated + increment);
+                                finalValue = String.valueOf(result);
                             } else {
                                 finalValue = String.valueOf(calculated + increment);
                             }
@@ -1016,8 +1022,51 @@ public class RefactoredVariablesManager {
             logger.warn("表达式解析达到最大递归深度限制: " + maxDepth);
         }
 
+        // 根据变量类型规范化结果格式
+        if (variable != null) {
+            result = normalizeValueByType(result, variable.getValueType());
+        }
+
         cacheManager.cacheExpression(expression, player, result);
         return result;
+    }
+
+    /**
+     * 根据变量类型规范化值的格式
+     * 主要用于解决占位符解析后返回带小数点的 INT 类型问题
+     */
+    private String normalizeValueByType(String value, ValueType type) {
+        if (value == null || type == null) {
+            return value;
+        }
+
+        try {
+            switch (type) {
+                case INT:
+                    // INT 类型：去除小数点，确保返回纯整数格式
+                    if (value.matches("-?\\d+\\.0*")) {
+                        // 处理 "90.0", "90.00" 等格式
+                        int intValue = parseIntOrDefault(value);
+                        return String.valueOf(intValue);
+                    }
+                    // 如果已经是整数格式或无法解析，保持原样
+                    return value;
+
+                case DOUBLE:
+                    // DOUBLE 类型：保持原样，允许小数
+                    return value;
+
+                case STRING:
+                case LIST:
+                default:
+                    // 其他类型：保持原样
+                    return value;
+            }
+        } catch (Exception e) {
+            // 异常情况下返回原值
+            logger.debug("值类型规范化失败: " + value + " -> " + type);
+            return value;
+        }
     }
 
     /**
@@ -1159,8 +1208,10 @@ public class RefactoredVariablesManager {
         if (type == null) type = inferTypeFromValue(currentValue);
 
         switch (type) {
-            case INT:
-                return String.valueOf(parseIntOrDefault(currentValue) - parseIntOrDefault(removeValue));
+            case INT: {
+                int result = parseIntOrDefault(currentValue) - parseIntOrDefault(removeValue);
+                return String.valueOf(result);
+            }
             case DOUBLE:
                 return String.valueOf(parseDoubleOrDefault(currentValue) - parseDoubleOrDefault(removeValue));
             case LIST: {
@@ -1182,8 +1233,10 @@ public class RefactoredVariablesManager {
         int sign = isAdd ? 1 : -1;
 
         switch (type) {
-            case INT:
-                return String.valueOf(parseIntOrDefault(currentIncrement) + sign * parseIntOrDefault(value));
+            case INT: {
+                int result = parseIntOrDefault(currentIncrement) + sign * parseIntOrDefault(value);
+                return String.valueOf(result);
+            }
             case DOUBLE:
                 return String.valueOf(parseDoubleOrDefault(currentIncrement) + sign * parseDoubleOrDefault(value));
             case LIST: {
@@ -1211,11 +1264,14 @@ public class RefactoredVariablesManager {
         return mergeByType(baseValue, increment, type);
     }
 
-    /** 统一的“按类型合并值”实现，减少重复（用于加法与公式叠加） */
+    /** 统一的"按类型合并值"实现，减少重复（用于加法与公式叠加） */
     private String mergeByType(String baseValue, String increment, ValueType type) {
         if (type == null) type = inferTypeFromValue(baseValue);
         return switch (type) {
-            case INT -> String.valueOf(parseIntOrDefault(baseValue) + parseIntOrDefault(increment));
+            case INT -> {
+                int result = parseIntOrDefault(baseValue) + parseIntOrDefault(increment);
+                yield String.valueOf(result);
+            }
             case DOUBLE -> String.valueOf(parseDoubleOrDefault(baseValue) + parseDoubleOrDefault(increment));
             case LIST -> {
                 if (isBlank(baseValue)) yield increment;
@@ -1232,8 +1288,10 @@ public class RefactoredVariablesManager {
         if (type == null) type = inferTypeFromValue(base);
 
         switch (type) {
-            case INT:
-                return String.valueOf(parseIntOrDefault(setValue) - parseIntOrDefault(base));
+            case INT: {
+                int result = parseIntOrDefault(setValue) - parseIntOrDefault(base);
+                return String.valueOf(result);
+            }
             case DOUBLE:
                 return String.valueOf(parseDoubleOrDefault(setValue) - parseDoubleOrDefault(base));
             case LIST:
@@ -1382,8 +1440,13 @@ public class RefactoredVariablesManager {
                 for (String key : getGlobalVariableKeys()) {
                     futures.add(fetchServerTriple(key).thenAccept(tri -> {
                         if (tri.value != null) {
+                            // 数据加载时进行类型规范化，确保历史数据格式正确
+                            Variable var = getVariableDefinition(key);
+                            String normalizedValue = (var != null)
+                                ? normalizeValueByType(tri.value, var.getValueType())
+                                : tri.value;
                             memoryStorage.loadServerVariable(
-                                    key, tri.value, tri.updatedAt, tri.firstModifiedAt);
+                                    key, normalizedValue, tri.updatedAt, tri.firstModifiedAt);
                         }
                     }).exceptionally(ex -> {
                         logger.error("加载服务器变量失败: " + key, ex);
@@ -1423,8 +1486,13 @@ public class RefactoredVariablesManager {
                 for (String key : getPlayerVariableKeys()) {
                     futures.add(fetchPlayerTriple(pid, key).thenAccept(tri -> {
                         if (tri.value != null) {
+                            // 数据加载时进行类型规范化，确保历史数据格式正确
+                            Variable var = getVariableDefinition(key);
+                            String normalizedValue = (var != null)
+                                ? normalizeValueByType(tri.value, var.getValueType())
+                                : tri.value;
                             memoryStorage.loadPlayerVariable(
-                                    player.getUniqueId(), key, tri.value, tri.updatedAt, tri.firstModifiedAt);
+                                    player.getUniqueId(), key, normalizedValue, tri.updatedAt, tri.firstModifiedAt);
                         }
                     }).exceptionally(ex -> {
                         logger.error("加载玩家变量失败: " + pid + " - " + key, ex);

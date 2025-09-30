@@ -40,11 +40,14 @@ public class ServerVariablesAPI {
     private static final Pattern FULL_PLACEHOLDER_PATTERN = Pattern.compile("^drcomovex_\\[([^]]+)]_(.+)$");
     /** 玩家占位符参数解析正则：支持 [key] 或 [key]_[player] */
     private static final Pattern PLAYER_ARGS_PATTERN = Pattern.compile("^\\[([^\\]]+)](?:_\\[([^\\]]+)])?$");
+    /** 嵌套占位符匹配正则：匹配 {placeholder} 格式 */
+    private static final Pattern NESTED_PLACEHOLDER_PATTERN = Pattern.compile("\\{([^}]+)\\}");
 
     private final DebugUtil logger;
     private final RefactoredVariablesManager variablesManager;
     private final ServerVariablesManager serverVariablesManager;
     private final PlayerVariablesManager playerVariablesManager;
+    private PlaceholderAPIUtil placeholderUtil;
 
     public ServerVariablesAPI(
             DebugUtil logger,
@@ -240,6 +243,7 @@ public class ServerVariablesAPI {
      * 注册 PlaceholderAPI 占位符
      */
     public void registerPlaceholders(PlaceholderAPIUtil placeholderUtil) {
+        this.placeholderUtil = placeholderUtil;
         logger.info("正在注册 DrcomoVEX PlaceholderAPI 占位符...");
         // 通用变量
         placeholderUtil.register("[var]", (player, rawArgs) ->
@@ -265,6 +269,60 @@ public class ServerVariablesAPI {
     // -------------------- 私有通用方法 --------------------
 
     /**
+     * 预解析嵌套占位符：将字符串中的 {placeholder} 转换为对应的 PlaceholderAPI 值
+     *
+     * @param input  包含嵌套占位符的字符串
+     * @param player 用于解析占位符的玩家上下文
+     * @return 解析后的字符串
+     */
+    private String preProcessNestedPlaceholders(String input, OfflinePlayer player) {
+        if (input == null || !input.contains("{") || placeholderUtil == null) {
+            return input;
+        }
+
+        StringBuffer result = new StringBuffer();
+        Matcher matcher = NESTED_PLACEHOLDER_PATTERN.matcher(input);
+
+        while (matcher.find()) {
+            String placeholder = matcher.group(1);
+            String papiFormat = "%" + placeholder + "%";
+
+            try {
+                org.bukkit.entity.Player onlinePlayer = null;
+                if (player instanceof org.bukkit.entity.Player) {
+                    onlinePlayer = (org.bukkit.entity.Player) player;
+                } else if (player != null) {
+                    onlinePlayer = player.getPlayer();
+                }
+
+                String resolvedValue = placeholderUtil.parse(onlinePlayer, papiFormat);
+                if (resolvedValue != null && !resolvedValue.equals(papiFormat)) {
+                    matcher.appendReplacement(result, Matcher.quoteReplacement(resolvedValue));
+                    if (isDebugEnabled()) {
+                        logger.debug("嵌套占位符 {" + placeholder + "} 解析为: " + resolvedValue);
+                    }
+                } else {
+                    matcher.appendReplacement(result, Matcher.quoteReplacement(placeholder));
+                    if (isDebugEnabled()) {
+                        logger.debug("嵌套占位符 {" + placeholder + "} 解析失败，保持原值");
+                    }
+                }
+            } catch (Exception e) {
+                logger.error("解析嵌套占位符 {" + placeholder + "} 时发生异常", e);
+                matcher.appendReplacement(result, Matcher.quoteReplacement(placeholder));
+            }
+        }
+        matcher.appendTail(result);
+
+        String finalResult = result.toString();
+        if (isDebugEnabled() && !finalResult.equals(input)) {
+            logger.debug("嵌套占位符预解析完成: " + input + " -> " + finalResult);
+        }
+
+        return finalResult;
+    }
+
+    /**
      * 通用占位符处理流程：
      * 1. 日志输入
      * 2. 参数非空校验
@@ -285,6 +343,9 @@ public class ServerVariablesAPI {
             }
             return result;
         }
+
+        // 预解析嵌套占位符
+        rawArgs = preProcessNestedPlaceholders(rawArgs, player);
 
         // 兼容外层加[]的参数：统一规范化后再匹配
         String normalizedArgs = rawArgs.replace("[", "").replace("]", "").trim();
@@ -336,6 +397,9 @@ public class ServerVariablesAPI {
             }
             return result;
         }
+
+        // 预解析嵌套占位符
+        rawArgs = preProcessNestedPlaceholders(rawArgs, player);
 
         String key;
         String playerName = null;
