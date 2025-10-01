@@ -67,6 +67,10 @@ public class MainCommand implements CommandExecutor, TabCompleter {
     private static final List<String> ROOT_SUBS = List.of("player", "global", "reload", "help");
     /** 变量操作列表 */
     private static final List<String> VAR_OPS = List.of("get", "set", "add", "remove", "reset");
+    /** 严格模式前缀 */
+    private static final String STRICT_PREFIX = "STRICT:";
+    /** 严格模式分隔符 */
+    private static final char STRICT_SEPARATOR = ':';
 
     // 插件核心引用
     private final DrcomoVEX plugin;
@@ -508,15 +512,19 @@ public class MainCommand implements CommandExecutor, TabCompleter {
                                 String playerId = row[0];
                                 String key = row[1];
                                 String value = row[2];
-                                if (value != null && matchCondition(value, cond)) {
+                                if (value != null) {
+                                    String actualValue = normalizeStoredValue(value);
+                                    if (!matchCondition(actualValue, cond)) {
+                                        continue;
+                                    }
                                     String uniq = playerId + "::" + key;
                                     if (seen.add(uniq)) {
                                         count.incrementAndGet();
                                         if (previews.size() < MAX_PREVIEW_EXAMPLES) {
-                                            previews.add("玩家UUID=" + playerId + " 变量=" + key + " 值=" + value);
+                                            previews.add("玩家UUID=" + playerId + " 变量=" + key + " 值=" + actualValue);
                                         }
                                         uuidToVars.computeIfAbsent(playerId, k -> Collections.synchronizedMap(new HashMap<>()))
-                                                .put(key, value);
+                                                .put(key, actualValue);
                                     }
                                 }
                             }
@@ -538,15 +546,19 @@ public class MainCommand implements CommandExecutor, TabCompleter {
                     String uniq = p.getUniqueId() + "::" + key;
                     if (seen.contains(uniq)) continue;
                     futures.add(playerVariablesManager.getPlayerVariable(p, key).thenAccept(r -> {
-                        if (r != null && r.isSuccess() && r.getValue() != null && matchCondition(r.getValue(), cond)) {
+                        if (r != null && r.isSuccess() && r.getValue() != null) {
+                            String actualValue = normalizeStoredValue(r.getValue());
+                            if (!matchCondition(actualValue, cond)) {
+                                return;
+                            }
                             if (seen.add(uniq)) {
                                 count.incrementAndGet();
                                 if (previews.size() < MAX_PREVIEW_EXAMPLES) {
-                                    previews.add("玩家=" + p.getName() + " 变量=" + key + " 值=" + r.getValue());
+                                    previews.add("玩家=" + p.getName() + " 变量=" + key + " 值=" + actualValue);
                                 }
                                 String uuid = p.getUniqueId().toString();
                                 uuidToVars.computeIfAbsent(uuid, k -> Collections.synchronizedMap(new HashMap<>()))
-                                        .put(key, r.getValue());
+                                        .put(key, actualValue);
                                 uuidToName.putIfAbsent(uuid, p.getName());
                             }
                         }
@@ -1004,6 +1016,17 @@ public class MainCommand implements CommandExecutor, TabCompleter {
         enum Op { GT, GE, LT, LE, EQ, NE }
         final Op op; final double threshold;
         ValueCondition(Op op, double threshold) { this.op = op; this.threshold = threshold; }
+    }
+
+    /**
+     * 将数据库中的原始值转换为可读值（去除严格模式编码）
+     */
+    private String normalizeStoredValue(String raw) {
+        if (raw == null || raw.isEmpty()) return raw;
+        if (!raw.startsWith(STRICT_PREFIX)) return raw;
+        int lastSep = raw.lastIndexOf(STRICT_SEPARATOR);
+        if (lastSep <= STRICT_PREFIX.length()) return raw;
+        return raw.substring(STRICT_PREFIX.length(), lastSep);
     }
 
     private Optional<ValueCondition> parseCondition(String spec) {

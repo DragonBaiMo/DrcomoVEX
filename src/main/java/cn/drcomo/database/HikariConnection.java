@@ -382,7 +382,7 @@ public class HikariConnection {
         Object[] params;
         if (likePattern) {
             // 统一使用 ESCAPE '\\'，确保 '_' 与 '%' 可被转义
-            sql = "SELECT player_uuid, variable_key, value FROM player_variables WHERE variable_key LIKE ? ESCAPE '\\'";
+            sql = "SELECT player_uuid, variable_key, value FROM player_variables WHERE variable_key LIKE ? ESCAPE '\\\\'";
             params = new Object[]{ variableKeyOrLike };
         } else {
             sql = "SELECT player_uuid, variable_key, value FROM player_variables WHERE variable_key = ?";
