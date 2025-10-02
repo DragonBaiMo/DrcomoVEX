@@ -1,5 +1,10 @@
 package cn.drcomo;
 
+import cn.drcomo.bulk.PlayerBulkCollector;
+import cn.drcomo.bulk.PlayerBulkHelper;
+import cn.drcomo.bulk.PlayerBulkRequest;
+import cn.drcomo.bulk.PlayerBulkResult;
+import cn.drcomo.bulk.PlayerVariableCandidate;
 import cn.drcomo.corelib.util.DebugUtil;
 import cn.drcomo.managers.MessagesManager;
 import cn.drcomo.managers.PlayerVariablesManager;
@@ -21,12 +26,10 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
-import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.TimeUnit;
@@ -66,12 +69,7 @@ public class MainCommand implements CommandExecutor, TabCompleter {
     /** 根子指令列表 */
     private static final List<String> ROOT_SUBS = List.of("player", "global", "reload", "help");
     /** 变量操作列表 */
-    private static final List<String> VAR_OPS = List.of("get", "set", "add", "remove", "reset");
-    /** 严格模式前缀 */
-    private static final String STRICT_PREFIX = "STRICT:";
-    /** 严格模式分隔符 */
-    private static final char STRICT_SEPARATOR = ':';
-
+    private static final List<String> VAR_OPS = List.of("get", "set", "add", "give", "remove", "reset");
     // 插件核心引用
     private final DrcomoVEX plugin;
     private final DebugUtil logger;
@@ -79,6 +77,7 @@ public class MainCommand implements CommandExecutor, TabCompleter {
     private final RefactoredVariablesManager variablesManager;
     private final ServerVariablesManager serverVariablesManager;
     private final PlayerVariablesManager playerVariablesManager;
+    private final PlayerBulkCollector playerBulkCollector;
 
     public MainCommand(
             DrcomoVEX plugin,
@@ -94,6 +93,14 @@ public class MainCommand implements CommandExecutor, TabCompleter {
         this.variablesManager = variablesManager;
         this.serverVariablesManager = serverVariablesManager;
         this.playerVariablesManager = playerVariablesManager;
+        this.playerBulkCollector = new PlayerBulkCollector(
+                plugin,
+                logger,
+                variablesManager,
+                playerVariablesManager,
+                DB_QUERY_TIMEOUT_SECONDS,
+                MAX_PREVIEW_EXAMPLES
+        );
     }
 
     // ----------------- CommandExecutor -----------------
@@ -172,6 +179,7 @@ public class MainCommand implements CommandExecutor, TabCompleter {
             case "get":    handlePlayerGet(sender, args);    break;
             case "set":    handlePlayerSet(sender, args);    break;
             case "add":    handlePlayerAdd(sender, args);    break;
+            case "give":   handlePlayerGive(sender, args);   break;
             case "remove": handlePlayerRemove(sender, args); break;
             case "reset":  handlePlayerReset(sender, args);  break;
             default:
@@ -288,6 +296,12 @@ public class MainCommand implements CommandExecutor, TabCompleter {
         logger.debug("异步操作已提交，等待回调");
     }
 
+    /** /vex player give <玩家名|UUID> <变量名> <值> [--offline] */
+    private void handlePlayerGive(CommandSender sender, String[] args) {
+        // give 作为 add 的语义别名，完全复用 add 流程，确保单人与批量逻辑保持一致
+        handlePlayerAdd(sender, args);
+    }
+
     /** /vex player remove <玩家名|UUID> <变量名> <值> [--offline] */
     private void handlePlayerRemove(CommandSender sender, String[] args) {
         if (!checkArgs(sender, args, 5, "error.usage-player-remove")) return;
@@ -345,7 +359,7 @@ public class MainCommand implements CommandExecutor, TabCompleter {
         if (!requirePermission(sender, "drcomovex.command.global.get", "error.no-permission")) return;
 
         String spec = args[2];
-        if (isWildcard(spec) || hasCondition(spec)) {
+        if (PlayerBulkHelper.isWildcard(spec) || PlayerBulkHelper.hasCondition(spec)) {
             handleGlobalBatchGet(sender, args);
             return;
         }
@@ -366,7 +380,7 @@ public class MainCommand implements CommandExecutor, TabCompleter {
         if (!requirePermission(sender, "drcomovex.command.global.set", "error.no-permission")) return;
 
         String spec = args[2];
-        if (isWildcard(spec)) {
+        if (PlayerBulkHelper.isWildcard(spec)) {
             handleGlobalBatchWrite(sender, args, "set");
             return;
         }
@@ -387,7 +401,7 @@ public class MainCommand implements CommandExecutor, TabCompleter {
         if (!requirePermission(sender, "drcomovex.command.global.add", "error.no-permission")) return;
 
         String spec = args[2];
-        if (isWildcard(spec)) {
+        if (PlayerBulkHelper.isWildcard(spec)) {
             handleGlobalBatchWrite(sender, args, "add");
             return;
         }
@@ -408,7 +422,7 @@ public class MainCommand implements CommandExecutor, TabCompleter {
         if (!requirePermission(sender, "drcomovex.command.global.remove", "error.no-permission")) return;
 
         String spec = args[2];
-        if (isWildcard(spec)) {
+        if (PlayerBulkHelper.isWildcard(spec)) {
             handleGlobalBatchWrite(sender, args, "remove");
             return;
         }
@@ -429,7 +443,7 @@ public class MainCommand implements CommandExecutor, TabCompleter {
         if (!requirePermission(sender, "drcomovex.command.global.reset", "error.no-permission")) return;
 
         String spec = args[2];
-        if (isWildcard(spec)) {
+        if (PlayerBulkHelper.isWildcard(spec)) {
             handleGlobalBatchWrite(sender, args, "reset");
             return;
         }
@@ -476,249 +490,192 @@ public class MainCommand implements CommandExecutor, TabCompleter {
     private void handlePlayerBatchGet(CommandSender sender, String[] args) {
         String spec = args[3];
         if (!requireBulkOthersPermission(sender, "drcomovex.command.player.get")) return;
-
-        Optional<ValueCondition> cond = parseCondition(spec);
-        String glob = extractGlob(spec);
         boolean dbOnly = hasFlag(args, 4, "--db-only");
         boolean onlineOnly = hasFlag(args, 4, "--online-only");
-        boolean doDb = !onlineOnly;        // 默认执行数据库扫描
-        boolean doOnline = !dbOnly;        // 默认也执行在线内存扫描
+        boolean includeDatabase = !onlineOnly;
+        boolean includeOnline = !dbOnly;
         Optional<String> outOpt = parseOutFile(args, 4);
 
-        // 将通配 * 转 SQL LIKE：* -> %，并对 _ 和 % 转义（仅用于 LIKE 查询）
-        String like = glob.replace("\\", "\\\\").replace("_", "\\_").replace("%", "\\%").replace('*', '%');
-        boolean wildcard = isWildcard(glob);
-        String sqlKey = wildcard ? like : glob; // 等值查询必须使用原始 glob，不能带转义符
+        Optional<PlayerBulkHelper.ValueCondition> condition = PlayerBulkHelper.parseCondition(spec);
+        String glob = PlayerBulkHelper.extractGlob(spec);
 
-        // 预先计算匹配的变量键（用于在线玩家内存值补全）
-        Pattern regex = globToRegex(glob);
-        List<String> matchedKeys = doOnline
-                ? variablesManager.getPlayerVariableKeys().stream().filter(k -> regex.matcher(k).matches()).collect(Collectors.toList())
-                : Collections.emptyList();
+        PlayerBulkRequest request = new PlayerBulkRequest(
+                spec,
+                includeDatabase,
+                includeOnline,
+                MAX_PREVIEW_EXAMPLES,
+                MAX_BULK_LIMIT
+        );
 
-        CompletableFuture<Object[]> base = new CompletableFuture<>();
-        Set<String> seen = Collections.synchronizedSet(new HashSet<>());
-        AtomicInteger count = new AtomicInteger();
-        List<String> previews = Collections.synchronizedList(new ArrayList<>());
-        Map<String, Map<String, String>> uuidToVars = Collections.synchronizedMap(new HashMap<>());
-        Map<String, String> uuidToName = Collections.synchronizedMap(new HashMap<>());
+        playerBulkCollector.collect(request)
+                .thenAccept(result -> {
+                    if (result.getTotalMatches() == 0) {
+                        messagesManager.sendMessage(sender, "error.no-candidates", EMPTY_PARAMS);
+                        return;
+                    }
+                    if (result.isDatabaseTimeout()) {
+                        logger.warn("批量查询时数据库阶段存在超时或异常，结果可能不完整");
+                    }
+                    if (result.isOnlineTimeout()) {
+                        logger.warn("批量查询时在线玩家扫描存在超时或异常，结果可能不完整");
+                    }
 
-        CompletableFuture<Void> dbFuture = CompletableFuture.completedFuture(null);
-        if (doDb) {
-            dbFuture = plugin.getDatabase().queryPlayerVariablesByKeyAsync(sqlKey, wildcard)
-                    .thenAccept(rows -> {
-                        if (rows != null) {
-                            for (String[] row : rows) {
-                                String playerId = row[0];
-                                String key = row[1];
-                                String value = row[2];
-                                if (value != null) {
-                                    String actualValue = normalizeStoredValue(value);
-                                    if (!matchCondition(actualValue, cond)) {
-                                        continue;
-                                    }
-                                    String uniq = playerId + "::" + key;
-                                    if (seen.add(uniq)) {
-                                        count.incrementAndGet();
-                                        if (previews.size() < MAX_PREVIEW_EXAMPLES) {
-                                            previews.add("玩家UUID=" + playerId + " 变量=" + key + " 值=" + actualValue);
-                                        }
-                                        uuidToVars.computeIfAbsent(playerId, k -> Collections.synchronizedMap(new HashMap<>()))
-                                                .put(key, actualValue);
-                                    }
-                                }
-                            }
+                    messagesManager.sendMessage(sender, "success.player-query-summary",
+                            Map.of("count", String.valueOf(result.getTotalMatches())));
+                    for (String line : result.getPreviews()) {
+                        messagesManager.sendMessage(sender, "info.player-query-item", Map.of("player", "", "value", line));
+                    }
+
+                    outOpt.ifPresent(name -> {
+                        try {
+                            File outFile = exportPlayerQueryToYaml(name, glob, condition,
+                                    result.getUuidToVariables(), result.getUuidToName(), result.getTotalMatches());
+                            messagesManager.sendMessage(sender, "success.player-query-saved",
+                                    Map.of("file", "exports/" + outFile.getName(),
+                                           "players", String.valueOf(result.getUuidToVariables().size()),
+                                           "matches", String.valueOf(result.getTotalMatches())));
+                        } catch (Exception ex) {
+                            logger.error("导出查询结果到 YML 失败", ex);
+                            messagesManager.sendMessage(sender, "error.export-failed",
+                                    Map.of("reason", ex.getMessage() != null ? ex.getMessage() : "未知错误"));
                         }
-                    })
-                    .orTimeout(DB_QUERY_TIMEOUT_SECONDS, TimeUnit.SECONDS)
-                    .exceptionally(t -> {
-                        logger.warn("数据库批量查询超时或失败: " + t.getMessage());
-                        return null;
                     });
-        }
-
-        CompletableFuture<Void> onlineFuture = CompletableFuture.completedFuture(null);
-        if (doOnline && !matchedKeys.isEmpty()) {
-            List<Player> online = new ArrayList<>(Bukkit.getOnlinePlayers());
-            List<CompletableFuture<Void>> futures = new ArrayList<>();
-            for (Player p : online) {
-                for (String key : matchedKeys) {
-                    String uniq = p.getUniqueId() + "::" + key;
-                    if (seen.contains(uniq)) continue;
-                    futures.add(playerVariablesManager.getPlayerVariable(p, key).thenAccept(r -> {
-                        if (r != null && r.isSuccess() && r.getValue() != null) {
-                            String actualValue = normalizeStoredValue(r.getValue());
-                            if (!matchCondition(actualValue, cond)) {
-                                return;
-                            }
-                            if (seen.add(uniq)) {
-                                count.incrementAndGet();
-                                if (previews.size() < MAX_PREVIEW_EXAMPLES) {
-                                    previews.add("玩家=" + p.getName() + " 变量=" + key + " 值=" + actualValue);
-                                }
-                                String uuid = p.getUniqueId().toString();
-                                uuidToVars.computeIfAbsent(uuid, k -> Collections.synchronizedMap(new HashMap<>()))
-                                        .put(key, actualValue);
-                                uuidToName.putIfAbsent(uuid, p.getName());
-                            }
-                        }
-                    }));
-                }
-            }
-            onlineFuture = CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]))
-                    .orTimeout(DB_QUERY_TIMEOUT_SECONDS, TimeUnit.SECONDS)
-                    .exceptionally(t -> {
-                        logger.warn("在线内存扫描超时或失败: " + t.getMessage());
-                        return null;
-                    });
-        }
-
-        CompletableFuture.allOf(dbFuture, onlineFuture)
-                .thenAccept(v -> base.complete(new Object[]{ count.get(), previews }))
-                .exceptionally(t -> { base.completeExceptionally(t); return null; });
-
-        base.thenAccept(result -> {
-            int c = (int) result[0];
-            @SuppressWarnings("unchecked") List<String> pv = (List<String>) result[1];
-            if (c == 0) {
-                messagesManager.sendMessage(sender, "error.no-candidates", EMPTY_PARAMS);
-                return;
-            }
-            messagesManager.sendMessage(sender, "success.player-query-summary", Map.of("count", String.valueOf(c)));
-            for (String line : pv) {
-                messagesManager.sendMessage(sender, "info.player-query-item", Map.of("player", "", "value", line));
-            }
-            outOpt.ifPresent(name -> {
-                try {
-                    File outFile = exportPlayerQueryToYaml(name, glob, cond, uuidToVars, uuidToName, c);
-                    messagesManager.sendMessage(sender, "success.player-query-saved",
-                            Map.of("file", "exports/" + outFile.getName(),
-                                   "players", String.valueOf(uuidToVars.size()),
-                                   "matches", String.valueOf(c)));
-                } catch (Exception ex) {
-                    logger.error("导出查询结果到 YML 失败", ex);
-                    messagesManager.sendMessage(sender, "error.export-failed", Map.of("reason", ex.getMessage() != null ? ex.getMessage() : "未知错误"));
-                }
-            });
-        }).exceptionally(t -> {
-            String msg = t != null && t.getMessage() != null ? t.getMessage() : "未知错误";
-            if (msg.toLowerCase().contains("timeout") || msg.toLowerCase().contains("timed")) {
-                messagesManager.sendMessage(sender, "error.operation-failed", Map.of("reason", "数据库查询超时"));
-                return null;
-            }
-            return handleException("批量查询玩家变量失败", t, sender);
-        });
+                })
+                .exceptionally(t -> handleException("批量查询玩家变量失败", t, sender));
     }
 
     // ----- 玩家 批量写入(set/add/remove/reset) -----
     private void handlePlayerBatchWrite(CommandSender sender, String[] args, String action) {
         // 语法：/vex player <action> * <变量通配> [<值或增量>] [-n] [--limit N]
+        String normalizedAction = normalizePlayerAction(action);
         String spec = args[3];
-        boolean dryRun = parseDryRun(args, 4);
-        int limit = parseLimit(args, 4);
 
-        String basePerm = "drcomovex.command.player." + action;
-        if (!requireBulkOthersPermission(sender, basePerm)) return;
-
-        Optional<ValueCondition> cond = parseCondition(spec);
-        String glob = extractGlob(spec);
-        Pattern regex = globToRegex(glob);
-        List<String> matchedKeys = variablesManager.getPlayerVariableKeys().stream()
-                .filter(k -> regex.matcher(k).matches())
-                .collect(Collectors.toList());
-        if (matchedKeys.isEmpty()) {
-            messagesManager.sendMessage(sender, "error.no-candidates", EMPTY_PARAMS);
+        boolean requiresValue = !"reset".equalsIgnoreCase(normalizedAction);
+        if (requiresValue && args.length < 5) {
+            messagesManager.sendMessage(sender, "error.invalid-number", Map.of("value", ""));
             return;
         }
-        List<Player> players = new ArrayList<>(Bukkit.getOnlinePlayers());
+        String valueArg = requiresValue ? args[4] : null;
+        int flagStart = requiresValue ? 5 : 4;
 
-        List<Map<String, String>> candidates = new ArrayList<>();
-        List<CompletableFuture<Void>> scanFutures = new ArrayList<>();
-        for (Player p : players) {
-            for (String key : matchedKeys) {
-                scanFutures.add(playerVariablesManager.getPlayerVariable(p, key).thenAccept(r -> {
-                    if (r != null && r.isSuccess() && r.getValue() != null && matchCondition(r.getValue(), cond)) {
-                        if (candidates.size() < MAX_BULK_LIMIT) {
-                            Map<String, String> item = new HashMap<>();
-                            item.put("player", p.getName());
-                            item.put("key", key);
-                            item.put("old", r.getValue());
-                            candidates.add(item);
-                        }
-                    }
-                }));
-            }
-        }
-        CompletableFuture.allOf(scanFutures.toArray(new CompletableFuture[0])).whenComplete((vv, tt) -> {
-            if (tt != null) {
-                handleException("批量扫描玩家变量失败", tt, sender);
+        boolean dryRun = parseDryRun(args, flagStart);
+        int limit = parseLimit(args, flagStart);
+        boolean dbOnly = hasFlag(args, flagStart, "--db-only");
+        boolean onlineOnly = hasFlag(args, flagStart, "--online-only");
+        boolean includeDatabase = !onlineOnly;
+        boolean includeOnline = !dbOnly;
+
+        String basePerm = "drcomovex.command.player." + normalizedAction;
+        if (!requireBulkOthersPermission(sender, basePerm)) return;
+
+        Optional<PlayerBulkHelper.ValueCondition> condition = PlayerBulkHelper.parseCondition(spec);
+        String glob = PlayerBulkHelper.extractGlob(spec);
+
+        PlayerBulkRequest request = new PlayerBulkRequest(
+                spec,
+                includeDatabase,
+                includeOnline,
+                MAX_PREVIEW_EXAMPLES,
+                MAX_BULK_LIMIT
+        );
+
+        playerBulkCollector.collect(request).thenAccept(result -> {
+            if (result.getTotalMatches() == 0 || result.getCandidates().isEmpty()) {
+                messagesManager.sendMessage(sender, "error.no-candidates", EMPTY_PARAMS);
                 return;
             }
-            int affected = Math.min(candidates.size(), limit);
-            String variableShow = glob;
+            if (result.isDatabaseTimeout()) {
+                logger.warn("批量写入前的数据库扫描存在超时或异常，候选集可能不完整");
+            }
+            if (result.isOnlineTimeout()) {
+                logger.warn("批量写入前的在线扫描存在超时或异常，候选集可能不完整");
+            }
+
+            int affected = Math.min(limit, result.getCandidates().size());
+            if (affected <= 0) {
+                messagesManager.sendMessage(sender, "error.no-candidates", EMPTY_PARAMS);
+                return;
+            }
 
             if (dryRun) {
                 messagesManager.sendMessage(sender, "success.player-bulk-dryrun",
-                        Map.of("count", String.valueOf(affected), "action", action, "variable", variableShow));
+                        Map.of("count", String.valueOf(Math.min(result.getTotalMatches(), affected)),
+                               "action", action,
+                               "variable", glob));
                 int preview = Math.min(affected, MAX_PREVIEW_EXAMPLES);
                 for (int i = 0; i < preview; i++) {
-                    Map<String, String> it = candidates.get(i);
-                    String newVal = computeNewValuePreview(action, it.get("old"), args);
+                    PlayerVariableCandidate candidate = result.getCandidates().get(i);
+                    String oldValue = candidate.getCurrentValue() != null ? candidate.getCurrentValue() : "";
+                    String newVal = computeNewValuePreview(normalizedAction, oldValue, args);
                     messagesManager.sendMessage(sender, "info.player-bulk-preview-item",
-                            Map.of("player", it.get("player"), "old", it.get("old"), "new", newVal));
+                            Map.of("player", resolveCandidateName(result, candidate),
+                                   "old", oldValue,
+                                   "new", newVal));
                 }
                 return;
             }
 
-            // 执行写入
             List<CompletableFuture<VariableResult>> writeFutures = new ArrayList<>();
             for (int i = 0; i < affected; i++) {
-                Map<String, String> it = candidates.get(i);
-                Player p = Bukkit.getPlayerExact(it.get("player"));
-                if (p == null) continue;
-                String key = it.get("key");
-                switch (action) {
+                PlayerVariableCandidate candidate = result.getCandidates().get(i);
+                OfflinePlayer target = Bukkit.getOfflinePlayer(candidate.getPlayerId());
+                if (target == null) {
+                    continue;
+                }
+                CompletableFuture<VariableResult> future;
+                switch (normalizedAction) {
                     case "set":
-                        if (args.length < 5) { messagesManager.sendMessage(sender, "error.invalid-number", Map.of("value", "")); return; }
-                        writeFutures.add(playerVariablesManager.setPlayerVariable(p, key, args[4]));
+                        future = playerVariablesManager.setPlayerVariable(target, candidate.getVariableKey(), valueArg);
                         break;
                     case "add":
-                        if (args.length < 5) { messagesManager.sendMessage(sender, "error.invalid-number", Map.of("value", "")); return; }
-                        writeFutures.add(playerVariablesManager.addPlayerVariable(p, key, args[4]));
+                        future = playerVariablesManager.addPlayerVariable(target, candidate.getVariableKey(), valueArg);
                         break;
                     case "remove":
-                        if (args.length < 5) { messagesManager.sendMessage(sender, "error.invalid-number", Map.of("value", "")); return; }
-                        writeFutures.add(playerVariablesManager.removePlayerVariable(p, key, args[4]));
+                        future = playerVariablesManager.removePlayerVariable(target, candidate.getVariableKey(), valueArg);
                         break;
                     case "reset":
-                        writeFutures.add(playerVariablesManager.resetPlayerVariable(p, key));
+                        future = playerVariablesManager.resetPlayerVariable(target, candidate.getVariableKey());
                         break;
                     default:
-                        break;
+                        continue;
                 }
+                writeFutures.add(future);
             }
-            CompletableFuture.allOf(writeFutures.toArray(new CompletableFuture[0])).whenComplete((v3, t3) -> {
-                int success = 0; int failed = 0;
-                for (CompletableFuture<VariableResult> f : writeFutures) {
+
+            if (writeFutures.isEmpty()) {
+                messagesManager.sendMessage(sender, "error.no-candidates", EMPTY_PARAMS);
+                return;
+            }
+
+            CompletableFuture.allOf(writeFutures.toArray(new CompletableFuture[0])).whenComplete((ignored, throwable) -> {
+                int success = 0;
+                int failed = 0;
+                for (CompletableFuture<VariableResult> future : writeFutures) {
                     try {
-                        VariableResult r = f.get(TIMEOUT_SECONDS, TimeUnit.SECONDS);
-                        if (r != null && r.isSuccess()) success++; else failed++;
-                    } catch (Exception e) { failed++; }
+                        VariableResult r = future.get(TIMEOUT_SECONDS, TimeUnit.SECONDS);
+                        if (r != null && r.isSuccess()) {
+                            success++;
+                        } else {
+                            failed++;
+                        }
+                    } catch (Exception e) {
+                        failed++;
+                    }
                 }
                 messagesManager.sendMessage(sender, "success.player-bulk-done",
                         Map.of("success", String.valueOf(success),
                                "failed", String.valueOf(failed),
-                               "variable", variableShow));
+                               "variable", glob));
             });
-        });
+        }).exceptionally(t -> handleException("批量写入玩家变量失败", t, sender));
     }
 
     // ----- 全局 批量查询 -----
     private void handleGlobalBatchGet(CommandSender sender, String[] args) {
         String spec = args[2];
-        Optional<ValueCondition> cond = parseCondition(spec);
-        String glob = extractGlob(spec);
-        Pattern regex = globToRegex(glob);
+        Optional<PlayerBulkHelper.ValueCondition> cond = PlayerBulkHelper.parseCondition(spec);
+        String glob = PlayerBulkHelper.extractGlob(spec);
+        Pattern regex = PlayerBulkHelper.globToRegex(glob);
 
         List<String> matchedKeys = variablesManager.getGlobalVariableKeys().stream()
                 .filter(k -> regex.matcher(k).matches())
@@ -732,7 +689,8 @@ public class MainCommand implements CommandExecutor, TabCompleter {
         List<String> previews = new ArrayList<>();
         for (String key : matchedKeys) {
             futures.add(serverVariablesManager.getServerVariable(key).thenAccept(r -> {
-                if (r != null && r.isSuccess() && r.getValue() != null && matchCondition(r.getValue(), cond)) {
+                if (r != null && r.isSuccess() && r.getValue() != null
+                        && PlayerBulkHelper.matchCondition(r.getValue(), cond)) {
                     count.incrementAndGet();
                     if (previews.size() < MAX_PREVIEW_EXAMPLES) {
                         previews.add("变量=" + key + " 值=" + r.getValue());
@@ -755,7 +713,7 @@ public class MainCommand implements CommandExecutor, TabCompleter {
         String glob = args[2];
         boolean dryRun = parseDryRun(args, 3);
 
-        Pattern regex = globToRegex(glob);
+        Pattern regex = PlayerBulkHelper.globToRegex(glob);
         List<String> matchedKeys = variablesManager.getGlobalVariableKeys().stream()
                 .filter(k -> regex.matcher(k).matches())
                 .collect(Collectors.toList());
@@ -987,87 +945,32 @@ public class MainCommand implements CommandExecutor, TabCompleter {
                 && requirePermission(sender, basePerm + ".others", "error.no-permission");
     }
 
-    private boolean isWildcard(String spec) {
-        return spec != null && spec.contains("*");
-    }
-
-    private boolean hasCondition(String spec) {
-        return spec != null && spec.contains(":");
-    }
-
-    private Pattern globToRegex(String glob) {
-        StringBuilder sb = new StringBuilder();
-        sb.append('^');
-        for (char c : glob.toCharArray()) {
-            switch (c) {
-                case '*': sb.append(".*"); break;
-                case '.': sb.append("\\."); break;
-                case '?': sb.append('.'); break;
-                case '+': case '(': case ')': case '[': case ']': case '{': case '}': case '^': case '$': case '|': case '\\':
-                    sb.append('\\').append(c); break;
-                default: sb.append(c);
-            }
+    private String normalizePlayerAction(String action) {
+        if (action == null) {
+            return "";
         }
-        sb.append('$');
-        return Pattern.compile(sb.toString(), Pattern.CASE_INSENSITIVE);
-    }
-
-    private static class ValueCondition {
-        enum Op { GT, GE, LT, LE, EQ, NE }
-        final Op op; final double threshold;
-        ValueCondition(Op op, double threshold) { this.op = op; this.threshold = threshold; }
-    }
-
-    /**
-     * 将数据库中的原始值转换为可读值（去除严格模式编码）
-     */
-    private String normalizeStoredValue(String raw) {
-        if (raw == null || raw.isEmpty()) return raw;
-        if (!raw.startsWith(STRICT_PREFIX)) return raw;
-        int lastSep = raw.lastIndexOf(STRICT_SEPARATOR);
-        if (lastSep <= STRICT_PREFIX.length()) return raw;
-        return raw.substring(STRICT_PREFIX.length(), lastSep);
-    }
-
-    private Optional<ValueCondition> parseCondition(String spec) {
-        int idx = spec.lastIndexOf(':');
-        if (idx < 0) return Optional.empty();
-        String cond = spec.substring(idx + 1).trim();
-        try {
-            if (cond.startsWith(">=")) return Optional.of(new ValueCondition(ValueCondition.Op.GE, Double.parseDouble(cond.substring(2))));
-            if (cond.startsWith("<=")) return Optional.of(new ValueCondition(ValueCondition.Op.LE, Double.parseDouble(cond.substring(2))));
-            if (cond.startsWith("==")) return Optional.of(new ValueCondition(ValueCondition.Op.EQ, Double.parseDouble(cond.substring(2))));
-            if (cond.startsWith("!=")) return Optional.of(new ValueCondition(ValueCondition.Op.NE, Double.parseDouble(cond.substring(2))));
-            if (cond.startsWith(">"))  return Optional.of(new ValueCondition(ValueCondition.Op.GT, Double.parseDouble(cond.substring(1))));
-            if (cond.startsWith("<"))  return Optional.of(new ValueCondition(ValueCondition.Op.LT, Double.parseDouble(cond.substring(1))));
-        } catch (NumberFormatException e) {
-            return Optional.empty();
+        String lower = action.toLowerCase();
+        if ("give".equals(lower)) {
+            return "add";
         }
-        return Optional.empty();
+        return lower;
     }
 
-    private String extractGlob(String spec) {
-        int idx = spec.lastIndexOf(':');
-        return idx < 0 ? spec : spec.substring(0, idx);
-    }
-
-    private boolean matchCondition(String value, Optional<ValueCondition> condition) {
-        if (condition.isEmpty()) return true;
-        try {
-            double v = Double.parseDouble(value);
-            ValueCondition c = condition.get();
-            switch (c.op) {
-                case GT: return v > c.threshold;
-                case GE: return v >= c.threshold;
-                case LT: return v < c.threshold;
-                case LE: return v <= c.threshold;
-                case EQ: return v == c.threshold;
-                case NE: return v != c.threshold;
-                default: return false;
-            }
-        } catch (Exception e) {
-            return false;
+    private String resolveCandidateName(PlayerBulkResult result, PlayerVariableCandidate candidate) {
+        String uuid = candidate.getPlayerId().toString();
+        String fromResult = result.getUuidToName().get(uuid);
+        if (fromResult != null && !fromResult.isEmpty()) {
+            return fromResult;
         }
+        String candidateName = candidate.getPlayerName();
+        if (candidateName != null && !candidateName.isEmpty()) {
+            return candidateName;
+        }
+        OfflinePlayer offline = Bukkit.getOfflinePlayer(candidate.getPlayerId());
+        if (offline != null && offline.getName() != null) {
+            return offline.getName();
+        }
+        return uuid;
     }
 
     private int parseLimit(String[] args, int startIndex) {
@@ -1112,7 +1015,7 @@ public class MainCommand implements CommandExecutor, TabCompleter {
      */
     private File exportPlayerQueryToYaml(String suggestedName,
                                          String glob,
-                                         Optional<ValueCondition> cond,
+                                         Optional<PlayerBulkHelper.ValueCondition> cond,
                                          Map<String, Map<String, String>> uuidToVars,
                                          Map<String, String> uuidToName,
                                          int totalMatches) throws IOException {
