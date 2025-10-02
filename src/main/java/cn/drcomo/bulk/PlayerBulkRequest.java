@@ -12,17 +12,20 @@ public final class PlayerBulkRequest {
     private final boolean includeOnline;
     private final int previewLimit;
     private final int candidateLimit;
+    private final PlayerFilter playerFilter;
 
     public PlayerBulkRequest(String rawSpec,
                              boolean includeDatabase,
                              boolean includeOnline,
                              int previewLimit,
-                             int candidateLimit) {
+                             int candidateLimit,
+                             PlayerFilter playerFilter) {
         this.rawSpec = Objects.requireNonNull(rawSpec, "rawSpec");
         this.includeDatabase = includeDatabase;
         this.includeOnline = includeOnline;
         this.previewLimit = previewLimit;
         this.candidateLimit = candidateLimit;
+        this.playerFilter = playerFilter == null ? PlayerFilter.allowAll() : playerFilter;
     }
 
     public String getRawSpec() {
@@ -44,5 +47,8 @@ public final class PlayerBulkRequest {
     public int getCandidateLimit() {
         return candidateLimit;
     }
-}
 
+    public PlayerFilter getPlayerFilter() {
+        return playerFilter;
+    }
+}

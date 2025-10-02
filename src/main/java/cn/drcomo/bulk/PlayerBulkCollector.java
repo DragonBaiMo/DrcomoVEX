@@ -93,6 +93,8 @@ public class PlayerBulkCollector {
 
         List<CompletableFuture<Void>> tasks = new ArrayList<>();
 
+        PlayerFilter filter = request.getPlayerFilter();
+
         if (request.isIncludeDatabase()) {
             boolean wildcard = PlayerBulkHelper.isWildcard(glob);
             String like = glob
@@ -117,6 +119,16 @@ public class PlayerBulkCollector {
                             if (playerId == null || key == null || value == null) {
                                 continue;
                             }
+                            UUID uuid;
+                            try {
+                                uuid = UUID.fromString(playerId);
+                            } catch (IllegalArgumentException e) {
+                                uuid = null;
+                            }
+                            String resolvedName = resolvePlayerNameSafely(playerId);
+                            if (!filter.matches(uuid, resolvedName)) {
+                                continue;
+                            }
                             String actualValue = PlayerBulkHelper.normalizeStoredValue(value);
                             if (!PlayerBulkHelper.matchCondition(actualValue, condition)) {
                                 continue;
@@ -129,17 +141,15 @@ public class PlayerBulkCollector {
                                 }
                                 uuidToVars.computeIfAbsent(playerId, k -> Collections.synchronizedMap(new HashMap<>()))
                                         .put(key, actualValue);
-                                uuidToName.computeIfAbsent(playerId, this::resolvePlayerNameSafely);
+                                String finalName = resolvedName == null ? "" : resolvedName;
+                                uuidToName.computeIfAbsent(playerId, id -> finalName);
                                 if (candidates.size() < request.getCandidateLimit()) {
-                                    try {
-                                        UUID uuid = UUID.fromString(playerId);
+                                    if (uuid != null) {
                                         candidates.add(new PlayerVariableCandidate(uuid,
                                                 uuidToName.get(playerId),
                                                 key,
                                                 actualValue,
                                                 PlayerVariableCandidate.Source.DATABASE));
-                                    } catch (IllegalArgumentException ignored) {
-                                        // UUID 非法则跳过候选
                                     }
                                 }
                             }
@@ -156,6 +166,9 @@ public class PlayerBulkCollector {
 
         if (request.isIncludeOnline()) {
             List<Player> onlinePlayers = new ArrayList<>(Bukkit.getOnlinePlayers());
+            if (!filter.isEmpty()) {
+                onlinePlayers.removeIf(player -> !filter.matches(player.getUniqueId(), player.getName()));
+            }
             if (!onlinePlayers.isEmpty()) {
                 List<CompletableFuture<VariableResult>> valueFutures = new ArrayList<>();
                 for (Player player : onlinePlayers) {
@@ -238,4 +251,3 @@ public class PlayerBulkCollector {
         return "";
     }
 }
-

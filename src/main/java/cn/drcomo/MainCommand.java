@@ -4,6 +4,7 @@ import cn.drcomo.bulk.PlayerBulkCollector;
 import cn.drcomo.bulk.PlayerBulkHelper;
 import cn.drcomo.bulk.PlayerBulkRequest;
 import cn.drcomo.bulk.PlayerBulkResult;
+import cn.drcomo.bulk.PlayerFilter;
 import cn.drcomo.bulk.PlayerVariableCandidate;
 import cn.drcomo.corelib.util.DebugUtil;
 import cn.drcomo.managers.MessagesManager;
@@ -26,8 +27,10 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
@@ -335,6 +338,11 @@ public class MainCommand implements CommandExecutor, TabCompleter {
             return;
         }
         boolean allowOffline = hasFlag(args, 4, "--offline");
+        String spec = args[3];
+        if (PlayerBulkHelper.isWildcard(spec) || PlayerBulkHelper.hasCondition(spec)) {
+            handlePlayerSinglePatternReset(sender, args, allowOffline);
+            return;
+        }
         handlePlayerSingleWrite(
                 sender, args,
                 "drcomovex.command.player.reset",
@@ -495,6 +503,7 @@ public class MainCommand implements CommandExecutor, TabCompleter {
         boolean includeDatabase = !onlineOnly;
         boolean includeOnline = !dbOnly;
         Optional<String> outOpt = parseOutFile(args, 4);
+        PlayerFilter playerFilter = parsePlayerFilter(args, 4);
 
         Optional<PlayerBulkHelper.ValueCondition> condition = PlayerBulkHelper.parseCondition(spec);
         String glob = PlayerBulkHelper.extractGlob(spec);
@@ -504,7 +513,8 @@ public class MainCommand implements CommandExecutor, TabCompleter {
                 includeDatabase,
                 includeOnline,
                 MAX_PREVIEW_EXAMPLES,
-                MAX_BULK_LIMIT
+                MAX_BULK_LIMIT,
+                playerFilter
         );
 
         playerBulkCollector.collect(request)
@@ -571,12 +581,15 @@ public class MainCommand implements CommandExecutor, TabCompleter {
         Optional<PlayerBulkHelper.ValueCondition> condition = PlayerBulkHelper.parseCondition(spec);
         String glob = PlayerBulkHelper.extractGlob(spec);
 
+        PlayerFilter playerFilter = parsePlayerFilter(args, flagStart);
+
         PlayerBulkRequest request = new PlayerBulkRequest(
                 spec,
                 includeDatabase,
                 includeOnline,
                 MAX_PREVIEW_EXAMPLES,
-                MAX_BULK_LIMIT
+                MAX_BULK_LIMIT,
+                playerFilter
         );
 
         playerBulkCollector.collect(request).thenAccept(result -> {
@@ -825,6 +838,110 @@ public class MainCommand implements CommandExecutor, TabCompleter {
 
     }
 
+    /**
+     * 单玩家的通配重置流程：允许通过通配符批量重置指定玩家的多个变量。
+     */
+    private void handlePlayerSinglePatternReset(CommandSender sender, String[] args, boolean allowOffline) {
+        OfflinePlayer target = resolvePlayer(sender, args[2], allowOffline);
+        if (target == null) {
+            return;
+        }
+
+        if (!checkBasePermission(sender, "drcomovex.command.player.reset", target)) {
+            messagesManager.sendMessage(sender, "error.no-permission", EMPTY_PARAMS);
+            return;
+        }
+
+        String spec = args[3];
+        int flagStart = 4;
+        boolean dryRun = parseDryRun(args, flagStart);
+        int limit = parseLimit(args, flagStart);
+        boolean dbOnly = hasFlag(args, flagStart, "--db-only");
+        boolean onlineOnly = hasFlag(args, flagStart, "--online-only");
+        boolean includeDatabase = !onlineOnly;
+        boolean includeOnline = !dbOnly;
+
+        Set<UUID> uuidSet = Collections.singleton(target.getUniqueId());
+        Set<String> nameSet = (target.getName() != null && !target.getName().isEmpty())
+                ? Collections.singleton(target.getName().toLowerCase())
+                : Collections.emptySet();
+        PlayerFilter filter = PlayerFilter.of(uuidSet, nameSet);
+
+        PlayerBulkRequest request = new PlayerBulkRequest(
+                spec,
+                includeDatabase,
+                includeOnline,
+                MAX_PREVIEW_EXAMPLES,
+                Math.min(limit, MAX_BULK_LIMIT),
+                filter
+        );
+
+        playerBulkCollector.collect(request).thenAccept(result -> {
+            List<PlayerVariableCandidate> candidates = result.getCandidates().stream()
+                    .filter(c -> target.getUniqueId().equals(c.getPlayerId()))
+                    .collect(Collectors.toList());
+            if (candidates.isEmpty()) {
+                messagesManager.sendMessage(sender, "error.no-candidates", EMPTY_PARAMS);
+                return;
+            }
+            if (result.isDatabaseTimeout()) {
+                logger.warn("批量重置时数据库阶段存在超时或异常，结果可能不完整");
+            }
+            if (result.isOnlineTimeout()) {
+                logger.warn("批量重置时在线扫描存在超时或异常，结果可能不完整");
+            }
+
+            int affected = Math.min(limit, candidates.size());
+            if (affected <= 0) {
+                messagesManager.sendMessage(sender, "error.no-candidates", EMPTY_PARAMS);
+                return;
+            }
+
+            if (dryRun) {
+                messagesManager.sendMessage(sender, "success.player-bulk-dryrun",
+                        Map.of("count", String.valueOf(affected),
+                               "action", "reset",
+                               "variable", spec));
+                int preview = Math.min(affected, MAX_PREVIEW_EXAMPLES);
+                for (int i = 0; i < preview; i++) {
+                    PlayerVariableCandidate candidate = candidates.get(i);
+                    String oldVal = candidate.getCurrentValue() != null ? candidate.getCurrentValue() : "";
+                    messagesManager.sendMessage(sender, "info.player-bulk-preview-item",
+                            Map.of("player", resolveCandidateName(result, candidate),
+                                   "old", oldVal,
+                                   "new", ""));
+                }
+                return;
+            }
+
+            List<CompletableFuture<VariableResult>> futures = new ArrayList<>();
+            for (int i = 0; i < affected; i++) {
+                PlayerVariableCandidate candidate = candidates.get(i);
+                futures.add(playerVariablesManager.resetPlayerVariable(target, candidate.getVariableKey()));
+            }
+            CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).whenComplete((ignored, throwable) -> {
+                int success = 0;
+                int failed = 0;
+                for (CompletableFuture<VariableResult> future : futures) {
+                    try {
+                        VariableResult r = future.get(TIMEOUT_SECONDS, TimeUnit.SECONDS);
+                        if (r != null && r.isSuccess()) {
+                            success++;
+                        } else {
+                            failed++;
+                        }
+                    } catch (Exception e) {
+                        failed++;
+                    }
+                }
+                messagesManager.sendMessage(sender, "success.player-bulk-done",
+                        Map.of("success", String.valueOf(success),
+                               "failed", String.valueOf(failed),
+                               "variable", spec));
+            });
+        }).exceptionally(t -> handleException("单玩家批量重置失败", t, sender));
+    }
+
     /** 参数长度校验，若不满足则发送错误用法并返回 false */
     private boolean checkArgs(CommandSender sender, String[] args, int minLength, String usageKey) {
         if (args.length < minLength) {
@@ -971,6 +1088,41 @@ public class MainCommand implements CommandExecutor, TabCompleter {
             return offline.getName();
         }
         return uuid;
+    }
+
+    private PlayerFilter parsePlayerFilter(String[] args, int startIndex) {
+        Set<String> raw = new HashSet<>();
+        for (int i = startIndex; i < args.length; i++) {
+            String arg = args[i];
+            if (arg == null) {
+                continue;
+            }
+            if (arg.startsWith("--player:")) {
+                collectFilterValues(raw, arg.substring("--player:".length()));
+            } else if (arg.startsWith("--players:")) {
+                collectFilterValues(raw, arg.substring("--players:".length()));
+            } else if (arg.startsWith("--target:")) {
+                collectFilterValues(raw, arg.substring("--target:".length()));
+            } else if ("--player".equalsIgnoreCase(arg) || "--players".equalsIgnoreCase(arg) || "--target".equalsIgnoreCase(arg)) {
+                if (i + 1 < args.length) {
+                    collectFilterValues(raw, args[i + 1]);
+                    i++;
+                }
+            }
+        }
+        return PlayerFilter.fromRawValues(raw);
+    }
+
+    private void collectFilterValues(Set<String> raw, String part) {
+        if (part == null || part.isBlank()) {
+            return;
+        }
+        String[] pieces = part.split(",");
+        for (String piece : pieces) {
+            if (piece != null && !piece.isBlank()) {
+                raw.add(piece.trim());
+            }
+        }
     }
 
     private int parseLimit(String[] args, int startIndex) {
