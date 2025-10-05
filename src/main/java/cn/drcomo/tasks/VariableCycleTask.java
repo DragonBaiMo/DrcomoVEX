@@ -521,19 +521,40 @@ public class VariableCycleTask {
                 + Math.max(dbTimeoutMillis * 3, dbTimeoutMillis + TimeUnit.SECONDS.toMillis(5));
         int totalDeleted = 0;
 
+        String databaseType = plugin.getDatabase().getDatabaseType();
+        String normalizedType = databaseType == null ? "" : databaseType.trim().toLowerCase(Locale.ROOT);
+        String sqliteDeleteSql = "DELETE FROM player_variables WHERE id IN (" +
+                "SELECT id FROM player_variables WHERE variable_key = ? LIMIT ?" +
+                ")";
+        String mysqlDeleteSql = "DELETE FROM player_variables WHERE variable_key = ? LIMIT ?";
+        String deleteSql;
+        Object[] deleteParams;
+
+        if ("mysql".equals(normalizedType)) {
+            deleteSql = mysqlDeleteSql;
+            deleteParams = new Object[]{key, playerDeleteBatchSize};
+        } else {
+            if (!"sqlite".equals(normalizedType)) {
+                logger.debug("检测到未知数据库类型 " + databaseType + "，默认使用 SQLite 分批删除语句");
+            }
+            deleteSql = sqliteDeleteSql;
+            deleteParams = new Object[]{key, playerDeleteBatchSize};
+        }
+
         while (true) {
             if (System.currentTimeMillis() > absoluteDeadline) {
                 logger.warn("删除玩家变量耗时过长，已放弃: " + key + " 已删除 " + totalDeleted + " 行");
                 return false;
             }
 
+            logger.debug("使用 " + (normalizedType.isEmpty() ? "未知" : normalizedType)
+                    + " 分批删除语句执行玩家变量清理: " + deleteSql
+                    + "，变量键=" + key + "，批次大小=" + playerDeleteBatchSize);
+
             Integer deleted = executeDeleteReturningCount(
-                    "DELETE FROM player_variables WHERE id IN (" +
-                            "SELECT id FROM player_variables WHERE variable_key = ? LIMIT ?" +
-                            ")",
+                    deleteSql,
                     key,
-                    key,
-                    playerDeleteBatchSize
+                    deleteParams
             );
 
             if (deleted == null) {
