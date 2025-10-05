@@ -210,13 +210,22 @@ public class VariableCycleTask {
             }
 
             // 非持锁区执行数据库相关操作
-            performResets();
+            boolean completed = performResets();
 
             synchronized (yamlUtil) {
-                updateTimestamp();
+                if (completed) {
+                    updateTimestamp();
+                } else {
+                    logger.warn("周期重置未完成，将在下一轮重试 - " + cycleType);
+                }
                 clearCheckpoint();
-                logger.info("安全重置完成 - " + cycleType +
-                        " 周期，重置了 " + resetList.size() + " 个变量");
+                if (completed) {
+                    logger.info("安全重置完成 - " + cycleType +
+                            " 周期，重置了 " + resetList.size() + " 个变量");
+                } else {
+                    logger.warn("本轮仅部分变量完成重置 - " + cycleType +
+                            " 周期，成功 " + resetList.size() + " 个，剩余将继续尝试");
+                }
             }
         }
 
@@ -235,13 +244,14 @@ public class VariableCycleTask {
         }
 
         /** 执行具体重置 - 基于正确的时间对比逻辑 */
-        private void performResets() {
+        private boolean performResets() {
             Set<String> keys = variablesManager.getAllVariableKeys();
             ZonedDateTime now = ZonedDateTime.now(getValidatedTimeZone());
             // 对齐本次运行的“周期起点”，例如：
             // minute: 当前分钟的00秒；daily: 当日00:00:00；weekly: 本周一00:00:00；
             // monthly: 本月1日00:00:00；yearly: 本年1月1日00:00:00。
             ZonedDateTime cycleStart = Instant.ofEpochMilli(startMillis).atZone(now.getZone());
+            boolean hadBlockingFailure = false;
 
             for (String key : keys) {
                 Variable var = variablesManager.getVariableDefinition(key);
@@ -255,9 +265,11 @@ public class VariableCycleTask {
                                 .get(dbTimeoutMillis, TimeUnit.MILLISECONDS);
                     } catch (TimeoutException te) {
                         logger.warn("跳过重置(首次修改时间查询超时): " + key);
+                        hadBlockingFailure = true;
                         continue;
                     } catch (Exception ex) {
                         logger.error("查询首次修改时间失败: " + key, ex);
+                        hadBlockingFailure = true;
                         continue;
                     }
                     if (firstModified == null) {
@@ -307,9 +319,11 @@ public class VariableCycleTask {
                         }
                     } else {
                         logger.warn("变量 " + key + " 重置失败，已重试3次");
+                        hadBlockingFailure = true;
                     }
                 }
             }
+            return !hadBlockingFailure;
         }
 
         /** 创建崩服保护检查点 */
