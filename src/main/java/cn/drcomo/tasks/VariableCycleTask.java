@@ -55,6 +55,7 @@ public class VariableCycleTask {
     private final int dbMaxConcurrency;
     private final long dbTimeoutMillis;
     private final Semaphore dbSemaphore;
+    private final int playerDeleteBatchSize;
 
     public VariableCycleTask(
             DrcomoVEX plugin,
@@ -77,6 +78,8 @@ public class VariableCycleTask {
         this.dbTimeoutMillis = Math.max(500L, configsManager.getMainConfig()
                 .getLong("cycle.db.timeout-millis", 3000L));
         this.dbSemaphore = new Semaphore(dbMaxConcurrency);
+        this.playerDeleteBatchSize = Math.max(100, configsManager.getMainConfig()
+                .getInt("cycle.db.player-delete-batch-size", 1000));
         initializeDataConfig();
     }
     
@@ -210,13 +213,22 @@ public class VariableCycleTask {
             }
 
             // 非持锁区执行数据库相关操作
-            performResets();
+            boolean completed = performResets();
 
             synchronized (yamlUtil) {
-                updateTimestamp();
+                if (completed) {
+                    updateTimestamp();
+                } else {
+                    logger.warn("周期重置未完成，将在下一轮重试 - " + cycleType);
+                }
                 clearCheckpoint();
-                logger.info("安全重置完成 - " + cycleType +
-                        " 周期，重置了 " + resetList.size() + " 个变量");
+                if (completed) {
+                    logger.info("安全重置完成 - " + cycleType +
+                            " 周期，重置了 " + resetList.size() + " 个变量");
+                } else {
+                    logger.warn("本轮仅部分变量完成重置 - " + cycleType +
+                            " 周期，成功 " + resetList.size() + " 个，剩余将继续尝试");
+                }
             }
         }
 
@@ -235,13 +247,14 @@ public class VariableCycleTask {
         }
 
         /** 执行具体重置 - 基于正确的时间对比逻辑 */
-        private void performResets() {
+        private boolean performResets() {
             Set<String> keys = variablesManager.getAllVariableKeys();
             ZonedDateTime now = ZonedDateTime.now(getValidatedTimeZone());
             // 对齐本次运行的“周期起点”，例如：
             // minute: 当前分钟的00秒；daily: 当日00:00:00；weekly: 本周一00:00:00；
             // monthly: 本月1日00:00:00；yearly: 本年1月1日00:00:00。
             ZonedDateTime cycleStart = Instant.ofEpochMilli(startMillis).atZone(now.getZone());
+            boolean hadBlockingFailure = false;
 
             for (String key : keys) {
                 Variable var = variablesManager.getVariableDefinition(key);
@@ -255,9 +268,11 @@ public class VariableCycleTask {
                                 .get(dbTimeoutMillis, TimeUnit.MILLISECONDS);
                     } catch (TimeoutException te) {
                         logger.warn("跳过重置(首次修改时间查询超时): " + key);
+                        hadBlockingFailure = true;
                         continue;
                     } catch (Exception ex) {
                         logger.error("查询首次修改时间失败: " + key, ex);
+                        hadBlockingFailure = true;
                         continue;
                     }
                     if (firstModified == null) {
@@ -307,9 +322,11 @@ public class VariableCycleTask {
                         }
                     } else {
                         logger.warn("变量 " + key + " 重置失败，已重试3次");
+                        hadBlockingFailure = true;
                     }
                 }
             }
+            return !hadBlockingFailure;
         }
 
         /** 创建崩服保护检查点 */
@@ -474,22 +491,14 @@ public class VariableCycleTask {
             }
             acquired = true;
 
-            String sql = isGlobal
-                    ? "DELETE FROM server_variables WHERE variable_key = ?"
-                    : "DELETE FROM player_variables WHERE variable_key = ?";
+            if (isGlobal) {
+                return executeDeleteWithTimeout(
+                        "DELETE FROM server_variables WHERE variable_key = ?",
+                        key, key
+                );
+            }
 
-            CompletableFuture<Boolean> f = plugin.getDatabase()
-                    .executeUpdateAsync(sql, key)
-                    .orTimeout(dbTimeoutMillis, TimeUnit.MILLISECONDS)
-                    .handle((r, ex) -> {
-                        if (ex != null) {
-                            logger.error("删除变量失败: " + key, ex);
-                            return false;
-                        }
-                        return true;
-                    });
-
-            return f.get(dbTimeoutMillis, TimeUnit.MILLISECONDS);
+            return deletePlayerVariablesInBatches(key);
         } catch (TimeoutException te) {
             logger.warn("删除变量超时: " + key);
             return false;
@@ -500,6 +509,95 @@ public class VariableCycleTask {
             if (acquired) {
                 dbSemaphore.release();
             }
+        }
+    }
+
+    /**
+     * 分批删除玩家变量，避免一次性删除大量行导致 SQLite 长事务或 MySQL 锁等待超时。
+     */
+    private boolean deletePlayerVariablesInBatches(String key) {
+        // 允许分批操作占用更长时间，但仍设置绝对上限防止无休止重试
+        long absoluteDeadline = System.currentTimeMillis()
+                + Math.max(dbTimeoutMillis * 3, dbTimeoutMillis + TimeUnit.SECONDS.toMillis(5));
+        int totalDeleted = 0;
+
+        while (true) {
+            if (System.currentTimeMillis() > absoluteDeadline) {
+                logger.warn("删除玩家变量耗时过长，已放弃: " + key + " 已删除 " + totalDeleted + " 行");
+                return false;
+            }
+
+            Integer deleted = executeDeleteReturningCount(
+                    "DELETE FROM player_variables WHERE id IN (" +
+                            "SELECT id FROM player_variables WHERE variable_key = ? LIMIT ?" +
+                            ")",
+                    key,
+                    key,
+                    playerDeleteBatchSize
+            );
+
+            if (deleted == null) {
+                return false;
+            }
+
+            totalDeleted += deleted;
+
+            if (deleted < playerDeleteBatchSize) {
+                logger.debug("玩家变量分批删除完成: " + key + " 共删除 " + totalDeleted + " 行");
+                return true;
+            }
+
+            if (!sleepQuietly(10L)) {
+                logger.warn("删除玩家变量被中断: " + key);
+                return false;
+            }
+        }
+    }
+
+    /**
+     * 执行删除并返回影响行数，为超时和异常提供统一处理。
+     */
+    private Integer executeDeleteReturningCount(String sql, String key, Object... params) {
+        try {
+            CompletableFuture<Integer> future = plugin.getDatabase()
+                    .executeUpdateAsync(sql, params)
+                    .orTimeout(dbTimeoutMillis, TimeUnit.MILLISECONDS);
+            return future.get(dbTimeoutMillis, TimeUnit.MILLISECONDS);
+        } catch (TimeoutException te) {
+            logger.warn("删除变量执行超时: " + key);
+        } catch (Exception e) {
+            logger.error("执行删除变量语句失败: " + key + " SQL=" + sql, e);
+        }
+        return null;
+    }
+
+    /**
+     * 执行简单删除语句（全局变量使用），捕获异常和超时。
+     */
+    private boolean executeDeleteWithTimeout(String sql, String key, Object... params) throws Exception {
+        CompletableFuture<Boolean> f = plugin.getDatabase()
+                .executeUpdateAsync(sql, params)
+                .orTimeout(dbTimeoutMillis, TimeUnit.MILLISECONDS)
+                .handle((r, ex) -> {
+                    if (ex != null) {
+                        logger.error("删除变量失败: " + key, ex);
+                        return false;
+                    }
+                    return true;
+                });
+        return f.get(dbTimeoutMillis, TimeUnit.MILLISECONDS);
+    }
+
+    /**
+     * 安静睡眠，避免过度占用数据库线程。
+     */
+    private boolean sleepQuietly(long millis) {
+        try {
+            Thread.sleep(millis);
+            return true;
+        } catch (InterruptedException ie) {
+            Thread.currentThread().interrupt();
+            return false;
         }
     }
 
