@@ -155,12 +155,14 @@ public class VariableCycleTask {
         ZoneId zone = getValidatedTimeZone();
         ZonedDateTime now = ZonedDateTime.now(zone);
         try {
-            runSafeReset("minute", calculateMinuteCycleStart(now));
-            runSafeReset("hour", calculateHourlyCycleStart(now));
-            runSafeReset("daily", calculateDailyCycleStart(now));
-            runSafeReset("weekly", calculateWeeklyCycleStart(now));
-            runSafeReset("monthly", calculateMonthlyCycleStart(now));
+            // 为避免短周期补偿占据大量时间，导致日周等长周期重置被延迟，这里按“长周期 → 短周期”的顺序执行。
+            // 这样即使离线时间较长，也能优先完成 daily 等关键周期的重置，保证玩家体验。
             runSafeReset("yearly", calculateYearlyCycleStart(now));
+            runSafeReset("monthly", calculateMonthlyCycleStart(now));
+            runSafeReset("weekly", calculateWeeklyCycleStart(now));
+            runSafeReset("daily", calculateDailyCycleStart(now));
+            runSafeReset("hour", calculateHourlyCycleStart(now));
+            runSafeReset("minute", calculateMinuteCycleStart(now));
             resetCronVariables(now);
         } catch (DateTimeException e) {
             logger.error("时间计算异常，请检查时区配置: " + zone.getId(), e);
@@ -174,7 +176,14 @@ public class VariableCycleTask {
 
     /** 安全执行重置流程 */
     private void runSafeReset(String cycleType, ZonedDateTime cycleStart) {
-        new ResetOperation(cycleType, cycleStart).executeSafely();
+        List<ZonedDateTime> pendingStarts = expandPendingCycles(cycleType, cycleStart);
+        if (pendingStarts.isEmpty()) {
+            new ResetOperation(cycleType, cycleStart).executeSafely();
+            return;
+        }
+        for (ZonedDateTime pendingStart : pendingStarts) {
+            new ResetOperation(cycleType, pendingStart).executeSafely();
+        }
     }
 
     /**
@@ -729,6 +738,135 @@ public class VariableCycleTask {
         } catch (Exception e) {
             logger.warn("计算年周期异常，退回至日周期");
             return calculateDailyCycleStart(now);
+        }
+    }
+
+    /**
+     * 计算需要补偿执行的周期起点
+     */
+    private List<ZonedDateTime> expandPendingCycles(String cycleType, ZonedDateTime cycleStart) {
+        List<ZonedDateTime> pending = new ArrayList<>();
+        String path = "cycle.last-" + cycleType.toLowerCase() + "-reset";
+        long lastResetMillis;
+        synchronized (yamlUtil) {
+            lastResetMillis = getDataLong(path, 0L);
+        }
+
+        if (lastResetMillis <= 0L) {
+            pending.add(cycleStart);
+            return pending;
+        }
+
+        ZoneId zone = cycleStart.getZone();
+        ZonedDateTime lastReset = Instant.ofEpochMilli(lastResetMillis).atZone(zone);
+        ZonedDateTime normalizedLast = normalizeCycleStart(cycleType, lastReset);
+
+        if (normalizedLast.isAfter(cycleStart)) {
+            logger.warn("检测到未来的" + cycleType + "重置记录，跳过补偿: 上次="
+                    + normalizedLast + " 当前=" + cycleStart);
+            return pending;
+        }
+        if (!normalizedLast.isBefore(cycleStart)) {
+            return pending;
+        }
+
+        ZonedDateTime nextStart = advanceCycleStart(normalizedLast, cycleType);
+        int limit = getCatchUpLimit(cycleType);
+        int steps = 0;
+
+        while (nextStart != null && !nextStart.isAfter(cycleStart)) {
+            pending.add(nextStart);
+            if (nextStart.equals(cycleStart)) {
+                break;
+            }
+            nextStart = advanceCycleStart(nextStart, cycleType);
+            steps++;
+            if (steps >= limit) {
+                if (nextStart != null && nextStart.isBefore(cycleStart)) {
+                    logger.warn("补偿" + cycleType + "周期超过上限 " + limit +
+                            " 次，直接跳到当前周期: 上次=" + normalizedLast + " 目标=" + cycleStart);
+                    pending.add(cycleStart);
+                }
+                break;
+            }
+        }
+
+        if (!pending.isEmpty() && pending.get(pending.size() - 1).isBefore(cycleStart)) {
+            pending.add(cycleStart);
+        }
+
+        if (pending.isEmpty()) {
+            pending.add(cycleStart);
+        } else if (pending.size() > 1) {
+            logger.warn("检测到 " + cycleType + " 周期补偿 " + pending.size() +
+                    " 次，自上次重置 " + normalizedLast + " 至当前起点 " + cycleStart);
+        }
+        return pending;
+    }
+
+    /**
+     * 统一将任意时间对齐到对应周期的起点
+     */
+    private ZonedDateTime normalizeCycleStart(String cycleType, ZonedDateTime time) {
+        switch (cycleType.toLowerCase()) {
+            case "minute":
+                return calculateMinuteCycleStart(time);
+            case "hour":
+                return calculateHourlyCycleStart(time);
+            case "daily":
+                return calculateDailyCycleStart(time);
+            case "weekly":
+                return calculateWeeklyCycleStart(time);
+            case "monthly":
+                return calculateMonthlyCycleStart(time);
+            case "yearly":
+                return calculateYearlyCycleStart(time);
+            default:
+                return time;
+        }
+    }
+
+    /**
+     * 根据当前周期起点推算下一次周期的起点
+     */
+    private ZonedDateTime advanceCycleStart(ZonedDateTime start, String cycleType) {
+        switch (cycleType.toLowerCase()) {
+            case "minute":
+                return calculateMinuteCycleStart(start.plusMinutes(1));
+            case "hour":
+                return calculateHourlyCycleStart(start.plusHours(1));
+            case "daily":
+                return calculateDailyCycleStart(start.plusDays(1));
+            case "weekly":
+                return calculateWeeklyCycleStart(start.plusWeeks(1));
+            case "monthly":
+                return calculateMonthlyCycleStart(start.plusMonths(1));
+            case "yearly":
+                return calculateYearlyCycleStart(start.plusYears(1));
+            default:
+                return null;
+        }
+    }
+
+    /**
+     * 针对不同周期的补偿次数上限
+     */
+    private int getCatchUpLimit(String cycleType) {
+        switch (cycleType.toLowerCase()) {
+            case "minute":
+                return 120; // 最多补偿2小时，避免分钟级循环过长
+            case "hour":
+                return 168; // 最多补偿一周
+            case "daily":
+                return 31;  // 最多补偿一个月
+            case "weekly":
+                return 12;  // 最多补偿一年
+            case "monthly":
+                return 24;  // 最多补偿两年
+            case "yearly":
+                return 5;   // 最多补偿五年
+            default:
+                return 1;
         }
     }
 
