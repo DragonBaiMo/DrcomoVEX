@@ -494,6 +494,55 @@ public class HikariConnection {
     }
 
     /**
+     * 检测是否为 MySQL 数据库（基于实际连接元数据，更可靠）
+     */
+    public boolean isMySQL() {
+        // 优先使用配置的数据库类型
+        if ("mysql".equalsIgnoreCase(databaseType)) {
+            return true;
+        }
+
+        // 如果配置类型不明确，通过实际连接检测
+        try (Connection conn = getConnection()) {
+            if (conn != null) {
+                String productName = conn.getMetaData().getDatabaseProductName().toLowerCase();
+                return productName.contains("mysql") || productName.contains("mariadb");
+            }
+        } catch (Exception e) {
+            logger.debug("无法通过连接元数据检测数据库类型: " + e.getMessage());
+        }
+
+        return false;
+    }
+
+    /**
+     * 检测是否为 SQLite 数据库（基于实际连接元数据，更可靠）
+     */
+    public boolean isSQLite() {
+        // 优先使用配置的数据库类型
+        if ("sqlite".equalsIgnoreCase(databaseType)) {
+            return true;
+        }
+
+        // 如果使用了 SQLiteDB 实例，则确定是 SQLite
+        if (sqliteDB != null) {
+            return true;
+        }
+
+        // 如果配置类型不明确，通过实际连接检测
+        try (Connection conn = getConnection()) {
+            if (conn != null) {
+                String productName = conn.getMetaData().getDatabaseProductName().toLowerCase();
+                return productName.contains("sqlite");
+            }
+        } catch (Exception e) {
+            logger.debug("无法通过连接元数据检测数据库类型: " + e.getMessage());
+        }
+
+        return false;
+    }
+
+    /**
      * 获取连接池统计信息
      */
     public String getPoolStats() {

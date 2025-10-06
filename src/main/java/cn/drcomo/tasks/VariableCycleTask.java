@@ -521,23 +521,29 @@ public class VariableCycleTask {
                 + Math.max(dbTimeoutMillis * 3, dbTimeoutMillis + TimeUnit.SECONDS.toMillis(5));
         int totalDeleted = 0;
 
-        String databaseType = plugin.getDatabase().getDatabaseType();
-        String normalizedType = databaseType == null ? "" : databaseType.trim().toLowerCase(Locale.ROOT);
-        String sqliteDeleteSql = "DELETE FROM player_variables WHERE id IN (" +
-                "SELECT id FROM player_variables WHERE variable_key = ? LIMIT ?" +
-                ")";
-        String mysqlDeleteSql = "DELETE FROM player_variables WHERE variable_key = ? LIMIT ?";
+        // 使用更可靠的数据库类型检测方法（基于实际连接元数据）
+        boolean isMySQL = plugin.getDatabase().isMySQL();
+        boolean isSQLite = plugin.getDatabase().isSQLite();
+
         String deleteSql;
         Object[] deleteParams;
 
-        if ("mysql".equals(normalizedType)) {
-            deleteSql = mysqlDeleteSql;
+        if (isMySQL) {
+            // MySQL：直接使用 LIMIT，不需要子查询
+            deleteSql = "DELETE FROM player_variables WHERE variable_key = ? LIMIT ?";
             deleteParams = new Object[]{key, playerDeleteBatchSize};
+            logger.debug("使用 MySQL 分批删除语句");
+        } else if (isSQLite) {
+            // SQLite：使用子查询 + LIMIT（SQLite 支持此语法）
+            deleteSql = "DELETE FROM player_variables WHERE id IN (" +
+                    "SELECT id FROM player_variables WHERE variable_key = ? LIMIT ?" +
+                    ")";
+            deleteParams = new Object[]{key, playerDeleteBatchSize};
+            logger.debug("使用 SQLite 分批删除语句");
         } else {
-            if (!"sqlite".equals(normalizedType)) {
-                logger.debug("检测到未知数据库类型 " + databaseType + "，默认使用 SQLite 分批删除语句");
-            }
-            deleteSql = sqliteDeleteSql;
+            // 未知类型：使用通用的 MySQL 语法（大多数数据库都支持）
+            logger.warn("无法确定数据库类型，使用通用 MySQL 分批删除语句作为降级方案");
+            deleteSql = "DELETE FROM player_variables WHERE variable_key = ? LIMIT ?";
             deleteParams = new Object[]{key, playerDeleteBatchSize};
         }
 
@@ -547,8 +553,7 @@ public class VariableCycleTask {
                 return false;
             }
 
-            logger.debug("使用 " + (normalizedType.isEmpty() ? "未知" : normalizedType)
-                    + " 分批删除语句执行玩家变量清理: " + deleteSql
+            logger.debug("执行分批删除玩家变量: SQL=" + deleteSql
                     + "，变量键=" + key + "，批次大小=" + playerDeleteBatchSize);
 
             Integer deleted = executeDeleteReturningCount(
