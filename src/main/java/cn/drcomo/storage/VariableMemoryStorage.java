@@ -529,9 +529,10 @@ public class VariableMemoryStorage {
         updateMemoryUsage(-removedValue.getEstimatedMemoryUsage());
 
         String compositeKey = buildPlayerKey(playerId, key);
-        dirtyTracker.remove(compositeKey);
         if (markDeletion) {
             trackDirtyData(compositeKey, DirtyFlag.Type.PLAYER_VARIABLE_DELETE);
+        } else {
+            dirtyTracker.remove(compositeKey);
         }
 
         if (playerVars.isEmpty()) {
