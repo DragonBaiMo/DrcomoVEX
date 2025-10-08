@@ -710,8 +710,7 @@ public class RefactoredVariablesManager {
             } else if (variable.isPlayerScoped()) {
                 Set<UUID> affectedPlayers = memoryStorage.removeVariableForAllPlayers(key, true);
                 for (UUID affected : affectedPlayers) {
-                    OfflinePlayer offlinePlayer = Bukkit.getOfflinePlayer(affected);
-                    cacheManager.invalidateCache(offlinePlayer, key);
+                    cacheManager.invalidateCache(affected, key);
                 }
             }
             logger.debug("已从内存与缓存删除变量: " + key);
