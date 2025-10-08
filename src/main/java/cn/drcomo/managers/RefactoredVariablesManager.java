@@ -37,6 +37,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeoutException;
@@ -707,9 +708,9 @@ public class RefactoredVariablesManager {
                 memoryStorage.removeServerVariable(key);
                 cacheManager.invalidateCache(null, key);
             } else if (variable.isPlayerScoped()) {
-                for (OfflinePlayer p : Bukkit.getOnlinePlayers()) {
-                    memoryStorage.removePlayerVariable(p.getUniqueId(), key);
-                    cacheManager.invalidateCache(p, key);
+                Set<UUID> affectedPlayers = memoryStorage.removeVariableForAllPlayers(key, true);
+                for (UUID affected : affectedPlayers) {
+                    cacheManager.invalidateCache(affected, key);
                 }
             }
             logger.debug("已从内存与缓存删除变量: " + key);
@@ -1493,6 +1494,10 @@ public class RefactoredVariablesManager {
                                 : tri.value;
                             memoryStorage.loadPlayerVariable(
                                     player.getUniqueId(), key, normalizedValue, tri.updatedAt, tri.firstModifiedAt);
+                        } else {
+                            if (memoryStorage.removePlayerVariable(player.getUniqueId(), key, false)) {
+                                cacheManager.invalidateCache(player, key);
+                            }
                         }
                     }).exceptionally(ex -> {
                         logger.error("加载玩家变量失败: " + pid + " - " + key, ex);
