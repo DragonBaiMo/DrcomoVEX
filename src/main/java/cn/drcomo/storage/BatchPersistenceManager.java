@@ -190,12 +190,16 @@ public class BatchPersistenceManager {
         return CompletableFuture.runAsync(() -> {
             try {
                 Map<String, DirtyFlag> dirty = memoryStorage.getPlayerDirtyData(playerId);
-                if (dirty.isEmpty()) return;
-                logger.debug("玩家退出，立即持久化数据: " + playerId + "，脏数据数量: " + dirty.size());
-                List<PersistenceTask> tasks = collectPersistenceTasks(dirty);
-                executeBatchPersistence(tasks);
+                if (!dirty.isEmpty()) {
+                    logger.debug("玩家退出，立即持久化数据: " + playerId + "，脏数据数量: " + dirty.size());
+                    List<PersistenceTask> tasks = collectPersistenceTasks(dirty);
+                    executeBatchPersistence(tasks);
+                    logger.debug("玩家数据持久化完成: " + playerId);
+                } else {
+                    logger.debug("玩家退出，无脏数据需要持久化: " + playerId);
+                }
                 memoryStorage.cleanupPlayerData(playerId, false);
-                logger.debug("玩家数据持久化完成: " + playerId);
+                logger.debug("玩家内存镜像已释放: " + playerId);
             } catch (Exception e) {
                 logger.error("持久化玩家数据失败: " + playerId, e);
                 failedPersistenceOperations.incrementAndGet();

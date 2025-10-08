@@ -306,26 +306,52 @@ public class VariableMemoryStorage {
     }
     
     /**
-     * 删除玩家变量
+     * 删除玩家变量（默认标记删除以便同步到数据库）
      */
     public boolean removePlayerVariable(UUID playerId, String key) {
+        return removePlayerVariable(playerId, key, true);
+    }
+
+    /**
+     * 删除玩家变量
+     *
+     * @param markDeletion 是否需要在脏数据队列中记录删除操作
+     */
+    public boolean removePlayerVariable(UUID playerId, String key, boolean markDeletion) {
         memoryLock.writeLock().lock();
         try {
-            ConcurrentHashMap<String, VariableValue> playerVars = playerVariables.get(playerId);
-            if (playerVars != null) {
-                VariableValue removedValue = playerVars.remove(key);
-                if (removedValue != null) {
-                    // 更新内存使用统计
-                    updateMemoryUsage(-removedValue.getEstimatedMemoryUsage());
-                    
-                    // 标记为需要从数据库删除
-                    trackDirtyData(buildPlayerKey(playerId, key), DirtyFlag.Type.PLAYER_VARIABLE_DELETE);
-                    
-                    logger.debug("删除玩家变量: " + playerId + ":" + key);
-                    return true;
+            boolean removed = removePlayerVariableInternal(playerId, key, markDeletion);
+            if (removed) {
+                recalculatePlayerFirstModifiedIndex(key);
+                logger.debug("删除玩家变量: " + playerId + ":" + key + "，markDeletion=" + markDeletion);
+            }
+            return removed;
+        } finally {
+            memoryLock.writeLock().unlock();
+        }
+    }
+
+    /**
+     * 批量删除所有玩家的指定变量
+     *
+     * @param markDeletion 是否需要在脏数据队列中记录删除操作
+     * @return 实际被清理的玩家 UUID 集合
+     */
+    public Set<UUID> removeVariableForAllPlayers(String key, boolean markDeletion) {
+        memoryLock.writeLock().lock();
+        try {
+            Set<UUID> affectedPlayers = new HashSet<>();
+            List<UUID> playerIds = new ArrayList<>(playerVariables.keySet());
+            for (UUID playerId : playerIds) {
+                if (removePlayerVariableInternal(playerId, key, markDeletion)) {
+                    affectedPlayers.add(playerId);
                 }
             }
-            return false;
+            if (!affectedPlayers.isEmpty()) {
+                recalculatePlayerFirstModifiedIndex(key);
+                logger.debug("批量删除玩家变量: key=" + key + "，玩家数量=" + affectedPlayers.size() + "，markDeletion=" + markDeletion);
+            }
+            return affectedPlayers;
         } finally {
             memoryLock.writeLock().unlock();
         }
@@ -436,29 +462,106 @@ public class VariableMemoryStorage {
         try {
             ConcurrentHashMap<String, VariableValue> playerVars = playerVariables.get(playerId);
             if (playerVars != null) {
+                Set<String> affectedKeys = new HashSet<>();
                 if (!preserveDirtyData) {
                     // 计算释放的内存
                     long freedMemory = playerVars.values().stream()
                             .mapToLong(VariableValue::getEstimatedMemoryUsage)
                             .sum();
-                    
+
+                    affectedKeys.addAll(playerVars.keySet());
+
                     // 移除玩家数据
                     playerVariables.remove(playerId);
                     updateMemoryUsage(-freedMemory);
-                    
+
                     // 清理相关的脏数据标记
                     String prefix = "player:" + playerId + ":";
                     dirtyTracker.keySet().removeIf(key -> key.startsWith(prefix));
-                    
+
+                    for (String key : affectedKeys) {
+                        recalculatePlayerFirstModifiedIndex(key);
+                    }
+
                     logger.debug("完全清理玩家数据: " + playerId + "，释放内存: " + (freedMemory / 1024) + "KB");
                 } else {
                     // 只清理非脏数据，保留需要持久化的数据
-                    playerVars.entrySet().removeIf(entry -> !entry.getValue().isDirty());
+                    Iterator<Map.Entry<String, VariableValue>> iterator = playerVars.entrySet().iterator();
+                    while (iterator.hasNext()) {
+                        Map.Entry<String, VariableValue> entry = iterator.next();
+                        if (!entry.getValue().isDirty()) {
+                            affectedKeys.add(entry.getKey());
+                            updateMemoryUsage(-entry.getValue().getEstimatedMemoryUsage());
+                            iterator.remove();
+                        }
+                    }
+
+                    for (String key : affectedKeys) {
+                        recalculatePlayerFirstModifiedIndex(key);
+                    }
+
+                    if (playerVars.isEmpty()) {
+                        playerVariables.remove(playerId);
+                    }
+
                     logger.debug("部分清理玩家数据: " + playerId + "，保留脏数据");
                 }
             }
         } finally {
             memoryLock.writeLock().unlock();
+        }
+    }
+
+    /**
+     * 实际执行玩家变量删除逻辑，调用方需确保持有写锁
+     */
+    private boolean removePlayerVariableInternal(UUID playerId, String key, boolean markDeletion) {
+        ConcurrentHashMap<String, VariableValue> playerVars = playerVariables.get(playerId);
+        if (playerVars == null) {
+            return false;
+        }
+
+        VariableValue removedValue = playerVars.remove(key);
+        if (removedValue == null) {
+            return false;
+        }
+
+        updateMemoryUsage(-removedValue.getEstimatedMemoryUsage());
+
+        String compositeKey = buildPlayerKey(playerId, key);
+        dirtyTracker.remove(compositeKey);
+        if (markDeletion) {
+            trackDirtyData(compositeKey, DirtyFlag.Type.PLAYER_VARIABLE_DELETE);
+        }
+
+        if (playerVars.isEmpty()) {
+            playerVariables.remove(playerId);
+        }
+
+        return true;
+    }
+
+    /**
+     * 重新计算指定变量的首次修改索引，确保索引与内存状态保持一致
+     */
+    private void recalculatePlayerFirstModifiedIndex(String key) {
+        long earliest = Long.MAX_VALUE;
+        boolean found = false;
+        for (ConcurrentHashMap<String, VariableValue> vars : playerVariables.values()) {
+            VariableValue value = vars.get(key);
+            if (value != null) {
+                long first = value.getFirstModifiedAt();
+                if (first < earliest) {
+                    earliest = first;
+                }
+                found = true;
+            }
+        }
+
+        if (found) {
+            playerFirstModifiedIndex.put(key, earliest);
+        } else {
+            playerFirstModifiedIndex.remove(key);
         }
     }
     
