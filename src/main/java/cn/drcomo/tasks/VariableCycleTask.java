@@ -578,7 +578,11 @@ public class VariableCycleTask {
             totalDeleted += deleted;
 
             if (deleted < playerDeleteBatchSize) {
-                logger.debug("玩家变量分批删除完成: " + key + " 共删除 " + totalDeleted + " 行");
+                if (totalDeleted == 0) {
+                    logger.warn("玩家变量分批删除结束但未删除任何数据: " + key);
+                    return false;
+                }
+                logger.info("玩家变量分批删除完成: " + key + " 共删除 " + totalDeleted + " 行");
                 return true;
             }
 
@@ -610,17 +614,26 @@ public class VariableCycleTask {
      * 执行简单删除语句（全局变量使用），捕获异常和超时。
      */
     private boolean executeDeleteWithTimeout(String sql, String key, Object... params) throws Exception {
-        CompletableFuture<Boolean> f = plugin.getDatabase()
+        CompletableFuture<Integer> f = plugin.getDatabase()
                 .executeUpdateAsync(sql, params)
                 .orTimeout(dbTimeoutMillis, TimeUnit.MILLISECONDS)
                 .handle((r, ex) -> {
                     if (ex != null) {
                         logger.error("删除变量失败: " + key, ex);
-                        return false;
+                        return null;
                     }
-                    return true;
+                    return r;
                 });
-        return f.get(dbTimeoutMillis, TimeUnit.MILLISECONDS);
+        Integer affected = f.get(dbTimeoutMillis, TimeUnit.MILLISECONDS);
+        if (affected == null) {
+            return false;
+        }
+        if (affected <= 0) {
+            logger.warn("删除全局变量未删除任何数据: " + key);
+            return false;
+        }
+        logger.info("删除全局变量成功: " + key + " 共删除 " + affected + " 行");
+        return true;
     }
 
     /**
@@ -762,9 +775,16 @@ public class VariableCycleTask {
         ZonedDateTime normalizedLast = normalizeCycleStart(cycleType, lastReset);
 
         if (normalizedLast.isAfter(cycleStart)) {
-            logger.warn("检测到未来的" + cycleType + "重置记录，跳过补偿: 上次="
+            logger.warn("检测到未来的" + cycleType + "重置记录，准备自动纠正: 上次="
                     + normalizedLast + " 当前=" + cycleStart);
-            return pending;
+            ZonedDateTime corrected = rectifyFutureResetTimestamp(cycleType, cycleStart);
+            if (corrected != null) {
+                normalizedLast = corrected;
+            } else {
+                logger.warn("未来时间纠正失败，仍将尝试执行当前周期补偿: " + cycleType);
+                pending.add(cycleStart);
+                return pending;
+            }
         }
         if (!normalizedLast.isBefore(cycleStart)) {
             return pending;
@@ -802,6 +822,25 @@ public class VariableCycleTask {
                     " 次，自上次重置 " + normalizedLast + " 至当前起点 " + cycleStart);
         }
         return pending;
+    }
+
+    /**
+     * 自动纠正记录在未来的 last-reset 时间，避免跳过补偿
+     */
+    private ZonedDateTime rectifyFutureResetTimestamp(String cycleType, ZonedDateTime cycleStart) {
+        ZonedDateTime corrected = retreatCycleStart(cycleStart, cycleType);
+        if (corrected == null) {
+            corrected = cycleStart.minusSeconds(1);
+        }
+        corrected = normalizeCycleStart(cycleType, corrected);
+        long correctedMillis = corrected.toInstant().toEpochMilli();
+        synchronized (yamlUtil) {
+            setDataValue("cycle.last-" + cycleType.toLowerCase() + "-reset", correctedMillis);
+            saveDataConfig("自动纠正未来周期记录: " + cycleType);
+        }
+        logger.warn("已自动将 " + cycleType + " 周期的最后重置时间回调至 " + corrected
+                + "，请检查服务器时间与数据库删除流程是否正常");
+        return corrected;
     }
 
     /**
@@ -843,6 +882,28 @@ public class VariableCycleTask {
                 return calculateMonthlyCycleStart(start.plusMonths(1));
             case "yearly":
                 return calculateYearlyCycleStart(start.plusYears(1));
+            default:
+                return null;
+        }
+    }
+
+    /**
+     * 推算上一个周期的起点，用于修正 future 时间
+     */
+    private ZonedDateTime retreatCycleStart(ZonedDateTime start, String cycleType) {
+        switch (cycleType.toLowerCase()) {
+            case "minute":
+                return calculateMinuteCycleStart(start.minusMinutes(1));
+            case "hour":
+                return calculateHourlyCycleStart(start.minusHours(1));
+            case "daily":
+                return calculateDailyCycleStart(start.minusDays(1));
+            case "weekly":
+                return calculateWeeklyCycleStart(start.minusWeeks(1));
+            case "monthly":
+                return calculateMonthlyCycleStart(start.minusMonths(1));
+            case "yearly":
+                return calculateYearlyCycleStart(start.minusYears(1));
             default:
                 return null;
         }
