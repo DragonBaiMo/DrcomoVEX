@@ -153,7 +153,7 @@ public class VariableCycleTask {
         }
 
         ZoneId zone = getValidatedTimeZone();
-        ZonedDateTime now = ZonedDateTime.now(zone);
+        ZonedDateTime now = getCurrentTime(zone);
         try {
             // 为避免短周期补偿占据大量时间，导致日周等长周期重置被延迟，这里按“长周期 → 短周期”的顺序执行。
             // 这样即使离线时间较长，也能优先完成 daily 等关键周期的重置，保证玩家体验。
@@ -258,7 +258,7 @@ public class VariableCycleTask {
         /** 执行具体重置 - 基于正确的时间对比逻辑 */
         private boolean performResets() {
             Set<String> keys = variablesManager.getAllVariableKeys();
-            ZonedDateTime now = ZonedDateTime.now(getValidatedTimeZone());
+            ZonedDateTime now = getCurrentTime(getValidatedTimeZone());
             // 对齐本次运行的“周期起点”，例如：
             // minute: 当前分钟的00秒；daily: 当日00:00:00；weekly: 本周一00:00:00；
             // monthly: 本月1日00:00:00；yearly: 本年1月1日00:00:00。
@@ -300,7 +300,10 @@ public class VariableCycleTask {
                     Long lastResetMillis = getLastResetTime(key);
                     if (lastResetMillis != null) {
                         ZonedDateTime lastResetTime = Instant.ofEpochMilli(lastResetMillis).atZone(now.getZone());
-                        if (!lastResetTime.isBefore(cycleStart)) {
+                        if (lastResetTime.isAfter(cycleStart)) {
+                            logger.warn("变量 " + key + " 的重置记录位于未来，将在本次补偿中纠正: 上次="
+                                    + lastResetTime + " 目标=" + cycleStart);
+                        } else if (!lastResetTime.isBefore(cycleStart)) {
                             logger.debug("跳过重置(本周期已处理): " + key + " 上次: " + lastResetTime + " 周期起: " + cycleStart);
                             continue;
                         }
@@ -449,9 +452,14 @@ public class VariableCycleTask {
 
                 // 判定规则（防止“新创建后立刻被当前刻度重置”）：
                 // 1) 若本刻度已重置过(最后重置时间 >= 本刻度计划时间)，则跳过
-                if (lastResetTime != null && !lastResetTime.isBefore(lastScheduledExec)) {
-                    logger.debug("跳过Cron重置(本刻度已重置): " + key);
-                    continue;
+                if (lastResetTime != null) {
+                    if (lastResetTime.isAfter(lastScheduledExec)) {
+                        logger.warn("Cron变量 " + key + " 的重置记录位于未来，将立即补偿: 上次="
+                                + lastResetTime + " 目标=" + lastScheduledExec);
+                    } else if (!lastResetTime.isBefore(lastScheduledExec)) {
+                        logger.debug("跳过Cron重置(本刻度已重置): " + key);
+                        continue;
+                    }
                 }
                 // 2) 若变量在本刻度计划时间之后才创建/首次修改(首次修改时间 > 本刻度计划时间)，则跳过，避免“首次添加即被当前刻度清空”
                 if (firstModifiedTime.isAfter(lastScheduledExec)) {
@@ -501,7 +509,7 @@ public class VariableCycleTask {
             acquired = true;
 
             if (isGlobal) {
-                return executeDeleteWithTimeout(
+                return executeDeleteWithTimeoutHook(
                         "DELETE FROM server_variables WHERE variable_key = ?",
                         key, key
                 );
@@ -565,7 +573,7 @@ public class VariableCycleTask {
             logger.debug("执行分批删除玩家变量: SQL=" + deleteSql
                     + "，变量键=" + key + "，批次大小=" + playerDeleteBatchSize);
 
-            Integer deleted = executeDeleteReturningCount(
+            Integer deleted = executeDeleteReturningCountHook(
                     deleteSql,
                     key,
                     deleteParams
@@ -579,8 +587,8 @@ public class VariableCycleTask {
 
             if (deleted < playerDeleteBatchSize) {
                 if (totalDeleted == 0) {
-                    logger.warn("玩家变量分批删除结束但未删除任何数据: " + key);
-                    return false;
+                    logger.info("玩家变量分批删除完成: " + key + " 数据库中未找到需要删除的记录，视为已同步");
+                    return true;
                 }
                 logger.info("玩家变量分批删除完成: " + key + " 共删除 " + totalDeleted + " 行");
                 return true;
@@ -629,11 +637,39 @@ public class VariableCycleTask {
             return false;
         }
         if (affected <= 0) {
-            logger.warn("删除全局变量未删除任何数据: " + key);
-            return false;
+            logger.info("删除全局变量时未发现需要清理的数据: " + key + "，视为已同步");
+            return true;
         }
         logger.info("删除全局变量成功: " + key + " 共删除 " + affected + " 行");
         return true;
+    }
+
+    /**
+     * 提供可覆盖的时间来源，便于测试或自定义时间策略。
+     */
+    protected ZonedDateTime getCurrentTime(ZoneId zone) {
+        return ZonedDateTime.now(zone);
+    }
+
+    /**
+     * 提供可覆盖的删除入口，默认调用真实数据库操作。
+     */
+    protected boolean performDeletion(boolean isGlobal, String key) {
+        return deleteVariableFromDb(isGlobal, key);
+    }
+
+    /**
+     * 提供可覆盖的删除执行入口，默认执行真实 SQL。
+     */
+    protected Integer executeDeleteReturningCountHook(String sql, String key, Object... params) {
+        return executeDeleteReturningCount(sql, key, params);
+    }
+
+    /**
+     * 提供可覆盖的全局删除入口，默认执行真实 SQL。
+     */
+    protected boolean executeDeleteWithTimeoutHook(String sql, String key, Object... params) throws Exception {
+        return executeDeleteWithTimeout(sql, key, params);
     }
 
     /**
@@ -960,7 +996,7 @@ public class VariableCycleTask {
      */
     private boolean safeDeleteAndClear(
             boolean isGlobal, String key, int attempt, boolean isCron) {
-        if (deleteVariableFromDb(isGlobal, key)) {
+        if (performDeletion(isGlobal, key)) {
             String label = isCron ? "Cron变量" : "变量";
             String attemptInfo = isCron ? "" : " (第" + attempt + "次尝试)";
             logger.info("正在重置" + label + ": " + key + attemptInfo);
