@@ -214,7 +214,13 @@
 
       * **返回类型:** `void`
       * **功能描述:** 关闭并清理所有由 `watchConfig` 创建的监听器，并同时清空内
-        部 JAR 条目缓存。通常在插件停用时调用，以避免后台线程与内存泄露。
+        部 JAR 条目缓存。**已由 `close()` 方法涵盖，建议在插件卸载时直接调用 `close()`。**
+
+  * #### `close()`
+
+      * **返回类型:** `void`
+      * **功能描述:** 关闭 `WatchService` 并中断、等待监听线程退出，同时清理内
+        部缓存。**必须在插件 `onDisable()` 调用**，否则可能导致线程与资源泄漏。
 
   * #### `clearJarCache()`
 
@@ -230,3 +236,24 @@
           * `path` (`String`): 配置路径。
           * `type` (`Class<T>`): 期望的类型，例如 `String.class`。
           * `defaultValue` (`T`): 默认值。
+
+
+**4. 与消息颜色预解析协同（最佳实践）**
+
+  * 要点：颜色/渐变解析较耗时，应前移到“配置重载/监听回调”阶段完成一次性预解析。
+  * 做法：挑选相对静态的键，`ColorUtil.translateColors(...)` 后写入业务侧缓存；发送阶段仅做占位符替换。
+  * 收益：降低高频发送的 CPU 开销。
+
+```java
+// 极简思路：变更→重载→回调内重建缓存
+Map<String, String> cache = new HashMap<>();
+void rebuild(MessageService ms, List<String> keys) {
+  cache.clear();
+  for (String k : keys) {
+    String raw = ms.getRaw(k);
+    if (raw != null) cache.put(k, ColorUtil.translateColors(raw));
+  }
+}
+yamlUtil.watchConfig("languages/zh_CN", cfg -> rebuild(messageService, keys));
+// 发送：papi.replace(player, cache.getOrDefault(key, messageService.getRaw(key)));
+```

@@ -30,6 +30,27 @@
           * `where` (`SlotPredicate`): 槽位判断条件。
           * `action` (`ClickAction`): 点击回调。
 
+  * #### `registerForSlot(String sessionId, int slot, ClickAction action)`
+
+      * **返回类型:** `void`
+      * **功能描述:** 为指定会话的“确定槽位”注册回调。该方法是性能优化版注册方式，分发时可 O(1) 直达，无需遍历谓词。
+      * **兼容性:** 与 `register` 共存，旧代码无需修改；仅在你已知槽位固定时推荐使用本方法。
+      * **参数说明:**
+          * `sessionId` (`String`): 会话标识。
+          * `slot` (`int`): 槽位索引（从 0 开始）。
+          * `action` (`ClickAction`): 点击回调。
+
+  * #### `registerOnceForSlot(String sessionId, int slot, ClickAction action)`
+
+      * **返回类型:** `void`
+      * **功能描述:** 与 `registerForSlot` 类似，但为“一次性回调”，首次触发后自动注销。
+      * **兼容性:** 与 `registerOnce` 共存，完全兼容旧代码。
+      * **参数说明:**
+          * `sessionId` (`String`): 会话标识。
+          * `slot` (`int`): 槽位索引（从 0 开始）。
+          * `action` (`ClickAction`): 点击回调。
+
+
   * #### `unregister(String sessionId)`
 
       * **返回类型:** `void`
@@ -97,6 +118,7 @@ public class MyListener implements Listener {
 | # | 场景 | 易错点 | 推荐做法 |
 |---|------|--------|----------|
 | 1 | **事件覆盖不全** | 仅监听 `InventoryClickEvent` 中的 "PICKUP_<something>", 遗漏 Shift-Click、数字键 (`KEY_NUMBER`)，拖拽 (`InventoryDragEvent`)、副手交换 (`SWAP_OFFHAND`)、丢弃键 (`DROP` / `CONTROL_DROP`) 等 | 建立 **统一交互调度层**：<br>- 对所有相关事件注册监听；<br>- 首先归一化为内部 `Action` 枚举，再转业务处理；<br>- 使用字符串比对或反射以兼容旧 API 中缺失的枚举值 |
+| 2 | **会话关闭递归** | `closeSession` 在 `InventoryCloseEvent` 中直接调用，导致 `close → onClose → close` 的递归与刷屏 | 使用 **每玩家关闭标记 + 延迟 1 tick** 的方式调用 `closeSession`；内部触发关闭时在 `onClose` 里短路 |
 | 3 | **权限 / 开关遗漏** | 忽略 bypass 权限或全局功能开关导致误封、体验异常 | 在调度层最前端插入 **权限 & 开关短路** 判断；支持热插拔（reload 时即时生效） |
 
 **集成风险 (Integration Risks)**

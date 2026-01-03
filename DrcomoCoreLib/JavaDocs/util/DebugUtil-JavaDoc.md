@@ -3,7 +3,7 @@
 **1. 概述 (Overview)**
 
   * **完整路径:** `cn.drcomo.corelib.util.DebugUtil`
-  * **核心职责:** 一个通用的调试日志工具，旨在为插件提供分级别的、带前缀的控制台日志输出。它允许开发者根据需要动态调整日志级别，从而在开发和生产环境中灵活地控制日志的详细程度。
+  * **核心职责:** 一个通用的调试日志工具，旨在为插件提供分级别的、带前缀的日志输出，并允许在运行期动态调整日志级别与控制台输出开关，从而在开发和生产环境中灵活地控制日志的详细程度。
 
 **2. 如何实例化 (Initialization)**
 
@@ -101,6 +101,13 @@
           * `message` (`String`): 对错误的描述信息。
           * `t` (`Throwable`): 捕获到的异常对象。
 
+  * #### `setConsoleOutput(boolean enabled)`
+
+      * **返回类型:** `void`
+      * **功能描述:** 控制是否继续向 Bukkit 默认控制台输出日志；关闭后仅保留自定义 Handler 的输出。
+      * **参数说明:**
+          * `enabled` (`boolean`): `true` 表示启用控制台输出，`false` 表示关闭。
+
 **4. 高级配置示例 (Advanced Usage)**
 
   * 自定义前缀与模板：
@@ -113,6 +120,11 @@
   * 将日志写入额外文件：
     ```java
     logger.addFileHandler(new File(getDataFolder(), "debug.log"));
+    ```
+
+  * 动态关闭控制台输出：
+    ```java
+    logger.setConsoleOutput(false);
     ```
 
   * 也可使用 `addHandler()` 转发到自定义 `java.util.logging.Handler`。

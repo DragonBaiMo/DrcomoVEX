@@ -300,6 +300,7 @@ public class VariableCycleTask {
                     Long lastResetMillis = getLastResetTime(key);
                     if (lastResetMillis != null) {
                         ZonedDateTime lastResetTime = Instant.ofEpochMilli(lastResetMillis).atZone(now.getZone());
+                        lastResetTime = sanitizeFutureResetTime(key, lastResetTime, cycleStart, now, cycleType);
                         if (!lastResetTime.isBefore(cycleStart)) {
                             logger.debug("跳过重置(本周期已处理): " + key + " 上次: " + lastResetTime + " 周期起: " + cycleStart);
                             continue;
@@ -446,6 +447,7 @@ public class VariableCycleTask {
                 ZonedDateTime lastResetTime = (lastResetMillis != null)
                         ? Instant.ofEpochMilli(lastResetMillis).atZone(now.getZone())
                         : null;
+                lastResetTime = sanitizeFutureResetTime(key, lastResetTime, lastScheduledExec, now, "cron");
 
                 // 判定规则（防止“新创建后立刻被当前刻度重置”）：
                 // 1) 若本刻度已重置过(最后重置时间 >= 本刻度计划时间)，则跳过
@@ -702,6 +704,35 @@ public class VariableCycleTask {
             long time = getDataLong(resetKey, 0L);
             return time > 0 ? time : null;
         }
+    }
+
+    /**
+     * 防止变量重置时间记录落在未来导致永远跳过重置，自动回调到当前周期前一秒。
+     */
+    private ZonedDateTime sanitizeFutureResetTime(
+            String key,
+            ZonedDateTime recordedTime,
+            ZonedDateTime referencePoint,
+            ZonedDateTime now,
+            String cycleLabel
+    ) {
+        if (recordedTime == null || referencePoint == null) {
+            return recordedTime;
+        }
+        // 允许极小漂移（1分钟），超过则认为记录异常
+        if (recordedTime.isAfter(now.plusMinutes(1))) {
+            ZonedDateTime corrected = referencePoint.minusSeconds(1);
+            updateVariableResetTime(key, corrected.toInstant().toEpochMilli());
+            logger.warn("检测到未来的重置时间记录，已自动回调: " +
+                    "变量=" + key +
+                    " 周期=" + cycleLabel +
+                    " 原记录=" + recordedTime +
+                    " 参考点=" + referencePoint +
+                    " 当前=" + now +
+                    " 新记录=" + corrected);
+            return corrected;
+        }
+        return recordedTime;
     }
 
     // ============ 时间计算辅助方法 ============

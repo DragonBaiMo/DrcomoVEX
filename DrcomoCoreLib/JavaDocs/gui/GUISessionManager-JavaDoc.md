@@ -35,7 +35,7 @@
 
   * #### `boolean isSessionInventoryClick(Player player, InventoryClickEvent event)`
 
-      * **功能描述:** 基于会话登记的 Inventory 与 `event.getClickedInventory()` 比较，精准判断点击是否发生在自定义 GUI 区域。
+      * **功能描述:** 基于会话登记的 Inventory 与 `event.getClickedInventory()` 引用比较（同一实例）判断是否发生在自定义 GUI 区域。
       * **返回值:** 在当前会话 GUI 区域返回 `true`。
       * **使用场景:** 需严格区分 GUI 与玩家背包时调用。
 
@@ -74,7 +74,7 @@
   * #### `validateSessionInventory(Player player, Inventory inv)`
 
       * **返回类型:** `boolean`
-      * **功能描述:** 检查给定界面是否属于玩家当前会话，用于拦截非法或过期的操作。
+      * **功能描述:** 检查给定界面是否属于玩家当前会话（引用同一实例），用于拦截非法或过期的操作。
       * **参数说明:**
           * `player` (`Player`): 目标玩家。
           * `inv` (`Inventory`): 要验证的界面实例。
@@ -94,11 +94,34 @@
 
   * **会话生命周期管理：**
     - InventoryCloseEvent 可能多次触发，必须通过会话状态或 Set<UUID> 做幂等保护，防止重复发放或回收物品。
-    - 会话状态应与玩家实际界面保持同步，避免因异步/延迟导致状态错乱。
+    - 会话状态应与玩家实际界面保持同步，避免因异步/延迟导致状态错乱。内部以 `UUID` 索引并采用 Inventory 引用级校验，可减少等值不同实例带来的误判。
+    - 建议在 onClose 中采用“每玩家关闭标记 + 延迟 1 tick 调用 closeSession”的方式，避免 `close → onClose → close` 递归：
+      ```java
+      private final Set<UUID> closing = ConcurrentHashMap.newKeySet();
+
+      @EventHandler
+      public void onClose(InventoryCloseEvent e) {
+        Player p = (Player) e.getPlayer();
+        if (!sessions.hasSession(p)) return;
+        if (closing.contains(p.getUniqueId())) return; // 内部安全关闭，短路
+        if (sessions.validateSessionInventory(p, e.getInventory())) {
+          closing.add(p.getUniqueId());
+          Bukkit.getScheduler().runTask(plugin, () -> {
+            try { sessions.closeSession(p); } finally { closing.remove(p.getUniqueId()); }
+          });
+        }
+      }
+      ```
 
   * **物品安全回收：**
     - 插件关闭（onDisable）时，务必调用 `flushOnDisable()`，同步返还所有会话内物品，防止调度器失效导致物品丢失。
     - flushOnDisable 只应在主线程调用，且需确保所有玩家会话都被正确遍历。
+
+  * **卸载/重载顺序建议：**
+    1) 停止调度任务与 UI（BossBar 等）
+    2) `closeAllSessions()` 关闭所有 GUI 会话
+    3) 关闭/flush 持久层
+    4) 停止文件监听/异步线程
 
   * **幂等性与重入风险：**
     - 任何涉及物品返还、会话关闭的操作都必须保证只执行一次，典型做法是用会话状态标记或锁机制防止重复。

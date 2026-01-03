@@ -67,6 +67,10 @@ public class MyAwesomePlugin extends JavaPlugin {
             true            // 找不到音效时警告
         );
         mySoundManager.loadSounds(); // 手动加载音效
+        // 也可异步加载，解析完成后会在主线程更新缓存以避免线程安全问题
+        // AsyncTaskManager asyncManager = new AsyncTaskManager(this, myLogger);
+        // mySoundManager.loadSoundsAsync(asyncManager)
+        //     .thenRun(() -> myLogger.info("音效异步加载完成"));
         // 可随时调整全局音量倍率
         mySoundManager.setVolumeMultiplier(1.2f);
         // 可在需要时自定义音量与音调
@@ -104,9 +108,9 @@ public class MyAwesomePlugin extends JavaPlugin {
 
     @Override
     public void onDisable() {
-        // 停止所有文件监听器，防止线程泄露
+        // 关闭 YamlUtil，释放监听线程与 WatchService
         if (myYamlUtil != null) {
-            myYamlUtil.stopAllWatches();
+            myYamlUtil.close();
         }
         
         // 如果使用了 AsyncTaskManager，记得关闭以释放线程资源
@@ -333,7 +337,7 @@ if (coreLib != null) {
 
 
 ### 数值工具
-- **功能描述**：判断字符串是否为有效数字并提供基础加法运算。
+- **功能描述**：提供数值判断、加法运算与常见的整数范围裁剪工具。
 - **包类路径**：`cn.drcomo.corelib.math.NumberUtil`
 - **查询文档**：[查看](./JavaDocs/math/NumberUtil-JavaDoc.md)
 
@@ -414,3 +418,8 @@ if (coreLib != null) {
 - **查询文档 1（核心 API）**：[查看](./JavaDocs/database/SQLiteDB-JavaDoc.md)
 - **查询文档 2（连接池状态）**：[查看](./JavaDocs/database/ConnectionPoolStatus-JavaDoc.md)
 - **查询文档 3（执行统计）**：[查看](./JavaDocs/database/DatabaseMetrics-JavaDoc.md)
+
+### MySQL 同步桥接
+- **功能描述**：封装 MySQL 数据源创建与批量 `REPLACE INTO` 写入逻辑，帮助子插件快速将本地缓存同步至远端数据库。
+- **包类路径**：`cn.drcomo.corelib.database.DatabaseBridge`
+- **查询文档**：[查看](./JavaDocs/database/DatabaseBridge-JavaDoc.md)

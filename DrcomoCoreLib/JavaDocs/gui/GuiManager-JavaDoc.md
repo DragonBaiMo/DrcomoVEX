@@ -7,7 +7,7 @@
 
 **2. 如何实例化 (Initialization)**
 
-  * **核心思想:** 这是一个<em>可实例化</em>的服务类，每个子插件应为其创建独立实例，并通过构造函数注入 `DebugUtil` 以获得符合自身日志级别的输出。
+  * **核心思想:** 这是一个*可实例化*的服务类，每个子插件应为其创建独立实例，并通过构造函数注入 `DebugUtil` 以获得符合自身日志级别的输出。
   * **构造函数:** `public GuiManager(DebugUtil logger)`
   * **代码示例:**
     ```java
@@ -19,30 +19,9 @@
 
 **3. 公共API方法 (Public API Methods)**
 
-  * #### `boolean isDangerousClick(ClickType click)`
-
-    * **功能描述:**
-      判断一次 Bukkit `ClickType` 是否属于**危险交互**，若命中则应在 GUI 层面立即拦截，防止非法放置、物品复制或丢失等问题。
-    * **参数说明:**
-      * `click` (`ClickType`) — 触发事件的点击类型；传入 `null` 时同样视为危险操作。
-    * **返回值:**
-      * `true` — 危险点击，需拦截；
-      * `false` — 安全点击，可继续处理。
-    * **判定逻辑:**
-      依次匹配下列任一条件即返回 `true`：
-        - `click.isShiftClick()`     // Shift-单击或 Shift-双击
-        - `click.isKeyboardClick()`   // 数字键、Q 键等快捷键操作
-        - `click.isCreativeAction()`  // 创意模式特有点击
-        - `click == ClickType.DOUBLE_CLICK` // 双击
-        - `click == ClickType.SWAP_OFFHAND` // 主/副手物品交换
-        - `click == ClickType.CONTROL_DROP` // Ctrl + Q 丢弃
-        - `click == ClickType.NUMBER_KEY`  // 数字键替换槽位
-        - `click == ClickType.DROP`     // Q 键丢弃
-        - `click == ClickType.UNKNOWN`   // 未知类型（保险起见必拦截）
-
   * #### `void clearCursor(Player player, InventoryClickEvent event)`
 
-      * **功能描述:** 清空玩家鼠标光标上的物品堆，更新背包视图；若出现异常将记录到日志。
+      * **功能描述:** 清空玩家鼠标光标上的物品堆并更新背包视图；内部已做**热路径优化**，仅当光标确有物品时才执行清空与刷新，避免不必要的 UI 同步成本；若出现异常将记录到日志。
       * **参数说明:**
           * `player` (`Player`): 目标玩家。
           * `event` (`InventoryClickEvent`): 原始事件对象。
@@ -80,3 +59,10 @@
 - **高频事件**：背包事件与移动事件并列为顶级高频，禁止在主线程执行 O(n²) 搜索或 NBT 深拷贝。将静态常量（如允许操作的 material 列表）缓存到 `static final Set<Material>`，避免每次事件重建。
 - **同步 vs. 异步**：所有 Bukkit API 的物品栈修改必须在主线程。若业务逻辑需异步（数据库 / HTTP），请先复制轻量数据异步处理，再把结果 `Bukkit.getScheduler().runTask(plugin, () -> {...})` 回主线程写入物品。
 - **反射调用开销**：反射仅用于初始化时探测 & 缓存 `MethodHandle`，运行期用缓存对象调用。
+
+**6. 统一拦截建议（与 ClickTypeUtil/InventoryAction 配合）**
+- 在 GUI 入口统一拦截以下高风险操作：
+  - Shift-Click、数字键（HOTBAR_SWAP/HOTBAR_MOVE_AND_READD）、COLLECT_TO_CURSOR、MOVE_TO_OTHER_INVENTORY
+  - 拖拽（InventoryDragEvent）
+  - Drop/Control-Drop、副手交换
+- 鼠标光标上的物品堆命中危险交互时应立刻调用 `clearCursor(player, event)`，避免残留造成数据错乱或复制漏洞。

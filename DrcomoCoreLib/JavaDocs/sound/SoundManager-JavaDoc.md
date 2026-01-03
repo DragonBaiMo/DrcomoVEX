@@ -40,6 +40,11 @@
     // 最重要的一步：实例化后，必须调用 loadSounds() 来加载配置
     soundManager.loadSounds();
 
+    // 若需异步加载以避免阻塞主线程，可使用 AsyncTaskManager
+    AsyncTaskManager manager = new AsyncTaskManager(myPlugin, myLogger);
+    soundManager.loadSoundsAsync(manager)
+        .thenRun(() -> myLogger.info("音效异步加载完成"));
+
     // 运行时可调整全局音量倍率
     soundManager.setVolumeMultiplier(1.2f);
 
@@ -54,11 +59,21 @@
       * **功能描述:** 从构造时指定的 YAML 配置文件中读取所有音效定义，并将其解析、缓存到内存中，以备后续快速播放。这是在实例化之后必须调用的初始化方法。
       * **参数说明:** 无。
 
-  * #### `reloadSounds()`
+  * #### `loadSoundsAsync(AsyncTaskManager taskManager)`
 
-      * **返回类型:** `void`
-      * **功能描述:** 清空现有音效缓存，并重新执行 `loadSounds()` 流程。用于在不重启服务器的情况下，热重载音效配置。
-      * **参数说明:** 无。
+      * **返回类型:** `CompletableFuture<Void>`
+      * **功能描述:** 通过传入的 `AsyncTaskManager` 异步读取并解析配置，解析完成后在主线程更新缓存。
+      * **线程安全:** 异步解析过程中不应访问 `soundCache`，所有缓存更新均在主线程执行。
+      * **参数说明:**
+          * `taskManager` (`AsyncTaskManager`): 异步任务管理器。
+
+  * #### `reloadSounds(AsyncTaskManager taskManager)`
+
+      * **返回类型:** `CompletableFuture<Void>`
+      * **功能描述:** 清空现有音效缓存，并异步调用 `loadSoundsAsync()` 重载配置。完成后 Future 即会结束，可用于回调通知。
+      * **线程安全:** 与 `loadSoundsAsync` 相同，内部确保在主线程写入缓存。
+      * **参数说明:**
+          * `taskManager` (`AsyncTaskManager`): 异步任务管理器。
 
   * #### `hasSound(String key)`
 
