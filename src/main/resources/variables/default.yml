@@ -52,6 +52,40 @@ variables:
     scope: "player"
     type: "STRING"
     initial: "正常"
+
+  # 玩家体力 - 每日硬重置 + 全天渐进恢复 + 倒计时
+  player_energy:
+    name: "玩家体力"
+    scope: "player"
+    type: "INT"
+    initial: 50
+    min: 0
+    max: 50
+    cycle: "daily"                # 每天重置到 50
+    regen: "1/5m"                 # 全天每 5 分钟 +1，直到 max
+
+  player_energy_next_regen:
+    name: "体力下次恢复秒数"
+    scope: "player"
+    type: "INT"
+    initial: "${regen_next:player_energy}"
+
+  # 玩家精力 - 每日硬重置 + 全天渐进恢复 + 倒计时
+  player_focus:
+    name: "玩家精力"
+    scope: "player"
+    type: "INT"
+    initial: 50
+    min: 0
+    max: 50
+    cycle: "daily"
+    regen: "1/5m"
+
+  player_focus_next_regen:
+    name: "精力下次恢复秒数"
+    scope: "player"
+    type: "INT"
+    initial: "${regen_next:player_focus}"
   
   # ======================== 周期性变量示例 ========================
   

@@ -4,6 +4,7 @@ import cn.drcomo.DrcomoVEX;
 import cn.drcomo.corelib.util.DebugUtil;
 import cn.drcomo.model.structure.Limitations;
 import cn.drcomo.model.structure.ValueType;
+import cn.drcomo.model.structure.RegenRule;
 import cn.drcomo.model.structure.Variable;
 import org.bukkit.configuration.ConfigurationSection;
 import org.bukkit.configuration.file.FileConfiguration;
@@ -160,6 +161,24 @@ public class VariableDefinitionLoader {
             }
         }
 
+        String regenRaw = section.getString("regen");
+        if (!isBlank(regenRaw)) {
+            ValueType vt = builder.getValueType();
+            if (vt == null) {
+                vt = ValueType.fromString(typeStr);
+            }
+            if (vt == ValueType.INT || vt == ValueType.DOUBLE || vt == null) {
+                RegenRule rule = RegenRule.parse(regenRaw, logger);
+                if (rule != null) {
+                    builder.regen(rule, regenRaw.trim());
+                } else {
+                    logger.warn("变量 " + key + " 的 regen 配置无效，已忽略");
+                }
+            } else {
+                logger.warn("变量 " + key + " 的 regen 仅支持数值类型，已忽略");
+            }
+        }
+
         builder.limitations(lb.build());
         return builder.build();
     }
@@ -173,5 +192,9 @@ public class VariableDefinitionLoader {
         if (limSec.contains("max-recursion-depth")) lb.maxRecursionDepth(limSec.getInt("max-recursion-depth"));
         if (limSec.contains("max-expression-length")) lb.maxExpressionLength(limSec.getInt("max-expression-length"));
         if (limSec.contains("allow-circular-references")) lb.allowCircularReferences(limSec.getBoolean("allow-circular-references"));
+    }
+
+    private boolean isBlank(String s) {
+        return s == null || s.trim().isEmpty();
     }
 }

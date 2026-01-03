@@ -1,8 +1,0 @@
-target
-.idea
-.vscode
-.cursorignore
-.github
-AGENTS.md
-*py
-*.iml

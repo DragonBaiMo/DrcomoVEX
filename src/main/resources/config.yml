@@ -48,7 +48,7 @@ cycle:
   # 检查间隔（秒）- 设为 1 秒以确保不错过任何重置时间点
   check-interval-seconds: 1
 
-  # 时区设置
+  # 时区设置（周期与 regen 时间窗共用）
   timezone: "Asia/Shanghai"
 
   # 初始延迟（秒）：SQLite 环境建议 5 秒，MySQL 可为 0

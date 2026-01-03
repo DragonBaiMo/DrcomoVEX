@@ -5,6 +5,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
+import cn.drcomo.model.structure.RegenRule;
 
 /**
  * 变量定义类
@@ -25,6 +26,8 @@ public class Variable {
     private final String min;
     private final String max;
     private final String cycle;
+    private final RegenRule regenRule;
+    private final String regenRaw;
     private final Limitations limitations;
     private final List<String> conditions;
     private final List<String> cycleActions;
@@ -44,6 +47,8 @@ public class Variable {
         this.min = builder.min;
         this.max = builder.max;
         this.cycle = builder.cycle;
+        this.regenRule = builder.regenRule;
+        this.regenRaw = builder.regenRaw;
         this.limitations = builder.limitations;
         this.conditions = builder.conditions == null
                 ? Collections.emptyList()
@@ -95,6 +100,14 @@ public class Variable {
     
     public String getCycle() {
         return cycle;
+    }
+
+    public RegenRule getRegenRule() {
+        return regenRule;
+    }
+
+    public String getRegenRaw() {
+        return regenRaw;
     }
     
     public Limitations getLimitations() {
@@ -261,6 +274,10 @@ public class Variable {
     public boolean shouldUseSnapshotValue() {
         return isStrictInitialMode() && hasInitialExpression();
     }
+
+    public boolean hasRegenRule() {
+        return regenRule != null && !regenRule.isEmpty();
+    }
     
     /**
      * 获取变量类型描述
@@ -340,6 +357,8 @@ public class Variable {
         private String min;
         private String max;
         private String cycle;
+        private RegenRule regenRule;
+        private String regenRaw;
         private Limitations limitations;
         private List<String> conditions;
         private List<String> cycleActions;
@@ -387,6 +406,12 @@ public class Variable {
             this.cycle = cycle;
             return this;
         }
+
+        public Builder regen(RegenRule regenRule, String raw) {
+            this.regenRule = regenRule;
+            this.regenRaw = raw;
+            return this;
+        }
         
         public Builder limitations(Limitations limitations) {
             this.limitations = limitations;
@@ -416,6 +441,10 @@ public class Variable {
                 this.cycleActions = new ArrayList<>(actions);
             }
             return this;
+        }
+
+        public ValueType getValueType() {
+            return valueType;
         }
         
         /**

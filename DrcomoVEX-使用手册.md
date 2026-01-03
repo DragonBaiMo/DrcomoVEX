@@ -250,6 +250,64 @@ daily_task_progress:
   cycle: "daily"
 ```
 
+> 说明：变量动态/静态、周期属性均自动推导（含 `${}` 或 `%...%` 则视为动态；有无 `cycle` 决定是否周期），无需填写 `mode`。
+
+#### `regen`
++ **类型**: `String`
++ **说明**: **仅在 `type` 为 `INT` 或 `DOUBLE` 时生效**，为数值变量提供“渐进恢复”规则。
++ **格式**: `恢复量/间隔[@HH:mm-HH:mm][;...]`
+    - `恢复量`: 每次增加的数值，可为整数或小数。
+    - `间隔`: 支持 `s` 秒、`m` 分钟、`h` 小时，例如 `30s`、`5m`、`1h`。
+    - `@时间段` (可选): 限定在每日的某个时间窗口内生效；多段用 `;` 分隔，例如 `1/5m@08:00-12:00; 2/5m@18:00-22:00`。
+    - **与 `cycle` 共存**: `cycle` 负责在周期点把变量硬重置为 `initial`；`regen` 负责在时间窗口内按间隔补充数值，遵守 `max`/`min` 限制。
+    - **时区**: 使用 `config.yml` 的 `cycle.timezone`，无效时回退系统时区。
+    - **下次恢复倒计时占位符**: `${regen_next:<变量键>}` 返回距离下次恢复的剩余秒数；若已满或无有效恢复则为 `0` 或空。
++ **示例**:
+```yaml
+player_energy:
+  scope: "player"
+  type: "INT"
+  initial: 50
+  max: 50
+  cycle: "daily"
+  regen: "1/5m@08:00-22:00"
+```
+
+**体力/精力 + 倒计时示例（默认配置已内置）**
+```yaml
+player_energy:
+  name: "玩家体力"
+  scope: "player"
+  type: "INT"
+  initial: 50
+  max: 50
+  cycle: "daily"
+  regen: "1/5m"                 # 未满时每 5 分钟 +1
+
+player_energy_next_regen:
+  name: "体力下次恢复秒数"
+  scope: "player"
+  type: "INT"
+  mode: "dynamic"
+  initial: "${regen_next:player_energy}"
+
+player_focus:
+  name: "玩家精力"
+  scope: "player"
+  type: "INT"
+  initial: 50
+  max: 50
+  cycle: "daily"
+  regen: "1/5m"
+
+player_focus_next_regen:
+  name: "精力下次恢复秒数"
+  scope: "player"
+  type: "INT"
+  mode: "dynamic"
+  initial: "${regen_next:player_focus}"
+```
+
 #### `limitations`
 + **类型**: `Object`
 + **说明**: 一个包含高级限制与行为控制的配置块。
@@ -846,3 +904,24 @@ variables:
       persistable: false # 不保存到数据库
 ```
 
+## 渐进恢复 (regen) 速记
+
+- 仅对 `INT` / `DOUBLE` 生效，用于“体力/能量”类慢速回复。
+- 写法：`regen: "<恢复量>/<间隔>[@起-止][;...]"`  
+  - `1/5m`：全天每 5 分钟 +1  
+  - `1/5m@08:00-22:00`：仅 8:00-22:00 每 5 分钟 +1  
+  - `2/5m@08:00-20:00; 1/10m@20:00-24:00`：多时间段组合
+- 可与 `cycle` 叠加：`cycle` 负责定时硬重置到 `initial`，`regen` 负责在周期内按时间段渐进恢复，遵守 `min/max`。
+
+示例（每日 0 点重置到 50，白天恢复体力）：
+```yaml
+player_energy:
+  name: "玩家体力"
+  scope: "player"
+  type: "INT"
+  initial: 50
+  min: 0
+  max: 50
+  cycle: "daily"
+  regen: "1/5m@08:00-22:00"
+```

@@ -21,6 +21,7 @@ import cn.drcomo.storage.MultiLevelCacheManager.CacheConfig;
 import cn.drcomo.storage.MultiLevelCacheManager.CacheResult;
 import cn.drcomo.storage.VariableMemoryStorage;
 import cn.drcomo.storage.VariableValue;
+import cn.drcomo.config.ConfigsManager;
 import cn.drcomo.util.DependencyResolver;
 import cn.drcomo.util.ValueLimiter;
 import cn.drcomo.corelib.math.FormulaCalculator;
@@ -28,10 +29,12 @@ import org.bukkit.Bukkit;
 import org.bukkit.OfflinePlayer;
  
 
- 
+
 
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.time.ZoneId;
+import java.time.zone.ZoneRulesException;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -81,6 +84,7 @@ public class RefactoredVariablesManager {
     private final BatchPersistenceManager persistenceManager;
     private final MultiLevelCacheManager cacheManager;
     private final DependencyResolver dependencyResolver;
+    private final ConfigsManager configsManager;
     private final ActionExecutor actionExecutor;
     private final VariableDefinitionLoader definitionLoader;
 
@@ -110,6 +114,7 @@ public class RefactoredVariablesManager {
         this.asyncTaskManager = asyncTaskManager;
         this.placeholderUtil = placeholderUtil;
         this.database = database;
+        this.configsManager = plugin.getConfigsManager();
 
         // 初始化依赖解析器
         this.dependencyResolver = new DependencyResolver(logger);
@@ -288,8 +293,8 @@ public class RefactoredVariablesManager {
                 Optional<VariableResult> pre = checkOpPreconditions(player, variable, key, "GET", playerName, false);
                 if (pre.isPresent()) return pre.get();
 
-                // 条件变量禁用缓存读，避免条件变化导致错误命中
-                if (!variable.hasConditions()) {
+                // 条件变量及 regen 变量禁用缓存读，避免条件或时间驱动的值被延迟
+                if (!variable.hasConditions() && !variable.hasRegenRule()) {
                     CacheResult cacheResult = cacheManager.getFromCache(player, key, variable);
                     if (cacheResult.isHit()) {
                         logger.debug("缓存命中(" + cacheResult.getLevel() + "): " + key);
@@ -306,8 +311,8 @@ public class RefactoredVariablesManager {
                 }
                 // 确保最终返回值经过类型规范化
                 finalValue = normalizeValueByType(finalValue, variable.getValueType());
-                // 条件变量禁用缓存写，避免在条件失效后残留不当缓存
-                if (!variable.hasConditions()) {
+                // 条件变量及 regen 变量禁用缓存写，避免在条件/时间失效后残留不当缓存
+                if (!variable.hasConditions() && !variable.hasRegenRule()) {
                     cacheManager.cacheResult(player, key, finalValue, finalValue);
                 }
                 return VariableResult.success(finalValue, "GET", key, playerName);
@@ -831,12 +836,12 @@ public class RefactoredVariablesManager {
     private String getVariableFromMemoryOrDefault(OfflinePlayer player, Variable variable) {
         // 内部访问也进行门控，但失败时返回空串避免连锁失败
         try {
-            if (variable.hasConditions()) {
-                if (!evaluateConditions(player, variable)) {
-                    logger.debug("内部访问门控未通过: " + variable.getKey());
-                    return "";
-                }
+        if (variable.hasConditions()) {
+            if (!evaluateConditions(player, variable)) {
+                logger.debug("内部访问门控未通过: " + variable.getKey());
+                return "";
             }
+        }
         } catch (Exception e) {
             logger.debug("内部访问门控评估异常，返回空串: " + variable.getKey());
             return "";
@@ -855,7 +860,7 @@ public class RefactoredVariablesManager {
                 if (val.isStrictComputed()) {
                     String currentValue = val.getActualValue();
                     logger.debug("使用已计算的严格模式值" + (hasCycle ? "(有cycle)" : "(无cycle)") + ": " + variable.getKey() + " = " + currentValue);
-                    return currentValue;
+                    return finalizeValueWithRegen(player, variable, val, currentValue);
                 } else {
                     // 首次严格计算
                     String calculatedValue = calculateStrictInitialValue(variable, player, init);
@@ -885,29 +890,30 @@ public class RefactoredVariablesManager {
                     // 标记完成严格计算
                     val.setStrictValue(finalValue);
                     logger.info("完成严格模式初始值计算" + (hasCycle ? "(有cycle)" : "(无cycle)") + ": " + variable.getKey() + " = " + finalValue);
-                    return finalValue;
+                    return finalizeValueWithRegen(player, variable, val, finalValue);
                 }
             } else {
                 // 首次创建
                 String calculatedValue = calculateStrictInitialValue(variable, player, init);
                 updateMemoryAndInvalidate(player, variable, "STRICT:" + calculatedValue + ":" + System.currentTimeMillis());
                 logger.info("首次创建严格模式变量" + (hasCycle ? "(有cycle)" : "(无cycle)") + ": " + variable.getKey() + " = " + calculatedValue);
-                return calculatedValue;
+                return finalizeValueWithRegen(player, variable, val, calculatedValue);
             }
         }
 
         // 默认（非严格）行为
         if (isFormula && !isBlank(init)) {
             String base = resolveExpression(init, player, variable);
-            return (val != null) ? addFormulaIncrement(base, val.getActualValue(), variable.getValueType()) : base;
+            String res = (val != null) ? addFormulaIncrement(base, val.getActualValue(), variable.getValueType()) : base;
+            return finalizeValueWithRegen(player, variable, val, res);
         }
         if (val != null) {
-            return val.getActualValue();
+            return finalizeValueWithRegen(player, variable, val, val.getActualValue());
         }
         if (!isBlank(init)) {
-            return resolveExpression(init, player, variable);
+            return finalizeValueWithRegen(player, variable, val, resolveExpression(init, player, variable));
         }
-        return getDefaultValueByType(variable.getValueType());
+        return finalizeValueWithRegen(player, variable, val, getDefaultValueByType(variable.getValueType()));
     }
 
     /** 设置变量到内存并按 persistable 配置处理脏标记与缓存失效 */
@@ -949,6 +955,153 @@ public class RefactoredVariablesManager {
             cacheManager.invalidateCache(player, key);
         } catch (Exception e) {
             logger.debug("清理缓存失败: " + key + " - " + e.getMessage());
+        }
+    }
+
+    /** 统一出口：在返回前应用渐进恢复 */
+    private String finalizeValueWithRegen(OfflinePlayer player, Variable variable, VariableValue storage, String value) {
+        return applyRegenIfNeeded(player, variable, storage, value);
+    }
+
+    /**
+     * 数值渐进恢复：仅对 INT/DOUBLE、生效 regen 规则的变量执行
+     */
+    private String applyRegenIfNeeded(OfflinePlayer player, Variable variable, VariableValue storage, String currentValue) {
+        if (variable == null || !variable.hasRegenRule() || storage == null) {
+            return currentValue;
+        }
+        ValueType vt = variable.getValueType();
+        if (vt != ValueType.INT && vt != ValueType.DOUBLE) {
+            return currentValue;
+        }
+        Double current = parseDoubleSafe(currentValue);
+        if (current == null) {
+            return currentValue;
+        }
+        Double maxVal = resolveMax(player, variable);
+        if (maxVal != null && current >= maxVal - 1e-9) {
+            return currentValue;
+        }
+        long last = storage.getLastModified();
+        long now = System.currentTimeMillis();
+        double gain = variable.getRegenRule().calculateGain(last, now, resolveRegenZone());
+        if (gain <= 0) {
+            return currentValue;
+        }
+        double next = current + gain;
+        Double minVal = resolveMin(player, variable);
+        if (maxVal != null) {
+            next = Math.min(maxVal, next);
+        }
+        if (minVal != null) {
+            next = Math.max(minVal, next);
+        }
+        String formatted = formatNumber(vt, next);
+        updateMemoryAndInvalidate(player, variable, formatted);
+        return formatted;
+    }
+
+    private Double resolveMax(OfflinePlayer player, Variable variable) {
+        Double v = parseDoubleWithPlaceholders(variable.getMax(), player, variable);
+        if (v != null) return v;
+        if (variable.getLimitations() != null) {
+            v = parseDoubleWithPlaceholders(variable.getLimitations().getMaxValue(), player, variable);
+        }
+        return v;
+    }
+
+    private Double resolveMin(OfflinePlayer player, Variable variable) {
+        Double v = parseDoubleWithPlaceholders(variable.getMin(), player, variable);
+        if (v != null) return v;
+        if (variable.getLimitations() != null) {
+            v = parseDoubleWithPlaceholders(variable.getLimitations().getMinValue(), player, variable);
+        }
+        return v;
+    }
+
+    private Double parseDoubleSafe(String raw) {
+        if (isBlank(raw)) return null;
+        try {
+            return Double.parseDouble(raw.trim());
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    /** 支持占位符/表达式的数值解析（用于 min/max 动态化） */
+    private Double parseDoubleWithPlaceholders(String raw, OfflinePlayer player, Variable variable) {
+        if (isBlank(raw)) return null;
+        String candidate = raw;
+        // 仅在存在占位符或运算符时才解析，避免无谓的 resolveExpression
+        if (raw.contains("%") || raw.contains("${") || raw.matches(".*[+\\-*/()^].*")) {
+            candidate = resolveExpression(raw, player, variable);
+        }
+        return parseDoubleSafe(candidate);
+    }
+
+    private String formatNumber(ValueType vt, double value) {
+        if (vt == ValueType.INT) {
+            return String.valueOf((int) Math.floor(value));
+        }
+        java.math.BigDecimal bd = java.math.BigDecimal.valueOf(value).stripTrailingZeros();
+        return bd.toPlainString();
+    }
+
+    /**
+     * 计算指定变量的下次恢复剩余秒数（仅对数值型、带 regen 的变量有效）
+     */
+    private String resolveRegenCountdown(String targetKey, OfflinePlayer player) {
+        if (isBlank(targetKey)) {
+            return null;
+        }
+        Variable target = getVariableDefinition(targetKey);
+        if (target == null || !target.hasRegenRule()) {
+            return "0";
+        }
+        ValueType vt = target.getValueType();
+        if (vt != ValueType.INT && vt != ValueType.DOUBLE) {
+            return "0";
+        }
+        VariableValue storage = getMemoryValue(player, target);
+        if (storage == null) {
+            return "0";
+        }
+        Double current = parseDoubleSafe(storage.getActualValue());
+        Double maxVal = resolveMax(player, target);
+        if (current != null && maxVal != null && current >= maxVal - 1e-9) {
+            return "0";
+        }
+        long delta = target.getRegenRule().calculateNextMillis(
+                storage.getLastModified(),
+                System.currentTimeMillis(),
+                resolveRegenZone()
+        );
+        if (delta <= 0) {
+            return "0";
+        }
+        long seconds = Math.max(0, delta / 1000);
+        return String.valueOf(seconds);
+    }
+
+    /**
+     * 恢复计算使用的时区，优先读取配置，异常时回退系统默认
+     */
+    private ZoneId resolveRegenZone() {
+        String zid = null;
+        try {
+            if (configsManager != null && configsManager.getMainConfig() != null) {
+                zid = configsManager.getMainConfig().getString("cycle.timezone", "Asia/Shanghai");
+            }
+            if (isBlank(zid)) {
+                zid = "Asia/Shanghai";
+            }
+            return ZoneId.of(zid);
+        } catch (ZoneRulesException ex) {
+            logger.warn("恢复时区配置无效: " + zid + "，回退系统默认");
+            return ZoneId.systemDefault();
+        } catch (Exception ex) {
+            logger.warn("解析恢复时区失败，回退系统默认: " + ex.getMessage());
+            return ZoneId.systemDefault();
         }
     }
 
@@ -1028,8 +1181,41 @@ public class RefactoredVariablesManager {
             result = normalizeValueByType(result, variable.getValueType());
         }
 
-        cacheManager.cacheExpression(expression, player, result);
+        boolean skipRegenCache = shouldSkipExpressionCacheForRegen(expression, variable);
+        if (!skipRegenCache) {
+            cacheManager.cacheExpression(expression, player, result);
+        } else {
+            logger.debug("跳过表达式缓存（包含 regen 变量）: " + expression);
+        }
         return result;
+    }
+
+    /** 判断表达式是否涉及 regen 变量，涉及则跳过缓存以防时间驱动的数值被延迟 */
+    private boolean shouldSkipExpressionCacheForRegen(String expression, Variable variable) {
+        if (variable != null && variable.hasRegenRule()) {
+            return true;
+        }
+        if (isBlank(expression)) {
+            return false;
+        }
+        Matcher matcher = INTERNAL_VAR_PATTERN.matcher(expression);
+        while (matcher.find()) {
+            String match = matcher.group();
+            String varKey = match.substring(2, match.length() - 1);
+            if (varKey.startsWith("regen_next:")) {
+                String targetKey = varKey.substring("regen_next:".length()).trim();
+                Variable target = getVariableDefinition(targetKey);
+                if (target != null && target.hasRegenRule()) {
+                    return true;
+                }
+            } else {
+                Variable dep = getVariableDefinition(varKey);
+                if (dep != null && dep.hasRegenRule()) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     /**
@@ -1085,7 +1271,7 @@ public class RefactoredVariablesManager {
         return null;
     }
 
-    /** 解析内部变量占位符 ${var} */
+    /** 解析内部变量占位符 ${var}，支持 regen_next:<key> 返回下次恢复剩余秒数 */
     private String resolveInternalVariables(String text, OfflinePlayer player) {
         if (text == null || !INTERNAL_VAR_PATTERN.matcher(text).find()) {
             return text;
@@ -1097,10 +1283,16 @@ public class RefactoredVariablesManager {
             sb.append(text, last, m.start());
             String match = m.group();
             String varKey = match.substring(2, match.length() - 1);
-            Variable def = getVariableDefinition(varKey);
             try {
-                String val = def != null ? getVariableFromMemoryOrDefault(player, def) : null;
-                sb.append(val != null ? val : match);
+                if (varKey.startsWith("regen_next:")) {
+                    String targetKey = varKey.substring("regen_next:".length()).trim();
+                    String val = resolveRegenCountdown(targetKey, player);
+                    sb.append(val != null ? val : match);
+                } else {
+                    Variable def = getVariableDefinition(varKey);
+                    String val = def != null ? getVariableFromMemoryOrDefault(player, def) : null;
+                    sb.append(val != null ? val : match);
+                }
             } catch (Exception e) {
                 logger.debug("解析内部变量异常: " + match + " - " + e.getMessage());
                 sb.append(match);
