@@ -25,6 +25,7 @@ import cn.drcomo.config.ConfigsManager;
 import cn.drcomo.util.DependencyResolver;
 import cn.drcomo.util.ValueLimiter;
 import cn.drcomo.corelib.math.FormulaCalculator;
+import cn.drcomo.events.PlayerVariableChangeEvent;
 import org.bukkit.Bukkit;
 import org.bukkit.OfflinePlayer;
  
@@ -341,10 +342,10 @@ public class RefactoredVariablesManager {
 
                 if (isFormulaVariable(variable)) {
                     String increment = calculateIncrementForSet(variable, processed, player);
-                    updateMemoryAndInvalidate(player, variable, increment);
+                    updateMemoryAndInvalidate(player, variable, increment, PlayerVariableChangeEvent.ChangeReason.SET);
                     logger.debug("设置公式变量: " + key + " 增量= " + increment + " 最终值= " + processed + " (异步持久化中)");
                 } else {
-                    updateMemoryAndInvalidate(player, variable, processed);
+                    updateMemoryAndInvalidate(player, variable, processed, PlayerVariableChangeEvent.ChangeReason.SET);
                     logger.debug("设置变量: " + key + " = " + processed + " (异步持久化中)");
                 }
                 return VariableResult.success(processed, "SET", key, playerName);
@@ -393,7 +394,7 @@ public class RefactoredVariablesManager {
                 newIncrement = fitted;
                 displayValue = fitted;
 
-                updateMemoryAndInvalidate(player, variable, newIncrement);
+                updateMemoryAndInvalidate(player, variable, newIncrement, PlayerVariableChangeEvent.ChangeReason.ADD);
                 logger.debug("加法操作: " + key + " = " + displayValue + " (当前: " + currentValue + " + 增加: " + addValue + ")");
                 return VariableResult.success(displayValue, "ADD", key, playerName);
             } catch (Exception e) {
@@ -440,7 +441,7 @@ public class RefactoredVariablesManager {
                 newIncrement = fitted;
                 displayValue = fitted;
 
-                updateMemoryAndInvalidate(player, variable, newIncrement);
+                updateMemoryAndInvalidate(player, variable, newIncrement, PlayerVariableChangeEvent.ChangeReason.REMOVE);
                 logger.debug("删除操作: " + key + " = " + displayValue + " (删除: " + removeValue + ")");
                 return VariableResult.success(displayValue, "REMOVE", key, playerName);
             } catch (Exception e) {
@@ -916,16 +917,36 @@ public class RefactoredVariablesManager {
         return finalizeValueWithRegen(player, variable, val, getDefaultValueByType(variable.getValueType()));
     }
 
-    /** 设置变量到内存并按 persistable 配置处理脏标记与缓存失效 */
+    /** 设置变量到内存并按 persistable 配置处理脏标记与缓存失效（默认 OTHER 原因） */
     private void updateMemoryAndInvalidate(OfflinePlayer player, Variable variable, String value) {
+        updateMemoryAndInvalidate(player, variable, value, PlayerVariableChangeEvent.ChangeReason.OTHER);
+    }
+
+    /** 设置变量到内存并按 persistable 配置处理脏标记与缓存失效，并触发变更事件 */
+    private void updateMemoryAndInvalidate(OfflinePlayer player, Variable variable, String value,
+                                           PlayerVariableChangeEvent.ChangeReason reason) {
         boolean persist = variable.getLimitations() == null || variable.getLimitations().isPersistable();
+        String oldValue = null;
 
         if (variable.isPlayerScoped() && player != null) {
+            // 获取旧值
+            VariableValue oldVarValue = memoryStorage.getPlayerVariable(player.getUniqueId(), variable.getKey());
+            if (oldVarValue != null) {
+                oldValue = oldVarValue.getValue();
+            }
+
             memoryStorage.setPlayerVariable(player.getUniqueId(), variable.getKey(), value);
             if (!persist) {
                 memoryStorage.clearDirtyFlag("player:" + player.getUniqueId() + ":" + variable.getKey());
                 logger.debug("变量设置为不可持久化，跳过数据库保存: " + variable.getKey());
             }
+
+            // 当前上下文缓存失效
+            invalidateCachesSafely(player, variable.getKey());
+
+            // 触发玩家变量变更事件（异步）
+            firePlayerVariableChangeEvent(player, variable.getKey(), oldValue, value, reason);
+
         } else if (variable.isGlobal()) {
             memoryStorage.setServerVariable(variable.getKey(), value);
             if (!persist) {
@@ -934,9 +955,38 @@ public class RefactoredVariablesManager {
             }
             // 全局上下文缓存一并清理
             invalidateCachesSafely(null, variable.getKey());
+            // 注意：全局变量暂不触发事件，因为 PlayerVariableChangeEvent 需要 player
         }
-        // 当前上下文缓存失效
-        invalidateCachesSafely(player, variable.getKey());
+    }
+
+    /**
+     * 异步触发玩家变量变更事件
+     */
+    private void firePlayerVariableChangeEvent(OfflinePlayer player, String variableKey,
+                                                String oldValue, String newValue,
+                                                PlayerVariableChangeEvent.ChangeReason reason) {
+        try {
+            // 判断当前是否在主线程
+            boolean isAsync = !Bukkit.isPrimaryThread();
+            PlayerVariableChangeEvent event = new PlayerVariableChangeEvent(
+                    player, variableKey, oldValue, newValue, reason, isAsync
+            );
+
+            if (isAsync) {
+                // 已经在异步线程，直接触发
+                Bukkit.getPluginManager().callEvent(event);
+            } else {
+                // 在主线程，异步触发以避免阻塞
+                asyncTaskManager.getExecutor().execute(() -> {
+                    PlayerVariableChangeEvent asyncEvent = new PlayerVariableChangeEvent(
+                            player, variableKey, oldValue, newValue, reason, true
+                    );
+                    Bukkit.getPluginManager().callEvent(asyncEvent);
+                });
+            }
+        } catch (Exception e) {
+            logger.debug("触发变量变更事件失败: " + variableKey + " - " + e.getMessage());
+        }
     }
 
     /** 从内存删除变量并清除缓存 */
@@ -997,7 +1047,7 @@ public class RefactoredVariablesManager {
             next = Math.max(minVal, next);
         }
         String formatted = formatNumber(vt, next);
-        updateMemoryAndInvalidate(player, variable, formatted);
+        updateMemoryAndInvalidate(player, variable, formatted, PlayerVariableChangeEvent.ChangeReason.REGEN);
         return formatted;
     }
 

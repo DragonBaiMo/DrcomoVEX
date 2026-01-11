@@ -1,0 +1,2 @@
+warning: in the working copy of 'pom.xml', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/main/java/cn/drcomo/tasks/VariableCycleTask.java', LF will be replaced by CRLF the next time Git touches it

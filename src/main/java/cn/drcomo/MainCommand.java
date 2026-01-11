@@ -12,6 +12,8 @@ import cn.drcomo.managers.PlayerVariablesManager;
 import cn.drcomo.managers.RefactoredVariablesManager;
 import cn.drcomo.managers.ServerVariablesManager;
 import cn.drcomo.model.VariableResult;
+import cn.drcomo.events.VexPreReloadEvent;
+import cn.drcomo.events.VexPostReloadEvent;
 import org.bukkit.Bukkit;
 import org.bukkit.OfflinePlayer;
 import org.bukkit.command.Command;
@@ -475,8 +477,24 @@ public class MainCommand implements CommandExecutor, TabCompleter {
         Bukkit.getScheduler().runTask(plugin, () -> {
             try {
                 logger.info("开始执行完全重载（onDisable + onEnable）...");
+
+                // 触发重载前事件，允许依赖插件清理引用
+                try {
+                    Bukkit.getPluginManager().callEvent(new VexPreReloadEvent());
+                } catch (Exception e) {
+                    logger.debug("触发 VexPreReloadEvent 失败: " + e.getMessage());
+                }
+
                 plugin.onDisable();
                 plugin.onEnable();
+
+                // 触发重载后事件，通知依赖插件重新获取引用
+                try {
+                    Bukkit.getPluginManager().callEvent(new VexPostReloadEvent());
+                } catch (Exception e) {
+                    logger.debug("触发 VexPostReloadEvent 失败: " + e.getMessage());
+                }
+
                 messagesManager.sendMessage(sender, "success.reload", EMPTY_PARAMS);
                 logger.info("完全重载成功，执行者: " + sender.getName());
             } catch (Exception e) {

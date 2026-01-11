@@ -48,6 +48,7 @@ public class VariableCycleTask {
     private final YamlUtil yamlUtil;
     private final CronParser cronParser;
     private static final String DATA_CONFIG = "data";
+    private static final long FUTURE_DRIFT_MILLIS = 60_000L;
     private ScheduledFuture<?> task;
     private volatile boolean waitForInitializationLogged;
 
@@ -155,15 +156,8 @@ public class VariableCycleTask {
         ZoneId zone = getValidatedTimeZone();
         ZonedDateTime now = ZonedDateTime.now(zone);
         try {
-            // 为避免短周期补偿占据大量时间，导致日周等长周期重置被延迟，这里按“长周期 → 短周期”的顺序执行。
-            // 这样即使离线时间较长，也能优先完成 daily 等关键周期的重置，保证玩家体验。
-            runSafeReset("yearly", calculateYearlyCycleStart(now));
-            runSafeReset("monthly", calculateMonthlyCycleStart(now));
-            runSafeReset("weekly", calculateWeeklyCycleStart(now));
-            runSafeReset("daily", calculateDailyCycleStart(now));
-            runSafeReset("hour", calculateHourlyCycleStart(now));
-            runSafeReset("minute", calculateMinuteCycleStart(now));
-            resetCronVariables(now);
+            processStandardCycles(now);
+            processCronCycles(now);
         } catch (DateTimeException e) {
             logger.error("时间计算异常，请检查时区配置: " + zone.getId(), e);
             logBoundaryConditionInfo(now, zone);
@@ -172,322 +166,269 @@ public class VariableCycleTask {
         }
     }
 
-    // ============ 标准周期重置 ============
+    // ============ 新的窗口驱动周期实现（标准 + Cron 调度入口使用） ============
 
-    /** 安全执行重置流程 */
-    private void runSafeReset(String cycleType, ZonedDateTime cycleStart) {
-        List<ZonedDateTime> pendingStarts = expandPendingCycles(cycleType, cycleStart);
-        if (pendingStarts.isEmpty()) {
-            new ResetOperation(cycleType, cycleStart).executeSafely();
-            return;
-        }
-        for (ZonedDateTime pendingStart : pendingStarts) {
-            new ResetOperation(cycleType, pendingStart).executeSafely();
+    /** 长周期优先执行，避免短周期补偿占满时间 */
+    private void processStandardCycles(ZonedDateTime now) {
+        String[] order = new String[]{"yearly", "monthly", "weekly", "daily", "hour", "minute"};
+        for (String type : order) {
+            CycleWindow currentWindow = buildCurrentWindow(type, now);
+            List<CycleWindow> pending = buildPendingWindows(type, currentWindow, now);
+            if (pending.isEmpty()) {
+                continue;
+            }
+            int success = 0;
+            for (CycleWindow window : pending) {
+                boolean completed = resetVariablesInWindow(type, window, now);
+                if (completed) {
+                    writeGlobalLastReset(type, window.getStart());
+                    success++;
+                } else {
+                    logger.warn("窗口执行未完全成功，等待下一轮补偿: " + type + " 窗口起点 " + window.getStart());
+                    break;
+                }
+            }
+            logger.info("完成标准周期检测: " + type + " 窗口数 " + success + "/" + pending.size());
         }
     }
 
-    /**
-     * 真正执行重置的类，封装原子性与回滚逻辑
-     */
-    private class ResetOperation {
-        private final String cycleType;
-        private final long startMillis;
-        private final String lockKey;
-        private long originalLastReset;
-        private boolean timeUpdated;
-        private final List<String> resetList = new ArrayList<>();
-
-        public ResetOperation(String cycleType, ZonedDateTime cycleStart) {
-            this.cycleType = cycleType;
-            this.startMillis = cycleStart.toInstant().toEpochMilli();
-            this.lockKey = "cycle.last-" + cycleType + "-reset";
-        }
-
-        /** 对外统一调用方法，捕获异常并回滚 */
-        public void executeSafely() {
-            try {
-                execute();
-            } catch (Exception e) {
-                logger.error("周期重置操作失败: " + cycleType, e);
-                rollback();
-            }
-        }
-
-        /** 执行重置流程 */
-        private void execute() throws Exception {
-            // 尽量缩短持锁时间：仅创建检查点与最终更新时间戳时持锁
-            synchronized (yamlUtil) {
-                if (!needReset()) return;
-                createCheckpoint();
-            }
-
-            // 非持锁区执行数据库相关操作
-            boolean completed = performResets();
-
-            synchronized (yamlUtil) {
-                if (completed) {
-                    updateTimestamp();
-                } else {
-                    logger.warn("周期重置未完成，将在下一轮重试 - " + cycleType);
-                }
-                clearCheckpoint();
-                if (completed) {
-                    logger.info("安全重置完成 - " + cycleType +
-                            " 周期，重置了 " + resetList.size() + " 个变量");
-                } else {
-                    logger.warn("本轮仅部分变量完成重置 - " + cycleType +
-                            " 周期，成功 " + resetList.size() + " 个，剩余将继续尝试");
-                }
-            }
-        }
-
-        /** 判断是否需要重置 */
-        private boolean needReset() {
-            originalLastReset = getDataLong(lockKey, 0L);
-            if (originalLastReset >= startMillis) {
-                logger.debug("跳过重置 - 已重置过：" + cycleType);
-                return false;
-            }
-            long gap = startMillis - originalLastReset;
-            if (gap > getDangerousThreshold(cycleType)) {
-                logger.warn("长时间未运行，执行 " + cycleType + " 重置");
-            }
-            return true;
-        }
-
-        /** 执行具体重置 - 基于正确的时间对比逻辑 */
-        private boolean performResets() {
-            Set<String> keys = variablesManager.getAllVariableKeys();
-            ZonedDateTime now = ZonedDateTime.now(getValidatedTimeZone());
-            // 对齐本次运行的“周期起点”，例如：
-            // minute: 当前分钟的00秒；daily: 当日00:00:00；weekly: 本周一00:00:00；
-            // monthly: 本月1日00:00:00；yearly: 本年1月1日00:00:00。
-            ZonedDateTime cycleStart = Instant.ofEpochMilli(startMillis).atZone(now.getZone());
-            boolean hadBlockingFailure = false;
-
-            for (String key : keys) {
-                Variable var = variablesManager.getVariableDefinition(key);
-                if (var != null && cycleType.equalsIgnoreCase(var.getCycle())) {
-                    // 读取首次修改时间（跨玩家取 MIN），用于避免“本周期新创建即被重置”
-                    Long firstModified = null;
-                    try {
-                        firstModified = variablesManager
-                                .getFirstModifiedAtAsync(var.isGlobal(), key)
-                                .orTimeout(dbTimeoutMillis, TimeUnit.MILLISECONDS)
-                                .get(dbTimeoutMillis, TimeUnit.MILLISECONDS);
-                    } catch (TimeoutException te) {
-                        logger.warn("跳过重置(首次修改时间查询超时): " + key);
-                        hadBlockingFailure = true;
-                        continue;
-                    } catch (Exception ex) {
-                        logger.error("查询首次修改时间失败: " + key, ex);
-                        hadBlockingFailure = true;
-                        continue;
-                    }
-                    if (firstModified == null) {
-                        logger.debug("跳过重置(变量未曾修改): " + key);
-                        continue;
-                    }
-                    ZonedDateTime firstTime = Instant.ofEpochMilli(firstModified).atZone(now.getZone());
-
-                    // 若该变量在本周期起点之后(含)才出现/首次修改，则本周期不重置
-                    if (!firstTime.isBefore(cycleStart)) {
-                        logger.debug("跳过重置(本周期新创建): " + key + " 首改: " + firstTime + " 周期起: " + cycleStart);
-                        continue;
-                    }
-
-                    // 已于本周期处理过则跳过（保证幂等，避免同日重复重置）
-                    Long lastResetMillis = getLastResetTime(key);
-                    if (lastResetMillis != null) {
-                        ZonedDateTime lastResetTime = Instant.ofEpochMilli(lastResetMillis).atZone(now.getZone());
-                        lastResetTime = sanitizeFutureResetTime(key, lastResetTime, cycleStart, now, cycleType);
-                        if (!lastResetTime.isBefore(cycleStart)) {
-                            logger.debug("跳过重置(本周期已处理): " + key + " 上次: " + lastResetTime + " 周期起: " + cycleStart);
-                            continue;
-                        }
-                    }
-
-                    // 安全重试删除并清理缓存
-                    boolean success = false;
-                    for (int i = 1; i <= 3; i++) {
-                        if (safeDeleteAndClear(var.isGlobal(), key, i, false)) {
-                            success = true;
-                            break;
-                        }
-                        sleepMillis(100L * i);
-                    }
-                    if (success) {
-                        // 将变量的 last-reset-time 对齐记录到“本周期起点”
-                        updateVariableResetTime(key, startMillis);
-                        resetList.add(key);
-                        logger.info("重置变量: " + key +
-                                " 周期: " + cycleType +
-                                " 周期起点: " + cycleStart +
-                                " 当前: " + now + ")");
-                        // 执行周期动作（玩家作用域：对所有在线玩家各执行一次；全局作用域：仅控制台执行一次）
-                        try {
-                            variablesManager.executeCycleActionsOnReset(var, null);
-                        } catch (Exception actEx) {
-                            logger.error("执行重置动作失败: " + key, actEx);
-                        }
-                    } else {
-                        logger.warn("变量 " + key + " 重置失败，已重试3次");
-                        hadBlockingFailure = true;
-                    }
-                }
-            }
-            return !hadBlockingFailure;
-        }
-
-        /** 创建崩服保护检查点 */
-        private void createCheckpoint() {
-            getDataConfig().set("cycle.checkpoint-" + cycleType, System.currentTimeMillis());
-            saveDataConfig("创建重置检查点: " + cycleType);
-        }
-
-        /** 清理检查点 */
-        private void clearCheckpoint() {
-            getDataConfig().set("cycle.checkpoint-" + cycleType, null);
-            saveDataConfig("清理重置检查点: " + cycleType);
-        }
-
-        /** 更新时间戳 */
-        private void updateTimestamp() throws Exception {
-            setDataValue("cycle.last-" + cycleType.toLowerCase() + "-reset", startMillis);
-            saveDataConfig("更新时间戳: " + cycleType);
-            timeUpdated = true;
-        }
-
-        /** 回滚 */
-        private void rollback() {
-            try {
-                synchronized (yamlUtil) {
-                    if (timeUpdated && originalLastReset >= 0) {
-                        setDataValue("cycle.last-" + cycleType.toLowerCase() + "-reset", originalLastReset);
-                    }
-                    getDataConfig().set("cycle.rollback-" + cycleType, System.currentTimeMillis());
-                    saveDataConfig("回滚检查点: " + cycleType);
-                }
-            } catch (Exception ex) {
-                logger.error("回滚操作失败: " + cycleType, ex);
-            }
-        }
-
-
-        /** 线程睡眠工具 */
-        private void sleepMillis(long ms) {
-            try {
-                Thread.sleep(ms);
-            } catch (InterruptedException ie) {
-                Thread.currentThread().interrupt();
-            }
-        }
-
-        /** 获取长时间未运行阈值（毫秒） */
-        private long getDangerousThreshold(String type) {
-            switch (type.toLowerCase()) {
-                case "minute":  return 60L * 60_000;        // 60分钟
-                case "hour":    return 72L * 3_600_000;     // 72小时
-                case "daily":   return 7L * 24 * 3_600_000; // 7天
-                case "weekly":  return 28L * 24 * 3_600_000;
-                case "monthly": return 180L * 24 * 3_600_000;
-                case "yearly":  return 3L * 365 * 24 * 3_600_000;
-                default:        return Long.MAX_VALUE;
-            }
-        }
-    }
-
-    // ============ Cron表达式周期重置 ============
-
-    /** 重置所有 Cron 表达式变量 */
-    private void resetCronVariables(ZonedDateTime now) {
+    /** 统一 Cron 重置入口（窗口化判定） */
+    private void processCronCycles(ZonedDateTime now) {
         Set<String> keys = variablesManager.getAllVariableKeys();
-        List<String> resetList = new ArrayList<>();
-
+        int resetCount = 0;
         for (String key : keys) {
             Variable var = variablesManager.getVariableDefinition(key);
-            String expr = (var == null) ? null : var.getCycle();
-            if (expr != null && expr.contains(" ")) {
-                if (var == null) {
-                    continue;
-                }
-                ExecutionTime executionTime = parseCronExecutionTime(expr);
-                if (executionTime == null) continue;
+            if (var == null) {
+                continue;
+            }
+            String expr = var.getCycle();
+            if (expr == null || !expr.contains(" ")) {
+                continue;
+            }
+            ExecutionTime executionTime = parseCronExecutionTime(expr);
+            if (executionTime == null) {
+                continue;
+            }
 
-                // 若变量从未被修改过，则不参与 Cron 重置
-                Long firstModifiedAtMillis = null;
+            Long firstModifiedAtMillis = null;
+            try {
+                firstModifiedAtMillis = variablesManager
+                        .getFirstModifiedAtAsync(var.isGlobal(), key)
+                        .orTimeout(dbTimeoutMillis, TimeUnit.MILLISECONDS)
+                        .get(dbTimeoutMillis, TimeUnit.MILLISECONDS);
+            } catch (TimeoutException te) {
+                logger.warn("跳过Cron重置(首次修改时间查询超时): " + key);
+                continue;
+            } catch (Exception ex) {
+                logger.error("查询首次修改时间失败: " + key, ex);
+                continue;
+            }
+            if (firstModifiedAtMillis == null) {
+                logger.debug("跳过Cron重置(变量未曾修改): " + key);
+                continue;
+            }
+
+            Optional<ZonedDateTime> lastExecOpt = executionTime.lastExecution(now);
+            if (!lastExecOpt.isPresent()) {
+                logger.debug("跳过Cron重置(无法计算上次执行时间): " + key);
+                continue;
+            }
+            ZonedDateTime lastScheduledExec = lastExecOpt.get();
+
+            ZonedDateTime firstModifiedTime = Instant.ofEpochMilli(firstModifiedAtMillis).atZone(now.getZone());
+            if (!firstModifiedTime.isBefore(lastScheduledExec)) {
+                logger.debug("跳过Cron重置(首次修改在本刻度之后): " + key + " 首改: " + firstModifiedTime + " 本刻度: " + lastScheduledExec);
+                continue;
+            }
+
+            Long lastResetMillis = getLastResetTime(key);
+            ZonedDateTime lastResetTime = (lastResetMillis != null)
+                    ? Instant.ofEpochMilli(lastResetMillis).atZone(now.getZone())
+                    : null;
+            lastResetTime = sanitizeVariableFutureTime(key, lastResetTime, new CycleWindow("cron", lastScheduledExec, null), now, "cron");
+            if (lastResetTime != null && !lastResetTime.isBefore(lastScheduledExec)) {
+                logger.debug("跳过Cron重置(本刻度已重置): " + key);
+                continue;
+            }
+
+            Optional<ZonedDateTime> nextExecOpt = executionTime.nextExecution(now);
+            String nextInfo = nextExecOpt.map(Object::toString).orElse("N/A");
+
+            logger.info("Cron变量需要重置: " + key +
+                    " 上次计划执行: " + lastScheduledExec +
+                    " 下次计划执行: " + nextInfo +
+                    " 当前时间: " + now +
+                    " (" + expr + ")");
+
+            if (safeDeleteAndClear(var.isGlobal(), key, 0, true)) {
+                updateVariableResetTime(key, lastScheduledExec.toInstant().toEpochMilli());
+                resetCount++;
                 try {
-                    firstModifiedAtMillis = variablesManager
-                            .getFirstModifiedAtAsync(var.isGlobal(), key)
-                            .orTimeout(dbTimeoutMillis, TimeUnit.MILLISECONDS)
-                            .get(dbTimeoutMillis, TimeUnit.MILLISECONDS);
-                } catch (TimeoutException te) {
-                    logger.warn("跳过Cron重置(首次修改时间查询超时): " + key);
-                    continue;
-                } catch (Exception ex) {
-                    logger.error("查询首次修改时间失败: " + key, ex);
-                    continue;
+                    variablesManager.executeCycleActionsOnReset(var, null);
+                } catch (Exception actEx) {
+                    logger.error("执行重置动作失败: " + key, actEx);
                 }
-                if (firstModifiedAtMillis == null) {
-                    logger.debug("跳过Cron重置(变量未曾修改): " + key);
-                    continue;
-                }
-
-                // 计算当前时间点对应的上一次计划执行时间（对齐 Cron Tick，例如 0 * * * * ? => 每分钟00秒）
-                Optional<ZonedDateTime> lastExecOpt = executionTime.lastExecution(now);
-                if (!lastExecOpt.isPresent()) {
-                    logger.debug("跳过Cron重置(无法计算上次执行时间): " + key);
-                    continue;
-                }
-                ZonedDateTime lastScheduledExec = lastExecOpt.get();
-
-                // 读取该变量最后一次重置记录时间与首次修改时间
-                ZonedDateTime firstModifiedTime = Instant.ofEpochMilli(firstModifiedAtMillis).atZone(now.getZone());
-                Long lastResetMillis = getLastResetTime(key);
-                ZonedDateTime lastResetTime = (lastResetMillis != null)
-                        ? Instant.ofEpochMilli(lastResetMillis).atZone(now.getZone())
-                        : null;
-                lastResetTime = sanitizeFutureResetTime(key, lastResetTime, lastScheduledExec, now, "cron");
-
-                // 判定规则（防止“新创建后立刻被当前刻度重置”）：
-                // 1) 若本刻度已重置过(最后重置时间 >= 本刻度计划时间)，则跳过
-                if (lastResetTime != null && !lastResetTime.isBefore(lastScheduledExec)) {
-                    logger.debug("跳过Cron重置(本刻度已重置): " + key);
-                    continue;
-                }
-                // 2) 若变量在本刻度计划时间之后才创建/首次修改(首次修改时间 > 本刻度计划时间)，则跳过，避免“首次添加即被当前刻度清空”
-                if (firstModifiedTime.isAfter(lastScheduledExec)) {
-                    logger.debug("跳过Cron重置(首次修改在本刻度之后): " + key +
-                            " 首改: " + firstModifiedTime + " 本刻度: " + lastScheduledExec);
-                    continue;
-                }
-
-                // 仅用于日志展示下一次计划时间，非判定依据
-                Optional<ZonedDateTime> nextExecOpt = executionTime.nextExecution(now);
-                String nextInfo = nextExecOpt.map(Object::toString).orElse("N/A");
-
-                logger.info("Cron变量需要重置: " + key +
-                        " 上次计划执行: " + lastScheduledExec +
-                        " 下次计划执行: " + nextInfo +
-                        " 当前时间: " + now +
-                        " (" + expr + ")");
-
-                if (safeDeleteAndClear(var.isGlobal(), key, 0, true)) {
-                    // 对齐记录到“上次计划执行时间”，确保同一分钟内只重置一次
-                    updateVariableResetTime(key, lastScheduledExec.toInstant().toEpochMilli());
-                    resetList.add(key);
-                    // 执行周期动作（玩家作用域：对所有在线玩家各执行一次；全局作用域：仅控制台执行一次）
-                    try {
-                        variablesManager.executeCycleActionsOnReset(var, null);
-                    } catch (Exception actEx) {
-                        logger.error("执行重置动作失败: " + key, actEx);
-                    }
-                }
+            } else {
+                logger.warn("Cron变量重置失败: " + key);
             }
         }
-        if (!resetList.isEmpty()) {
-            logger.info("已完成 Cron 表达式周期变量重置，共重置 " + resetList.size() + " 个变量");
+        if (resetCount > 0) {
+            logger.info("已完成 Cron 表达式周期变量重置，共重置 " + resetCount + " 个变量");
         }
+    }
+
+    /** 构建当前窗口 */
+    private CycleWindow buildCurrentWindow(String cycleType, ZonedDateTime now) {
+        ZonedDateTime start = normalizeCycleStart(cycleType, now);
+        ZonedDateTime end = advanceCycleStart(start, cycleType);
+        return new CycleWindow(cycleType, start, end);
+    }
+
+    /** 生成需要补偿的窗口序列 */
+    private List<CycleWindow> buildPendingWindows(String cycleType, CycleWindow currentWindow, ZonedDateTime now) {
+        List<CycleWindow> result = new ArrayList<>();
+        Long lastResetMillis;
+        synchronized (yamlUtil) {
+            lastResetMillis = getDataLong("cycle.last-" + cycleType.toLowerCase() + "-reset", 0L);
+        }
+        ZonedDateTime sanitizedLast = sanitizeGlobalLastReset(cycleType, lastResetMillis, currentWindow, now);
+        int limit = getCatchUpLimit(cycleType);
+        List<ZonedDateTime> pendingStarts = computePendingStarts(cycleType, currentWindow.getStart(), sanitizedLast, limit);
+        for (ZonedDateTime start : pendingStarts) {
+            ZonedDateTime end = advanceCycleStart(start, cycleType);
+            result.add(new CycleWindow(cycleType, start, end));
+        }
+        return result;
+    }
+
+    /** 处理窗口内的变量重置 */
+    private boolean resetVariablesInWindow(String cycleType, CycleWindow window, ZonedDateTime now) {
+        Set<String> keys = variablesManager.getAllVariableKeys();
+        boolean hadBlockingFailure = false;
+        int resetCount = 0;
+        for (String key : keys) {
+            Variable var = variablesManager.getVariableDefinition(key);
+            if (var == null) {
+                continue;
+            }
+            String definedCycle = var.getCycle();
+            if (definedCycle == null || definedCycle.contains(" ")) {
+                continue; // Cron 单独处理
+            }
+            if (!cycleType.equalsIgnoreCase(definedCycle)) {
+                continue;
+            }
+
+            Long firstModified = null;
+            try {
+                firstModified = variablesManager
+                        .getFirstModifiedAtAsync(var.isGlobal(), key)
+                        .orTimeout(dbTimeoutMillis, TimeUnit.MILLISECONDS)
+                        .get(dbTimeoutMillis, TimeUnit.MILLISECONDS);
+            } catch (TimeoutException te) {
+                logger.warn("跳过重置(首次修改时间查询超时): " + key);
+                hadBlockingFailure = true;
+                continue;
+            } catch (Exception ex) {
+                logger.error("查询首次修改时间失败: " + key, ex);
+                hadBlockingFailure = true;
+                continue;
+            }
+            if (firstModified == null) {
+                logger.debug("跳过重置(变量未曾修改): " + key);
+                continue;
+            }
+            ZonedDateTime firstTime = Instant.ofEpochMilli(firstModified).atZone(now.getZone());
+            if (!firstTime.isBefore(window.getStart())) {
+                logger.debug("跳过重置(窗口内新创建): " + key + " 首改: " + firstTime + " 窗口: " + window.getStart());
+                continue;
+            }
+
+            Long lastResetMillis = getLastResetTime(key);
+            ZonedDateTime lastResetTime = (lastResetMillis != null)
+                    ? Instant.ofEpochMilli(lastResetMillis).atZone(now.getZone())
+                    : null;
+            lastResetTime = sanitizeVariableFutureTime(key, lastResetTime, window, now, cycleType);
+            if (lastResetTime != null && !lastResetTime.isBefore(window.getStart())) {
+                logger.debug("跳过重置(窗口已处理): " + key + " 上次: " + lastResetTime + " 窗口: " + window.getStart());
+                continue;
+            }
+
+            boolean success = false;
+            for (int i = 1; i <= 3; i++) {
+                if (safeDeleteAndClear(var.isGlobal(), key, i, false)) {
+                    success = true;
+                    break;
+                }
+                sleepQuietly(100L * i);
+            }
+            if (success) {
+                updateVariableResetTime(key, window.getStart().toInstant().toEpochMilli());
+                resetCount++;
+                logger.info("重置变量: " + key +
+                        " 周期: " + cycleType +
+                        " 窗口起点: " + window.getStart() +
+                        " 当前: " + now);
+                try {
+                    variablesManager.executeCycleActionsOnReset(var, null);
+                } catch (Exception actEx) {
+                    logger.error("执行重置动作失败: " + key, actEx);
+                }
+            } else {
+                logger.warn("变量 " + key + " 重置失败，已重试3次");
+                hadBlockingFailure = true;
+            }
+        }
+        if (hadBlockingFailure) {
+            logger.warn("窗口执行存在失败: " + cycleType + " 窗口 " + window.getStart() + " 成功 " + resetCount);
+        } else {
+            logger.info("窗口执行完成: " + cycleType + " 窗口 " + window.getStart() + " 成功 " + resetCount);
+        }
+        return !hadBlockingFailure;
+    }
+
+    /** 记录全局 last-reset 到窗口起点 */
+    private void writeGlobalLastReset(String cycleType, ZonedDateTime start) {
+        synchronized (yamlUtil) {
+            setDataValue("cycle.last-" + cycleType.toLowerCase() + "-reset", start.toInstant().toEpochMilli());
+            saveDataConfig("更新时间戳: " + cycleType);
+        }
+    }
+
+    /** 纠正全局未来时间记录，返回归一化后的起点 */
+    private ZonedDateTime sanitizeGlobalLastReset(String cycleType, Long lastResetMillis, CycleWindow currentWindow, ZonedDateTime now) {
+        if (lastResetMillis == null || lastResetMillis <= 0L) {
+            return null;
+        }
+        ZonedDateTime recorded = Instant.ofEpochMilli(lastResetMillis).atZone(now.getZone());
+        if (recorded.isAfter(now.plus(Duration.ofMillis(FUTURE_DRIFT_MILLIS)))) {
+            ZonedDateTime fallback = retreatCycleStart(currentWindow.getStart(), cycleType);
+            if (fallback == null) {
+                fallback = currentWindow.getStart().minusSeconds(1);
+            }
+            synchronized (yamlUtil) {
+                setDataValue("cycle.last-" + cycleType.toLowerCase() + "-reset", fallback.toInstant().toEpochMilli());
+                saveDataConfig("自动纠正未来周期记录: " + cycleType);
+            }
+            logger.warn("检测到未来的 " + cycleType + " 全局重置记录，已回调到 " + fallback);
+            return fallback;
+        }
+        return normalizeCycleStart(cycleType, recorded);
+    }
+
+    /** 校正变量维度未来时间，确保不会阻断补偿 */
+    private ZonedDateTime sanitizeVariableFutureTime(String key, ZonedDateTime recordedTime, CycleWindow window, ZonedDateTime now, String cycleLabel) {
+        if (recordedTime == null) {
+            return null;
+        }
+        if (recordedTime.isAfter(now.plus(Duration.ofMillis(FUTURE_DRIFT_MILLIS)))) {
+            ZonedDateTime corrected = window.getStart().minusSeconds(1);
+            updateVariableResetTime(key, corrected.toInstant().toEpochMilli());
+            logger.warn("检测到未来的重置时间记录，已自动回调: 变量=" + key + " 周期=" + cycleLabel +
+                    " 原记录=" + recordedTime + " 窗口=" + window.getStart() + " 新记录=" + corrected);
+            return corrected;
+        }
+        return recordedTime;
     }
 
     // ============ 公共工具方法 ============
@@ -735,28 +676,52 @@ public class VariableCycleTask {
         return recordedTime;
     }
 
+    /** 周期窗口对象（闭区间起点，开区间终点） */
+    private static final class CycleWindow {
+        private final String cycleType;
+        private final ZonedDateTime start;
+        private final ZonedDateTime end;
+
+        private CycleWindow(String cycleType, ZonedDateTime start, ZonedDateTime end) {
+            this.cycleType = cycleType;
+            this.start = start;
+            this.end = end;
+        }
+
+        public String getCycleType() {
+            return cycleType;
+        }
+
+        public ZonedDateTime getStart() {
+            return start;
+        }
+
+        public ZonedDateTime getEnd() {
+            return end;
+        }
+    }
+
     // ============ 时间计算辅助方法 ============
 
     /** 每分钟周期开始 */
-    private ZonedDateTime calculateMinuteCycleStart(ZonedDateTime now) {
-        return now.truncatedTo(ChronoUnit.MINUTES);
+    private ZonedDateTime calculateMinuteCycleStart(ZonedDateTime now) {        
+        return normalizeMinute(now);
     }
 
     /** 每小时周期开始 */
-    private ZonedDateTime calculateHourlyCycleStart(ZonedDateTime now) {
-        return now.truncatedTo(ChronoUnit.HOURS);
+    private ZonedDateTime calculateHourlyCycleStart(ZonedDateTime now) {        
+        return normalizeHour(now);
     }
 
     /** 每日周期开始 */
     private ZonedDateTime calculateDailyCycleStart(ZonedDateTime now) {
-        return now.truncatedTo(ChronoUnit.DAYS);
+        return normalizeDay(now);
     }
 
     /** 每周周期开始 */
-    private ZonedDateTime calculateWeeklyCycleStart(ZonedDateTime now) {
+    private ZonedDateTime calculateWeeklyCycleStart(ZonedDateTime now) {        
         try {
-            return now.with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY))
-                    .truncatedTo(ChronoUnit.DAYS);
+            return normalizeWeek(now);
         } catch (Exception e) {
             logger.warn("计算周周期异常，退回至日周期");
             return calculateDailyCycleStart(now);
@@ -764,10 +729,9 @@ public class VariableCycleTask {
     }
 
     /** 每月周期开始 */
-    private ZonedDateTime calculateMonthlyCycleStart(ZonedDateTime now) {
+    private ZonedDateTime calculateMonthlyCycleStart(ZonedDateTime now) {       
         try {
-            return now.with(TemporalAdjusters.firstDayOfMonth())
-                    .truncatedTo(ChronoUnit.DAYS);
+            return normalizeMonth(now);
         } catch (Exception e) {
             logger.warn("计算月周期异常，退回至日周期");
             return calculateDailyCycleStart(now);
@@ -775,10 +739,9 @@ public class VariableCycleTask {
     }
 
     /** 每年周期开始 */
-    private ZonedDateTime calculateYearlyCycleStart(ZonedDateTime now) {
+    private ZonedDateTime calculateYearlyCycleStart(ZonedDateTime now) {        
         try {
-            return now.with(TemporalAdjusters.firstDayOfYear())
-                    .truncatedTo(ChronoUnit.DAYS);
+            return normalizeYear(now);
         } catch (Exception e) {
             logger.warn("计算年周期异常，退回至日周期");
             return calculateDailyCycleStart(now);
@@ -878,21 +841,19 @@ public class VariableCycleTask {
      * 统一将任意时间对齐到对应周期的起点
      */
     private ZonedDateTime normalizeCycleStart(String cycleType, ZonedDateTime time) {
+        return normalizeCycleStartPure(cycleType, time);
+    }
+
+    /** 纯函数：归一化周期起点（可用于测试） */
+    static ZonedDateTime normalizeCycleStartPure(String cycleType, ZonedDateTime time) {
         switch (cycleType.toLowerCase()) {
-            case "minute":
-                return calculateMinuteCycleStart(time);
-            case "hour":
-                return calculateHourlyCycleStart(time);
-            case "daily":
-                return calculateDailyCycleStart(time);
-            case "weekly":
-                return calculateWeeklyCycleStart(time);
-            case "monthly":
-                return calculateMonthlyCycleStart(time);
-            case "yearly":
-                return calculateYearlyCycleStart(time);
-            default:
-                return time;
+            case "minute":  return normalizeMinute(time);
+            case "hour":    return normalizeHour(time);
+            case "daily":   return normalizeDay(time);
+            case "weekly":  return normalizeWeek(time);
+            case "monthly": return normalizeMonth(time);
+            case "yearly":  return normalizeYear(time);
+            default:        return time;
         }
     }
 
@@ -900,21 +861,19 @@ public class VariableCycleTask {
      * 根据当前周期起点推算下一次周期的起点
      */
     private ZonedDateTime advanceCycleStart(ZonedDateTime start, String cycleType) {
+        return advanceCycleStartPure(start, cycleType);
+    }
+
+    /** 纯函数：推进一个周期（可用于测试） */
+    static ZonedDateTime advanceCycleStartPure(ZonedDateTime start, String cycleType) {
         switch (cycleType.toLowerCase()) {
-            case "minute":
-                return calculateMinuteCycleStart(start.plusMinutes(1));
-            case "hour":
-                return calculateHourlyCycleStart(start.plusHours(1));
-            case "daily":
-                return calculateDailyCycleStart(start.plusDays(1));
-            case "weekly":
-                return calculateWeeklyCycleStart(start.plusWeeks(1));
-            case "monthly":
-                return calculateMonthlyCycleStart(start.plusMonths(1));
-            case "yearly":
-                return calculateYearlyCycleStart(start.plusYears(1));
-            default:
-                return null;
+            case "minute":  return normalizeMinute(start.plusMinutes(1));
+            case "hour":    return normalizeHour(start.plusHours(1));
+            case "daily":   return normalizeDay(start.plusDays(1));
+            case "weekly":  return normalizeWeek(start.plusWeeks(1));
+            case "monthly": return normalizeMonth(start.plusMonths(1));
+            case "yearly":  return normalizeYear(start.plusYears(1));
+            default:        return null;
         }
     }
 
@@ -922,21 +881,19 @@ public class VariableCycleTask {
      * 推算上一个周期的起点，用于修正 future 时间
      */
     private ZonedDateTime retreatCycleStart(ZonedDateTime start, String cycleType) {
+        return retreatCycleStartPure(start, cycleType);
+    }
+
+    /** 纯函数：回退一个周期（可用于测试） */
+    static ZonedDateTime retreatCycleStartPure(ZonedDateTime start, String cycleType) {
         switch (cycleType.toLowerCase()) {
-            case "minute":
-                return calculateMinuteCycleStart(start.minusMinutes(1));
-            case "hour":
-                return calculateHourlyCycleStart(start.minusHours(1));
-            case "daily":
-                return calculateDailyCycleStart(start.minusDays(1));
-            case "weekly":
-                return calculateWeeklyCycleStart(start.minusWeeks(1));
-            case "monthly":
-                return calculateMonthlyCycleStart(start.minusMonths(1));
-            case "yearly":
-                return calculateYearlyCycleStart(start.minusYears(1));
-            default:
-                return null;
+            case "minute":  return normalizeMinute(start.minusMinutes(1));
+            case "hour":    return normalizeHour(start.minusHours(1));
+            case "daily":   return normalizeDay(start.minusDays(1));
+            case "weekly":  return normalizeWeek(start.minusWeeks(1));
+            case "monthly": return normalizeMonth(start.minusMonths(1));
+            case "yearly":  return normalizeYear(start.minusYears(1));
+            default:        return null;
         }
     }
 
@@ -944,22 +901,71 @@ public class VariableCycleTask {
      * 针对不同周期的补偿次数上限
      */
     private int getCatchUpLimit(String cycleType) {
+        return getCatchUpLimitPure(cycleType);
+    }
+
+    /** 纯函数：补偿上限（可用于测试） */
+    static int getCatchUpLimitPure(String cycleType) {
         switch (cycleType.toLowerCase()) {
-            case "minute":
-                return 120; // 最多补偿2小时，避免分钟级循环过长
-            case "hour":
-                return 168; // 最多补偿一周
-            case "daily":
-                return 31;  // 最多补偿一个月
-            case "weekly":
-                return 12;  // 最多补偿一年
-            case "monthly":
-                return 24;  // 最多补偿两年
-            case "yearly":
-                return 5;   // 最多补偿五年
-            default:
-                return 1;
+            case "minute":  return 120; // 最多补偿2小时，避免分钟级循环过长
+            case "hour":    return 168; // 最多补偿一周
+            case "daily":   return 31;  // 最多补偿一个月
+            case "weekly":  return 12;  // 最多补偿一年
+            case "monthly": return 24;  // 最多补偿两年
+            case "yearly":  return 5;   // 最多补偿五年
+            default:        return 1;
         }
+    }
+
+    /** 纯函数：计算待补偿的窗口起点序列（含当前窗口），可单测验证 */
+    static List<ZonedDateTime> computePendingStarts(String cycleType, ZonedDateTime currentStart, ZonedDateTime lastNormalized, int limit) {
+        List<ZonedDateTime> starts = new ArrayList<>();
+        ZonedDateTime cursor = (lastNormalized == null) ? currentStart : advanceCycleStartPure(lastNormalized, cycleType);
+        int steps = 0;
+        while (cursor != null && !cursor.isAfter(currentStart) && steps <= limit) {
+            starts.add(cursor);
+            if (cursor.equals(currentStart)) {
+                break;
+            }
+            cursor = advanceCycleStartPure(cursor, cycleType);
+            steps++;
+        }
+        if (steps > limit && cursor != null && cursor.isBefore(currentStart)) {
+            starts.clear();
+            starts.add(currentStart);
+        }
+        if (starts.isEmpty()) {
+            starts.add(currentStart);
+        }
+        return starts;
+    }
+
+    // 基础归一化工具（纯函数，可复用在上述方法中）
+    private static ZonedDateTime normalizeMinute(ZonedDateTime time) {
+        return time.truncatedTo(ChronoUnit.MINUTES);
+    }
+
+    private static ZonedDateTime normalizeHour(ZonedDateTime time) {
+        return time.truncatedTo(ChronoUnit.HOURS);
+    }
+
+    private static ZonedDateTime normalizeDay(ZonedDateTime time) {
+        return time.truncatedTo(ChronoUnit.DAYS);
+    }
+
+    private static ZonedDateTime normalizeWeek(ZonedDateTime time) {
+        return time.with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY))
+                .truncatedTo(ChronoUnit.DAYS);
+    }
+
+    private static ZonedDateTime normalizeMonth(ZonedDateTime time) {
+        return time.with(TemporalAdjusters.firstDayOfMonth())
+                .truncatedTo(ChronoUnit.DAYS);
+    }
+
+    private static ZonedDateTime normalizeYear(ZonedDateTime time) {
+        return time.with(TemporalAdjusters.firstDayOfYear())
+                .truncatedTo(ChronoUnit.DAYS);
     }
 
     /** 记录边界条件信息 */
