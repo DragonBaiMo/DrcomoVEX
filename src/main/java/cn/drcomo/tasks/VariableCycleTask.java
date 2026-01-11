@@ -177,17 +177,8 @@ public class VariableCycleTask {
             if (pending.isEmpty()) {
                 continue;
             }
-            int success = 0;
-            for (CycleWindow window : pending) {
-                boolean completed = resetVariablesInWindow(type, window, now);
-                if (completed) {
-                    writeGlobalLastReset(type, window.getStart());
-                    success++;
-                } else {
-                    logger.warn("窗口执行未完全成功，等待下一轮补偿: " + type + " 窗口起点 " + window.getStart());
-                    break;
-                }
-            }
+            Map<String, Long> firstModifiedCache = preloadFirstModifiedForCycle(type, now);
+            int success = resetVariablesGroupedByVariable(type, pending, now, firstModifiedCache);
             logger.info("完成标准周期检测: " + type + " 窗口数 " + success + "/" + pending.size());
         }
     }
