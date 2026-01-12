@@ -1,0 +1,38 @@
+I will start by checking the status of the repository to identify the changes.
+# 变更摘要：优化周期变量重置逻辑以支持批量窗口处理，并增加日志与注释。
+
+## 文件：src/main/java/cn/drcomo/tasks/VariableCycleTask.java
+
+### L334：[HIGH] 单个变量重置失败将阻塞所有后续变量（DoS 风险）
+代码中 `if (windowFailed[i]) break;` 逻辑导致：只要有**任意一个变量**在某个时间窗口重置失败（如因 SQL 异常、配置错误等），该窗口会被标记为失败，导致**所有后续变量**直接跳过该窗口及后续窗口的处理。
+
+**后果**：
+如果有 N 个变量，第 1 个变量因故失败，剩余 N-1 个变量将永远无法执行重置（被逻辑短路），导致系统性的周期重置功能瘫痪。
+
+**修复建议**：
+移除该检查。每个变量应独立尝试重置，不受其他变量失败的影响。`windowFailed` 数组仅用于最后判断是否可以推进全局 `last-reset` 指针，不应作为循环内的短路条件。
+
+```diff
+             boolean currentVarStop = false;
+             for (int i = 0; i < windowCount; i++) {
+-                if (windowFailed[i]) {
+-                    break; // 璇ョ獥鍙ｅ湪鍏朵粬鍙橀噺涓婂凡澶辫触锛屾湰鍙橀噺 涓嶅啀灏濊瘯璇ョ獥鍙
+-                }
+                 if (currentVarStop) {
+                     break;
+                 }
+```
+
+## 业务逻辑变更已确认为无缺陷实现
+以下文件的变更仅涉及日志级别调整或文档注释更新，无功能性风险：
+
+- **src/main/java/cn/drcomo/MainCommand.java**
+  - 将重载事件触发失败的日志级别从 DEBUG 提升至 WARN。
+
+- **src/main/java/cn/drcomo/events/PlayerVariableChangeEvent.java**
+  - 增加 Javadoc 说明，提醒监听器需自行切换到主线程调用 Bukkit API。
+
+- **src/main/java/cn/drcomo/managers/RefactoredVariablesManager.java**
+  - 更新注释并提升事件触发失败的日志级别至 WARN。
+
+建议应用 `VariableCycleTask.java` 的修复后合并。

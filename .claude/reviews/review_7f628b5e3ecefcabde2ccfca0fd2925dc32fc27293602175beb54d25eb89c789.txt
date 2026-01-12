@@ -1,0 +1,65 @@
+运行代码差异提取脚本...
+# 变更摘要：重构变量周期重置逻辑，优化数据库查询为批量预取模式（$O(W \times V) \to O(V)$），并强化事件异步契约。
+
+## 文件：src/main/java/cn/drcomo/tasks/VariableCycleTask.java
+### L302-304, L339-342：[HIGH] 循环逻辑错误导致部分变量漏重置
+逻辑重构后引入了严重的逻辑缺陷：当某个变量在后续窗口（如 Window 1）失败时，会设置全局标志 `encounteredFailure`，导致后续遍历的变量（如 Var B）直接跳出循环，从而**完全跳过当前窗口（Window 0）的处理**。
+
+如果 Window 0 对所有变量（直到被中断前）都成功了，代码末尾会更新全局 `last-reset` 推进到 Window 0。导致 Var B 永久丢失了 Window 0 的重置机会（数据不一致）。
+
+**修复建议**：
+变量之间的重置应当是隔离的。一个变量的失败不应阻止其他变量尝试处理当前或后续窗口。
+1. 删除外层循环对 `encounteredFailure` 的检查与中断。
+2. 内层循环中，仅维护当前变量的状态（如 `currentVarFailed`），仅当当前变量失败时停止处理其后续窗口。
+3. `windowFailed` 数组仅用于最终判断是否推进全局游标，不应作为中断变量处理的条件。
+
+```diff
+-        boolean encounteredFailure = false;
+         int windowCount = pending.size();
+         boolean[] windowFailed = new boolean[windowCount];
+         int[] windowResetCount = new int[windowCount];
+ 
+         for (String key : keys) {
+-            if (encounteredFailure) {
+-                break;
+-            }
+             Variable var = variablesManager.getVariableDefinition(key);
+             // ... (省略中间代码) ...
+ 
++            boolean currentVarStop = false;
+             for (int i = 0; i < windowCount; i++) {
+-                if (encounteredFailure) {
+-                    break;
+-                }
+-                if (windowFailed[i]) {
+-                    encounteredFailure = true; // 先前窗口失败，后续窗口按原逻辑停止补偿
+-                    break;
+-                }
++                if (currentVarStop) break;
+ 
+                 CycleWindow window = pending.get(i);
+                 // ... (省略判断逻辑) ...
+ 
+                 if (success) {
+                     // ... (成功逻辑)
+                 } else {
+                     logger.warn("变量 " + key + " 重置失败，已重试3次");
+                     windowFailed[i] = true;
+-                    encounteredFailure = true;
++                    currentVarStop = true;
+                 }
+             }
+         }
+```
+
+### L403-426：[LOW] 首次修改时间预取串行阻塞
+`preloadFirstModifiedForCycle` 方法中，虽然使用了 `getFirstModifiedAtAsync`，但在循环内立即调用了 `.get(timeout)`，这会导致 N 个变量的查询退化为串行阻塞（总耗时 = N * QueryTime）。
+虽然比原版（N * WindowCount）有优化，但如果变量较多，仍可能卡顿。建议考虑使用 `CompletableFuture.allOf` 并行查询（如果 DB 连接池允许），或者保持现状（仅作为性能优化的提示，非阻塞 Bug）。
+*注：考虑到这是定时任务线程，串行阻塞通常可接受，重点修复上述逻辑 Bug 即可。*
+
+## 文件：src/main/java/cn/drcomo/managers/RefactoredVariablesManager.java
+### L977：[INFO] 异步事件契约变更
+正确实现了异步事件分发，并添加了警告日志。这是一个很好的改进，确保了 `PlayerVariableChangeEvent` 永远在异步线程触发，避免了主线程卡顿风险。
+
+## 审查总结
+主要逻辑重构方向正确（减少 DB 调用次数），但循环控制存在严重 Bug，会导致多变量场景下发生“静默跳过重置”的数据丢失问题。请务必应用上述修复。

@@ -1,0 +1,97 @@
+code_review/diff_20260111_211837.patch 文件已加载。
+
+我将重点审查 `VariableCycleTask.java` 中的重构逻辑，这里存在严重的逻辑缺陷，会导致数据不一致。
+
+# 变更摘要：优化变量周期性重置任务，按变量聚合处理以减少数据库查询，并增加异步事件日志级别。
+
+## 文件：src/main/java/cn/drcomo/tasks/VariableCycleTask.java
+
+### L335-339：[HIGH] 预加载失败导致变量被静默跳过
+代码逻辑从“查询失败则阻断”变为“缓存未命中则跳过”。
+在 `preloadFirstModifiedForCycle` 中，如果数据库查询抛出异常（如超时），该变量不会被放入 cache。
+在 `resetVariablesGroupedByVariable` (L335) 中，`firstModifiedCache.get(key)` 返回 null，直接视为“变量未修改”而跳过 (L336-337)。
+**后果**：当数据库波动时，重置任务会直接跳过出错的变量，并报告窗口执行“成功”。这会导致这些变量错过重置周期（丢失奖励或未清除数据）。
+
+**修复建议**：恢复循环内的 `cycleType` 校验，并区分“不匹配周期”、“未修改”与“查询失败”。如果 `cycleType` 匹配但 cache 中没有数据，应视为失败。
+
+### L345-385：[HIGH] 循环中断逻辑导致后续窗口虚假成功
+变量 `windowFailed` 数组默认值为 `false`。
+当遇到故障（`encounteredFailure = true`）时，外层循环（变量循环）会直接 break (L328)。
+此时，后续的窗口索引（例如 `i+1`）对应的 `windowFailed` 仍然是 `false`。
+代码末尾 (L394-396) 检查 `!windowFailed[i]` 即认为窗口成功，并调用 `writeGlobalLastReset` 提交进度。
+**后果**：如果窗口 0 失败，循环中断，变量 A、B... 对于窗口 1 的处理被完全跳过，但窗口 1 最终被标记为成功。系统会认为窗口 1 已完成，永久丢失该周期的数据重置。
+
+**修复建议**：如果发生了中断（`encounteredFailure` 为 true），说明没有任何一个窗口完成了所有变量的遍历，必须将**所有**窗口标记为失败，或者仅在完整遍历后才结算。
+
+### 建议变更 (Patch)
+以下补丁修复了上述两个严重问题：
+1. 增加 `cycleType` 显式校验，防止因缓存缺失导致的静默跳过。
+2. 引入 `completedVariables` 计数或直接在中断时标记所有窗口失败（这里采用最安全的“一旦中断则全部视为未完成”策略）。
+
+```diff
+--- src/main/java/cn/drcomo/tasks/VariableCycleTask.java
++++ src/main/java/cn/drcomo/tasks/VariableCycleTask.java
+@@ -324,14 +324,25 @@
+             if (var == null) {
+                 continue;
+             }
++            
++            // 1. 恢复周期类型校验，区分“不匹配”与“数据缺失”
++            String definedCycle = var.getCycle();
++            if (definedCycle == null || !cycleType.equalsIgnoreCase(definedCycle)) {
++                continue;
++            }
+ 
+             Long firstModified = firstModifiedCache.get(key);
+             if (firstModified == null) {
+-                logger.debug("跳过重置(变量未曾修改或查询失败): " + key);
+-                continue;
++                // 2. 如果类型匹配但缓存没有，说明预加载时发生了错误（超时/异常）
++                // 必须标记为失败，不能静默跳过
++                logger.warn("重置中断(预加载数据缺失): " + key);
++                encounteredFailure = true;
++                break; // 数据不完整，停止处理以保护一致性
+             }
+ 
+             ZonedDateTime firstTime = Instant.ofEpochMilli(firstModified).atZone(now.getZone());
+ 
+             for (int i = 0; i < windowCount; i++) {
+@@ -386,7 +397,8 @@
+         }
+ 
+         int successWindows = 0;
+-        for (int i = 0; i < windowCount; i++) {
++        // 3. 只有在未发生全局中断（即完整遍历了所有变量）的情况下，才检查单个窗口的失败状态
++        if (!encounteredFailure) {
++            for (int i = 0; i < windowCount; i++) {
++                CycleWindow window = pending.get(i);
++                if (!windowFailed[i]) {
++                    writeGlobalLastReset(cycleType, window.getStart());
++                    logger.info("窗口执行完成: " + cycleType + " 窗口 " + window.getStart() + " 成功 " + windowResetCount[i]);
++                    successWindows++;
++                } else {
++                    // 由于按变量顺序执行，前面的窗口失败通常意味着为了保持顺序，后续窗口也不应该提交（视业务逻辑而定）
++                    // 但如果 logic 是独立的，这里仅标记失败。但根据上文 break 逻辑，通常是连锁失败。
++                    logger.warn("窗口执行存在失败: " + cycleType + " 窗口 " + window.getStart() + " 成功 " + windowResetCount[i]);
++                }
++            }
++        } else {
++             logger.warn("任务非正常中断，放弃提交所有窗口进度以确保数据一致性。");
++        }
+-        for (int i = 0; i < windowCount; i++) {
+-            CycleWindow window = pending.get(i);
+-            if (!windowFailed[i]) {
+-                writeGlobalLastReset(cycleType, window.getStart());
+-                logger.info("窗口执行完成: " + cycleType + " 窗口 " + window.getStart() + " 成功 " + windowResetCount[i]);
+-                successWindows++;
+-            } else {
+-                logger.warn("窗口执行存在失败: " + cycleType + " 窗口 " + window.getStart() + " 成功 " + windowResetCount[i]);
+-                break;
+-            }
+-        }
+         return successWindows;
+     }
+```
+
+## 其他文件
+`MainCommand.java`、`PlayerVariableChangeEvent.java`、`RefactoredVariablesManager.java` 中的变更主要是日志级别调整和注释补充，审查通过。

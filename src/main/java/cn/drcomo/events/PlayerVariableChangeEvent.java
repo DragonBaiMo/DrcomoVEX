@@ -11,6 +11,7 @@ import org.jetbrains.annotations.Nullable;
  * <p>
  * 当玩家作用域的变量发生变化时触发（set/add/remove/reset/regen）。
  * 此事件为异步事件，在变量写入内存并清除缓存后触发。
+ * 监听方若需要调用 Bukkit API（如 sendMessage、物品修改），请使用调度器切回主线程执行。
  * </p>
  *
  * @author BaiMo

@@ -482,7 +482,7 @@ public class MainCommand implements CommandExecutor, TabCompleter {
                 try {
                     Bukkit.getPluginManager().callEvent(new VexPreReloadEvent());
                 } catch (Exception e) {
-                    logger.debug("触发 VexPreReloadEvent 失败: " + e.getMessage());
+                    logger.warn("触发 VexPreReloadEvent 失败: " + e.getMessage());
                 }
 
                 plugin.onDisable();
@@ -492,7 +492,7 @@ public class MainCommand implements CommandExecutor, TabCompleter {
                 try {
                     Bukkit.getPluginManager().callEvent(new VexPostReloadEvent());
                 } catch (Exception e) {
-                    logger.debug("触发 VexPostReloadEvent 失败: " + e.getMessage());
+                    logger.warn("触发 VexPostReloadEvent 失败: " + e.getMessage());
                 }
 
                 messagesManager.sendMessage(sender, "success.reload", EMPTY_PARAMS);

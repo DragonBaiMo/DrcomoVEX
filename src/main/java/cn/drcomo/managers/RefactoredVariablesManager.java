@@ -973,7 +973,7 @@ public class RefactoredVariablesManager {
             );
 
             if (isAsync) {
-                // 已经在异步线程，直接触发
+                // 已经在异步线程，直接触发（监听方需自行切回主线程调用 Bukkit API）
                 Bukkit.getPluginManager().callEvent(event);
             } else {
                 // 在主线程，异步触发以避免阻塞
@@ -985,7 +985,7 @@ public class RefactoredVariablesManager {
                 });
             }
         } catch (Exception e) {
-            logger.debug("触发变量变更事件失败: " + variableKey + " - " + e.getMessage());
+            logger.warn("触发变量变更事件失败: " + variableKey + " - " + e.getMessage());
         }
     }
 

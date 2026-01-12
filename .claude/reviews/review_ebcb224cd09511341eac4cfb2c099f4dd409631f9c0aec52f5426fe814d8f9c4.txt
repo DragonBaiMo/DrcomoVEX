@@ -1,0 +1,77 @@
+# 变更摘要：修复日志级别与异常传递，并重构变量循环任务以按变量分组预取数据，但引入了严重的逻辑缺陷。
+
+## 文件：`src/main/java/cn/drcomo/tasks/VariableCycleTask.java`
+
+### L328-332：[CRITICAL] 异常吞没导致数据一致性丢失
+**问题**：`preloadFirstModifiedForCycle` 方法捕获了所有异常（包括超时、DB错误）并仅记录错误日志，未将失败状态向上传递。
+在 `resetVariablesGroupedByVariable` 中（L323-326），如果 `firstModified` 为 `null`（因查询失败），代码会记录 `debug` 日志并直接 `continue`（跳过该变量）。
+**后果**：这会被视为“该变量不需要重置”的成功状态。如果 DB 抖动，受影响的变量将**永久跳过**该周期的重置，而窗口会被错误地标记为“全局完成”。
+**修复建议**：`preloadFirstModifiedForCycle` 遇到异常时应抛出或返回失败标识，主逻辑中应中止整个任务或标记当前窗口失败。
+
+### L306 & L370：[CRITICAL] 错误处理逻辑导致未完成的窗口被提交
+**问题**：当 `encounteredFailure` 为 `true` 时，外层变量循环（L306）会直接 `break`，导致后续变量（Variable B, C...）被完全跳过，**根本没有执行任何窗口的检查**。
+然而，在最后的提交阶段（L370），代码仅检查 `windowFailed[i]`。由于 Variable B 被跳过，它没有机会将 Window 0 标记为失败。
+**后果**：假设 Variable A 在 Window 5 失败，导致循环中断。Variable B 连 Window 0 都没跑。但 `windowFailed[0]` 仍为 `false`。系统会错误地提交 Window 0 的全局游标，导致 Variable B **永远丢失** Window 0 的重置补偿。
+**修复建议**：一旦 `encounteredFailure` 为 `true`，说明有变量未完成遍历，**必须禁止提交任何后续的全局游标**（或者至少不能提交任何未被*所有*变量遍历过的窗口）。建议若 `encounteredFailure` 则直接返回 0 成功窗口。
+
+### L356：[HIGH] 变量执行顺序变更带来的隐性风险
+**问题**：原逻辑大概率是“窗口外层循环 -> 变量内层循环”，新逻辑改为“变量外层循环 -> 窗口内层循环”。
+虽然 `lastResetTime` 检查（L339）提供了一定幂等性，但这种变更使得“部分成功”的状态分布发生了变化（即可能出现：Var A 跑到了今天，Var B 还在昨天）。
+**注意**：在修复上述 L306 问题前，这种乱序执行是极度危险的。只有确保“全有或全无”或正确的断点续传机制下，此重构才成立。
+
+## 文件：`src/main/java/cn/drcomo/MainCommand.java`
+**审查通过**：日志级别调整为 `warn` 并传入异常堆栈，符合最佳实践。
+
+## 文件：`src/main/java/cn/drcomo/managers/RefactoredVariablesManager.java`
+**审查通过**：明确了异步事件的契约并修正了日志记录。
+
+---
+
+### 建议修复方案（针对 `VariableCycleTask.java`）
+
+```java
+    // 1. 修复预取逻辑：抛出异常或标记失败
+    private Map<String, Long> preloadFirstModifiedForCycle(...) throws Exception { // 允许抛出
+        // ...
+            try {
+                // ... get(...)
+            } catch (Exception ex) {
+                logger.error("...", ex);
+                throw ex; // 必须中断，不能静默失败
+            }
+        // ...
+    }
+
+    // 2. 修复主循环逻辑
+    private int resetVariablesGroupedByVariable(...) {
+        // ...
+        // 预取失败直接中止，保护数据一致性
+        try {
+            firstModifiedCache = preloadFirstModifiedForCycle(cycleType, now);
+        } catch (Exception e) {
+            return 0; // DB 错误时一个窗口都不要提交
+        }
+
+        for (String key : keys) {
+            if (encounteredFailure) {
+                break; // 这里 break 会导致后续变量未处理
+            }
+            // ...
+            for (int i = 0; i < windowCount; i++) {
+                if (encounteredFailure) break; // 只要有一个失败，停止后续所有窗口处理
+                // ...
+            }
+        }
+        
+        // 3. 提交检查：只有当没有发生过中断故障时，才提交窗口
+        if (encounteredFailure) {
+            logger.warn("检测到故障，跳过所有窗口的全局游标更新以确保一致性。");
+            return 0;
+        }
+
+        // 只有在全员成功的情况下才提交
+        for (int i = 0; i < windowCount; i++) {
+             // ... writeGlobalLastReset ...
+        }
+    }
+```

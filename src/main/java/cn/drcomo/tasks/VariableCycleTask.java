@@ -292,11 +292,17 @@ public class VariableCycleTask {
         return result;
     }
 
-    /** 处理窗口内的变量重置 */
-    private boolean resetVariablesInWindow(String cycleType, CycleWindow window, ZonedDateTime now) {
+    /**
+     * 按变量聚合处理所有待补偿窗口，避免重复阻塞查询。
+     * 保持原有业务判定与补偿规则不变，仅调整遍历顺序与预取策略。
+     */
+    private int resetVariablesGroupedByVariable(String cycleType, List<CycleWindow> pending, ZonedDateTime now,
+                                                Map<String, Long> firstModifiedCache) {
         Set<String> keys = variablesManager.getAllVariableKeys();
-        boolean hadBlockingFailure = false;
-        int resetCount = 0;
+        int windowCount = pending.size();
+        boolean[] windowFailed = new boolean[windowCount];
+        int[] windowResetCount = new int[windowCount];
+
         for (String key : keys) {
             Variable var = variablesManager.getVariableDefinition(key);
             if (var == null) {
@@ -310,72 +316,111 @@ public class VariableCycleTask {
                 continue;
             }
 
-            Long firstModified = null;
-            try {
-                firstModified = variablesManager
-                        .getFirstModifiedAtAsync(var.isGlobal(), key)
-                        .orTimeout(dbTimeoutMillis, TimeUnit.MILLISECONDS)
-                        .get(dbTimeoutMillis, TimeUnit.MILLISECONDS);
-            } catch (TimeoutException te) {
-                logger.warn("跳过重置(首次修改时间查询超时): " + key);
-                hadBlockingFailure = true;
-                continue;
-            } catch (Exception ex) {
-                logger.error("查询首次修改时间失败: " + key, ex);
-                hadBlockingFailure = true;
-                continue;
-            }
+            Long firstModified = firstModifiedCache.get(key);
             if (firstModified == null) {
-                logger.debug("跳过重置(变量未曾修改): " + key);
+                logger.debug("跳过重置(变量未曾修改或查询失败): " + key);
                 continue;
             }
+
             ZonedDateTime firstTime = Instant.ofEpochMilli(firstModified).atZone(now.getZone());
-            if (!firstTime.isBefore(window.getStart())) {
-                logger.debug("跳过重置(窗口内新创建): " + key + " 首改: " + firstTime + " 窗口: " + window.getStart());
-                continue;
-            }
 
             Long lastResetMillis = getLastResetTime(key);
             ZonedDateTime lastResetTime = (lastResetMillis != null)
                     ? Instant.ofEpochMilli(lastResetMillis).atZone(now.getZone())
                     : null;
-            lastResetTime = sanitizeVariableFutureTime(key, lastResetTime, window, now, cycleType);
-            if (lastResetTime != null && !lastResetTime.isBefore(window.getStart())) {
-                logger.debug("跳过重置(窗口已处理): " + key + " 上次: " + lastResetTime + " 窗口: " + window.getStart());
-                continue;
-            }
 
-            boolean success = false;
-            for (int i = 1; i <= 3; i++) {
-                if (safeDeleteAndClear(var.isGlobal(), key, i, false)) {
-                    success = true;
+            boolean currentVarStop = false;
+            for (int i = 0; i < windowCount; i++) {
+                if (currentVarStop) {
                     break;
                 }
-                sleepQuietly(100L * i);
-            }
-            if (success) {
-                updateVariableResetTime(key, window.getStart().toInstant().toEpochMilli());
-                resetCount++;
-                logger.info("重置变量: " + key +
-                        " 周期: " + cycleType +
-                        " 窗口起点: " + window.getStart() +
-                        " 当前: " + now);
-                try {
-                    variablesManager.executeCycleActionsOnReset(var, null);
-                } catch (Exception actEx) {
-                    logger.error("执行重置动作失败: " + key, actEx);
+
+                CycleWindow window = pending.get(i);
+                lastResetTime = sanitizeVariableFutureTime(key, lastResetTime, window, now, cycleType);
+
+                if (!firstTime.isBefore(window.getStart())) {
+                    continue;
                 }
-            } else {
-                logger.warn("变量 " + key + " 重置失败，已重试3次");
-                hadBlockingFailure = true;
+                if (lastResetTime != null && !lastResetTime.isBefore(window.getStart())) {
+                    continue;
+                }
+
+                boolean success = false;
+                for (int retry = 1; retry <= 3; retry++) {
+                    if (safeDeleteAndClear(var.isGlobal(), key, retry, false)) {
+                        success = true;
+                        break;
+                    }
+                    sleepQuietly(100L * retry);
+                }
+
+                if (success) {
+                    lastResetTime = window.getStart();
+                    updateVariableResetTime(key, window.getStart().toInstant().toEpochMilli());
+                    windowResetCount[i]++;
+                    logger.info("重置变量: " + key +
+                            " 周期: " + cycleType +
+                            " 窗口起点: " + window.getStart() +
+                            " 当前: " + now);
+                    try {
+                        variablesManager.executeCycleActionsOnReset(var, null);
+                    } catch (Exception actEx) {
+                        logger.error("执行重置动作失败: " + key, actEx);
+                    }
+                } else {
+                    logger.warn("变量 " + key + " 重置失败，已重试3次");
+                    windowFailed[i] = true;
+                    currentVarStop = true;
+                }
             }
         }
-        if (hadBlockingFailure) {
-            logger.warn("窗口执行存在失败: " + cycleType + " 窗口 " + window.getStart() + " 成功 " + resetCount);
-        } else {
-            logger.info("窗口执行完成: " + cycleType + " 窗口 " + window.getStart() + " 成功 " + resetCount);
+
+        int successWindows = 0;
+        for (int i = 0; i < windowCount; i++) {
+            CycleWindow window = pending.get(i);
+            if (!windowFailed[i]) {
+                writeGlobalLastReset(cycleType, window.getStart());
+                logger.info("窗口执行完成: " + cycleType + " 窗口 " + window.getStart() + " 成功 " + windowResetCount[i]);
+                successWindows++;
+            } else {
+                logger.warn("窗口执行存在失败: " + cycleType + " 窗口 " + window.getStart() + " 成功 " + windowResetCount[i]);
+                break;
+            }
         }
-        return !hadBlockingFailure;
+        return successWindows;
+    }
+
+    /** 预取指定周期的变量首次修改时间，减少循环内阻塞查询 */
+    private Map<String, Long> preloadFirstModifiedForCycle(String cycleType, ZonedDateTime now) {
+        Map<String, Long> cache = new HashMap<>();
+        Set<String> keys = variablesManager.getAllVariableKeys();
+        for (String key : keys) {
+            Variable var = variablesManager.getVariableDefinition(key);
+            if (var == null) {
+                continue;
+            }
+            String definedCycle = var.getCycle();
+            if (definedCycle == null || definedCycle.contains(" ")) {
+                continue;
+            }
+            if (!cycleType.equalsIgnoreCase(definedCycle)) {
+                continue;
+            }
+            try {
+                Long firstModified = variablesManager
+                        .getFirstModifiedAtAsync(var.isGlobal(), key)
+                        .orTimeout(dbTimeoutMillis, TimeUnit.MILLISECONDS)
+                        .get(dbTimeoutMillis, TimeUnit.MILLISECONDS);
+                if (firstModified != null) {
+                    cache.put(key, firstModified);
+                }
+            } catch (TimeoutException te) {
+                logger.warn("首次修改时间预取超时: " + key);
+            } catch (Exception ex) {
+                logger.error("首次修改时间预取失败: " + key, ex);
+            }
+        }
+        return cache;
     }
 
     /** 记录全局 last-reset 到窗口起点 */
