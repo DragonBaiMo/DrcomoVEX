@@ -1,0 +1,1689 @@
+diff --git a/src/main/java/cn/drcomo/listeners/PlayerListener.java b/src/main/java/cn/drcomo/listeners/PlayerListener.java
+index ebe5ef5..55289fc 100644
+--- a/src/main/java/cn/drcomo/listeners/PlayerListener.java
++++ b/src/main/java/cn/drcomo/listeners/PlayerListener.java
+@@ -90,17 +90,17 @@ public class PlayerListener implements Listener {
+             logger.error("处理玩家退出事件失败: " + event.getPlayer().getName(), e);
+         }
+     }
+ 
+     /**
+      * 入服兜底刷新：
+      * - 异步延迟执行，避免阻塞主线程
+      * - 优先使用配置的键清单；若未配置，则自动筛选带周期的玩家变量键
+-     * - 对目标键先清理内存与缓存，再为当前玩家预热，确保读取到一致的新值
++     * - 直接从数据库重载变量到内存，确保读取到跨服一致的新值
+      */
+     private void scheduleJoinConsistencyRefresh(Player player) {
+         FileConfiguration cfg = plugin.getConfigsManager().getMainConfig();
+         boolean enabled = cfg.getBoolean("settings.join-refresh.enabled", true);
+         if (!enabled) {
+             return;
+         }
+ 
+@@ -148,90 +148,41 @@ public class PlayerListener implements Listener {
+                         if (keys.size() >= limit) break;
+                     }
+                 }
+ 
+                 if (keys.isEmpty()) {
+                     return;
+                 }
+ 
+-                // 仅失效缓存：
+-                // 1) 先对该玩家做一次性 L2 批量清理；
+-                // 2) 再按作用域仅清 L3（避免重复清 L2），不改内存存储，不产生删除标记
++                // 直接从数据库重载变量到内存，实现跨服数据同步
+                 long startNs = System.nanoTime();
+-                long l2Before = plugin.getVariablesManager().getL2InvalidationsTotal();
+-                long l3Before = plugin.getVariablesManager().getL3InvalidationsTotal();
+-                int l2BatchCleared = plugin.getVariablesManager().invalidateAllL2ForPlayer(player);
+-
+-                int playerScopedCount = 0;
+-                int globalScopedCount = 0;
++                java.util.List<java.util.concurrent.CompletableFuture<?>> futures = new java.util.ArrayList<>();
+                 for (String key : keys) {
+                     try {
+-                        Variable vdef = plugin.getVariablesManager().getVariableDefinition(key);
+-                        if (vdef != null) {
+-                            if (vdef.isPlayerScoped()) {
+-                                plugin.getVariablesManager().invalidateL3Only(player, key);
+-                                playerScopedCount++;
+-                            } else if (vdef.isGlobal()) {
+-                                plugin.getVariablesManager().invalidateL3Only(null, key);
+-                                globalScopedCount++;
+-                            } else {
+-                                // 未知作用域，保守处理：仅清玩家上下文 L3，避免全局抖动
+-                                plugin.getVariablesManager().invalidateL3Only(player, key);
+-                                playerScopedCount++;
+-                            }
+-                        } else {
+-                            // 未找到定义，保守处理：仅清玩家上下文 L3
+-                            plugin.getVariablesManager().invalidateL3Only(player, key);
+-                            playerScopedCount++;
+-                        }
++                        futures.add(plugin.getVariablesManager().reloadVariableFromDB(player, key)
++                                .exceptionally(ex -> {
++                                    logger.debug("入服刷新: 重载变量失败 key=" + key + ", err=" + ex.getMessage());
++                                    return null;
++                                }));
+                     } catch (Exception ex) {
+-                        logger.debug("入服兜底刷新: 失效缓存失败 key=" + key + ", err=" + ex.getMessage());
++                        logger.debug("入服刷新: 重载变量失败 key=" + key);
+                     }
+                 }
+ 
+-                long l2After = plugin.getVariablesManager().getL2InvalidationsTotal();
+-                long l3After = plugin.getVariablesManager().getL3InvalidationsTotal();
+-                long l2Delta = Math.max(0, l2After - l2Before);
+-                long l3Delta = Math.max(0, l3After - l3Before);
+-                long elapsedMs = (System.nanoTime() - startNs) / 1_000_000L;
+-
+-                // 可选预热：仅在开启且线程池可用时执行
+-                boolean preheat = cfg.getBoolean("settings.join-refresh.preheat", false);
+-                if (preheat) {
+-                    java.util.List<java.util.concurrent.CompletableFuture<?>> futures = new java.util.ArrayList<>();
+-                    for (String key : keys) {
+-                        try {
+-                            futures.add(playerVariablesManager.getPlayerVariable(player, key)
+-                                    .exceptionally(t -> {
+-                                        logger.debug("入服兜底刷新: 预热失败 key=" + key + ", err=" + t.getMessage());
+-                                        return null;
+-                                    }));
+-                        } catch (java.util.concurrent.RejectedExecutionException rex) {
+-                            // 线程池已关闭/未就绪，跳过预热
+-                            logger.debug("入服兜底刷新: 线程池不可用，跳过预热 key=" + key);
+-                        } catch (Exception ex) {
+-                            logger.debug("入服兜底刷新: 预热异常 key=" + key + ", err=" + ex.getMessage());
+-                        }
+-                    }
+-                    if (!futures.isEmpty()) {
+-                        try {
+-                            java.util.concurrent.CompletableFuture.allOf(
+-                                    futures.toArray(new java.util.concurrent.CompletableFuture[0])
+-                            ).orTimeout(3, java.util.concurrent.TimeUnit.SECONDS).exceptionally(t -> null).join();
+-                        } catch (Exception ignore) {}
+-                    }
++                if (!futures.isEmpty()) {
++                    try {
++                        java.util.concurrent.CompletableFuture.allOf(
++                                futures.toArray(new java.util.concurrent.CompletableFuture[0])
++                        ).orTimeout(5, java.util.concurrent.TimeUnit.SECONDS).exceptionally(t -> null).join();
++                    } catch (Exception ignore) {}
+                 }
+ 
+-                logger.debug("玩家 " + player.getName() + " 入服兜底刷新完成，处理键数: " + keys.size()
+-                        + ", 玩家作用域: " + playerScopedCount
+-                        + ", 全局作用域: " + globalScopedCount
+-                        + ", L2批量清理: " + l2BatchCleared
+-                        + ", L2增量: " + l2Delta
+-                        + ", L3增量: " + l3Delta
++                long elapsedMs = (System.nanoTime() - startNs) / 1_000_000L;
++                logger.debug("玩家 " + player.getName() + " 入服数据同步完成，键数: " + keys.size()
+                         + ", 耗时: " + elapsedMs + " ms");
+             } catch (InterruptedException ie) {
+                 Thread.currentThread().interrupt();
+             } catch (Exception e) {
+                 logger.error("入服兜底刷新执行异常: " + player.getName(), e);
+             }
+         };
+ 
+diff --git a/src/main/java/cn/drcomo/managers/RefactoredVariablesManager.java b/src/main/java/cn/drcomo/managers/RefactoredVariablesManager.java
+index 7f02737..dfb31e3 100644
+--- a/src/main/java/cn/drcomo/managers/RefactoredVariablesManager.java
++++ b/src/main/java/cn/drcomo/managers/RefactoredVariablesManager.java
+@@ -11,19 +11,16 @@ import cn.drcomo.model.structure.DependencySnapshot;
+ import cn.drcomo.model.structure.Limitations;
+ import cn.drcomo.model.structure.ScopeType;
+ import cn.drcomo.model.structure.ValueType;
+ import cn.drcomo.model.structure.Variable;
+ import cn.drcomo.managers.components.ActionExecutor;
+ import cn.drcomo.managers.components.VariableDefinitionLoader;
+ import cn.drcomo.storage.BatchPersistenceManager;
+ import cn.drcomo.storage.BatchPersistenceManager.PersistenceConfig;
+-import cn.drcomo.storage.MultiLevelCacheManager;
+-import cn.drcomo.storage.MultiLevelCacheManager.CacheConfig;
+-import cn.drcomo.storage.MultiLevelCacheManager.CacheResult;
+ import cn.drcomo.storage.VariableMemoryStorage;
+ import cn.drcomo.storage.VariableValue;
+ import cn.drcomo.config.ConfigsManager;
+ import cn.drcomo.util.DependencyResolver;
+ import cn.drcomo.util.ValueLimiter;
+ import cn.drcomo.corelib.math.FormulaCalculator;
+ import cn.drcomo.events.PlayerVariableChangeEvent;
+ import org.bukkit.Bukkit;
+@@ -78,17 +75,16 @@ public class RefactoredVariablesManager {
+     public final YamlUtil yamlUtil;
+     public final AsyncTaskManager asyncTaskManager;
+     public final PlaceholderAPIUtil placeholderUtil;
+     public final HikariConnection database;
+ 
+     // ======================== 核心存储和缓存组件 ========================
+     private final VariableMemoryStorage memoryStorage;
+     private final BatchPersistenceManager persistenceManager;
+-    private final MultiLevelCacheManager cacheManager;
+     private final DependencyResolver dependencyResolver;
+     private final ConfigsManager configsManager;
+     private final ActionExecutor actionExecutor;
+     private final VariableDefinitionLoader definitionLoader;
+ 
+     // 变量定义注册表
+     private final ConcurrentHashMap<String, Variable> variableRegistry = new ConcurrentHashMap<>();
+ 
+@@ -118,24 +114,16 @@ public class RefactoredVariablesManager {
+         this.configsManager = plugin.getConfigsManager();
+ 
+         // 初始化依赖解析器
+         this.dependencyResolver = new DependencyResolver(logger);
+ 
+         // 初始化内存存储（256MB）
+         this.memoryStorage = new VariableMemoryStorage(logger, database, 256 * 1024 * 1024);
+ 
+-        // 初始化多级缓存
+-        CacheConfig cacheConfig = new CacheConfig()
+-                .setL2MaximumSize(10000)
+-                .setL2ExpireMinutes(5)
+-                .setL3MaximumSize(5000)
+-                .setL3ExpireMinutes(2);
+-        this.cacheManager = new MultiLevelCacheManager(logger, memoryStorage, cacheConfig);
+-
+         // 初始化批量持久化管理器
+         PersistenceConfig persistenceConfig = new PersistenceConfig()
+                 .setBatchIntervalSeconds(30)
+                 .setMaxBatchSize(1000)
+                 .setMemoryPressureThreshold(80.0)
+                 .setMaxRetries(3);
+         this.persistenceManager = new BatchPersistenceManager(
+                 logger, database, memoryStorage, asyncTaskManager, persistenceConfig);
+@@ -202,21 +190,21 @@ public class RefactoredVariablesManager {
+                     try {
+                         database.close();
+                     } catch (Exception dbEx) {
+                         logger.error("强制关闭数据库时发生异常", dbEx);
+                     }
+                 }
+                 throw new RuntimeException("关闭变量管理系统失败", e);
+             }
+-            // 关闭后尝试清理缓存（异常不影响流程）
++            // 关闭后清理内存存储
+             try {
+-                cacheManager.clearAllCaches();
++                memoryStorage.clearAllCaches();
+             } catch (Exception e) {
+-                logger.debug("缓存清理跳过: " + e.getMessage());
++                logger.debug("内存存储清理跳过: " + e.getMessage());
+             }
+         }, asyncTaskManager.getExecutor());
+     }
+ 
+     /**
+      * 保存所有数据
+      */
+     public CompletableFuture<Void> saveAllData() {
+@@ -289,38 +277,23 @@ public class RefactoredVariablesManager {
+     public CompletableFuture<VariableResult> getVariable(OfflinePlayer player, String key) {
+         final String playerName = getPlayerName(player);
+         return CompletableFuture.supplyAsync(() -> {
+             try {
+                 Variable variable = getVariableDefinition(key);
+                 Optional<VariableResult> pre = checkOpPreconditions(player, variable, key, "GET", playerName, false);
+                 if (pre.isPresent()) return pre.get();
+ 
+-                // 条件变量及 regen 变量禁用缓存读，避免条件或时间驱动的值被延迟
+-                if (!variable.hasConditions() && !variable.hasRegenRule()) {
+-                    CacheResult cacheResult = cacheManager.getFromCache(player, key, variable);
+-                    if (cacheResult.isHit()) {
+-                        logger.debug("缓存命中(" + cacheResult.getLevel() + "): " + key);
+-                        String cachedValue = cacheResult.getValue();
+-                        // 对缓存值也进行类型规范化
+-                        cachedValue = normalizeValueByType(cachedValue, variable.getValueType());
+-                        return VariableResult.success(cachedValue, "GET", key, playerName);
+-                    }
+-                }
+-
++                // 直接从内存读取，不再使用多级缓存
+                 String finalValue = getVariableFromMemoryOrDefault(player, variable);
+                 if (!isFormulaVariable(variable)) {
+                     finalValue = resolveExpression(finalValue, player, variable);
+                 }
+                 // 确保最终返回值经过类型规范化
+                 finalValue = normalizeValueByType(finalValue, variable.getValueType());
+-                // 条件变量及 regen 变量禁用缓存写，避免在条件/时间失效后残留不当缓存
+-                if (!variable.hasConditions() && !variable.hasRegenRule()) {
+-                    cacheManager.cacheResult(player, key, finalValue, finalValue);
+-                }
+                 return VariableResult.success(finalValue, "GET", key, playerName);
+             } catch (Exception e) {
+                 logger.error("获取变量失败: " + key, e);
+                 return VariableResult.fromException(e, "GET", key, playerName);
+             }
+         }, asyncTaskManager.getExecutor());
+     }
+ 
+@@ -513,40 +486,74 @@ public class RefactoredVariablesManager {
+                     }
+                 });
+     }
+ 
+     /**
+      * 玩家上线时的数据预加载
+      */
+     public CompletableFuture<Void> handlePlayerJoin(OfflinePlayer player) {
+-        // 先加载该玩家的持久化数据，再进行缓存预热，避免玩家加入后读到默认值
++        // 加载该玩家的持久化数据到内存
+         return loadPlayerVariables(player)
+                 .thenRunAsync(() -> {
+-                    try {
+-                        Set<String> keys = getPlayerVariableKeys();
+-                        for (String key : keys) {
+-                            Variable var = getVariableDefinition(key);
+-                            if (var != null && !var.hasConditions()) {
+-                                cacheManager.preloadCache(player, key, var);
+-                            }
+-                        }
+-                        logger.debug("玩家上线预加载完成: " + player.getName() + "，变量数: " + keys.size());
+-                    } catch (Exception e) {
+-                        logger.error("玩家上线数据预加载失败: " + player.getName(), e);
+-                    }
++                    logger.debug("玩家上线数据加载完成: " + player.getName());
+                 }, asyncTaskManager.getExecutor());
+     }
+ 
+     // ======================== 公共查询方法 ========================
+ 
+     public Variable getVariableDefinition(String key) {
+         return variableRegistry.get(key);
+     }
+ 
++    /**
++     * 从数据库重载指定玩家的变量到内存（用于跨服同步）
++     *
++     * @param player 玩家
++     * @param key 变量键
++     * @return CompletableFuture
++     */
++    public CompletableFuture<Void> reloadVariableFromDB(OfflinePlayer player, String key) {
++        // 使用 thenCompose 链式组合，避免在异步任务中阻塞线程导致线程池死锁
++        return CompletableFuture.supplyAsync(() -> getVariableDefinition(key), asyncTaskManager.getExecutor())
++            .thenCompose(var -> {
++                if (var == null) {
++                    logger.debug("重载变量失败: 变量定义不存在 key=" + key);
++                    return CompletableFuture.completedFuture(null);
++                }
++
++                if (var.isPlayerScoped() && player != null) {
++                    // 从数据库查询并更新内存
++                    String pid = player.getUniqueId().toString();
++                    return fetchPlayerTriple(pid, key).thenAccept(tri -> {
++                        if (tri.value != null) {
++                            String normalizedValue = normalizeValueByType(tri.value, var.getValueType());
++                            memoryStorage.loadPlayerVariable(
++                                    player.getUniqueId(), key, normalizedValue, tri.updatedAt, tri.firstModifiedAt);
++                            logger.debug("重载玩家变量成功: player=" + player.getName() + ", key=" + key);
++                        }
++                    });
++                } else if (var.isGlobal()) {
++                    // 全局变量从数据库重载
++                    return fetchServerTriple(key).thenAccept(tri -> {
++                        if (tri.value != null) {
++                            String normalizedValue = normalizeValueByType(tri.value, var.getValueType());
++                            memoryStorage.loadServerVariable(key, normalizedValue, tri.updatedAt, tri.firstModifiedAt);
++                            logger.debug("重载全局变量成功: key=" + key);
++                        }
++                    });
++                }
++                return CompletableFuture.completedFuture(null);
++            })
++            .exceptionally(ex -> {
++                logger.debug("重载变量失败: " + key + ", 错误: " + ex.getMessage());
++                return null;
++            });
++    }
++
+     public Set<String> getAllVariableKeys() {
+         return new HashSet<>(variableRegistry.keySet());
+     }
+ 
+     public Set<String> getPlayerVariableKeys() {
+         return variableRegistry.entrySet().stream()
+                 .filter(e -> e.getValue().isPlayerScoped())
+                 .map(Map.Entry::getKey)
+@@ -578,24 +585,25 @@ public class RefactoredVariablesManager {
+         if (scopeType == ScopeType.GLOBAL && !variable.isGlobal()) {
+             return Optional.of(VariableResult.failure("变量不是全局作用域: " + key));
+         }
+         return Optional.empty();
+     }
+ 
+     /**
+      * 清理指定变量的全局上下文缓存（仅 server 上下文）
++     * @deprecated 缓存层已移除，此方法仅为 API 兼容保留
+      */
++    @Deprecated
+     public void invalidateGlobalCaches(String key) {
+-        try {
+-            cacheManager.invalidateCache(null, key);
+-            logger.debug("已清理全局上下文变量缓存: " + key);
+-        } catch (Exception e) {
+-            logger.error("清理全局上下文变量缓存失败: " + key, e);
++        // 缓存已移除，仅清理内存中该变量
++        if (key != null) {
++            memoryStorage.removeServerVariable(key);
+         }
++        logger.debug("invalidateGlobalCaches 已弃用，缓存层已移除: " + key);
+     }
+ 
+     /**
+      * 获取当前公式增量值：
+      * - 若不存在或处于严格模式计算结果，返回 "0"；
+      * - 否则返回当前内存中的实际值（作为增量）。
+      */
+     private String getCurrentIncrementForFormula(VariableValue memVal) {
+@@ -642,91 +650,86 @@ public class RefactoredVariablesManager {
+                 + ", newInc=" + newIncrement
+                 + ", base=" + base
+                 + ", display=" + displayValue);
+         return new FormulaOpResult(newIncrement, displayValue);
+     }
+ 
+     /**
+      * 清理指定变量的所有缓存
+-     * @deprecated 语义不清，等同于清理全局上下文缓存；请改用 {@link #invalidateGlobalCaches(String)}
++     * @deprecated 缓存层已移除，此方法仅为 API 兼容保留
+      */
+     @Deprecated
+     public void invalidateAllCaches(String key) {
+         invalidateGlobalCaches(key);
+     }
+ 
+     /**
+      * 清理指定玩家上下文下的变量缓存（不触碰内存存储，不产生删除标记）
++     * @deprecated 缓存层已移除，此方法仅为 API 兼容保留
+      */
++    @Deprecated
+     public void invalidateCachesForPlayer(OfflinePlayer player, String key) {
+-        try {
+-            cacheManager.invalidateCache(player, key);
+-            logger.debug("已清理玩家上下文变量缓存: player=" + (player != null ? player.getName() : "null") + ", key=" + key);
+-        } catch (Exception e) {
+-            logger.error("清理玩家上下文变量缓存失败: " + key, e);
+-        }
++        // 缓存已移除，此方法保留仅为 API 兼容
++        logger.debug("invalidateCachesForPlayer 已弃用，缓存层已移除");
+     }
+ 
+     /**
+      * 一次性清理指定玩家上下文下的所有 L2 表达式缓存（不影响 L3）
+      * @return 实际清理的 L2 条目数
++     * @deprecated 缓存层已移除，此方法仅为 API 兼容保留，始终返回 0
+      */
++    @Deprecated
+     public int invalidateAllL2ForPlayer(OfflinePlayer player) {
+-        try {
+-            int n = cacheManager.invalidateAllL2ForPlayer(player);
+-            logger.debug("已批量清理玩家 L2 表达式缓存: player=" + (player != null ? player.getName() : "SERVER") + ", 条目=" + n);
+-            return n;
+-        } catch (Exception e) {
+-            logger.error("批量清理玩家 L2 表达式缓存失败: " + (player != null ? player.getName() : "SERVER"), e);
+-            return 0;
+-        }
++        // 缓存已移除，返回 0 表示未清理任何条目
++        return 0;
+     }
+ 
+-    /** 获取累计的 L2 清理条目数（自插件启动以来） */
+-    public long getL2InvalidationsTotal() { return cacheManager.getL2InvalidationsTotal(); }
++    /**
++     * 获取累计的 L2 清理条目数（自插件启动以来）
++     * @deprecated 缓存层已移除，此方法仅为 API 兼容保留，始终返回 0
++     */
++    @Deprecated
++    public long getL2InvalidationsTotal() { return 0L; }
+ 
+-    /** 获取累计的 L3 清理条目数（自插件启动以来） */
+-    public long getL3InvalidationsTotal() { return cacheManager.getL3InvalidationsTotal(); }
++    /**
++     * 获取累计的 L3 清理条目数（自插件启动以来）
++     * @deprecated 缓存层已移除，此方法仅为 API 兼容保留，始终返回 0
++     */
++    @Deprecated
++    public long getL3InvalidationsTotal() { return 0L; }
+ 
+     /**
+      * 仅清理 L3（最终结果）缓存，不触碰 L2
++     * @deprecated 缓存层已移除，此方法仅为 API 兼容保留
+      */
++    @Deprecated
+     public void invalidateL3Only(OfflinePlayer player, String key) {
+-        try {
+-            cacheManager.invalidateL3Only(player, key);
+-            logger.debug("仅清L3缓存: player=" + (player != null ? player.getName() : "SERVER") + ", key=" + key);
+-        } catch (Exception e) {
+-            logger.error("仅清L3缓存失败: " + key, e);
+-        }
++        // 缓存已移除，此方法保留仅为 API 兼容
+     }
+ 
+     /**
+-     * 从内存与多级缓存中删除变量
++     * 从内存中删除变量
+      * @param key 变量键
+      */
+     public void removeVariableFromMemoryAndCache(String key) {
+         try {
+             Variable variable = getVariableDefinition(key);
+             if (variable == null) {
+                 logger.warn("变量不存在: " + key);
+                 return;
+             }
+             if (variable.isGlobal()) {
+                 memoryStorage.removeServerVariable(key);
+-                cacheManager.invalidateCache(null, key);
+             } else if (variable.isPlayerScoped()) {
+-                Set<UUID> affectedPlayers = memoryStorage.removeVariableForAllPlayers(key, true);
+-                for (UUID affected : affectedPlayers) {
+-                    cacheManager.invalidateCache(Bukkit.getOfflinePlayer(affected), key);
+-                }
++                memoryStorage.removeVariableForAllPlayers(key, true);
+             }
+-            logger.debug("已从内存与缓存删除变量: " + key);
++            logger.debug("已从内存删除变量: " + key);
+         } catch (Exception e) {
+-            logger.error("删除变量缓存失败: " + key, e);
++            logger.error("删除变量失败: " + key, e);
+         }
+     }
+ 
+     // ======================== 私有辅助方法（抽取复用逻辑） ========================
+ 
+     /**
+      * 统一的操作前置校验：
+      * 1) 变量是否存在 2)（可选）是否可写
+@@ -994,23 +997,19 @@ public class RefactoredVariablesManager {
+         if (variable.isPlayerScoped() && player != null) {
+             memoryStorage.removePlayerVariable(player.getUniqueId(), variable.getKey());
+         } else if (variable.isGlobal()) {
+             memoryStorage.removeServerVariable(variable.getKey());
+         }
+         invalidateCachesSafely(player, variable.getKey());
+     }
+ 
+-    /** 缓存失效的安全封装（异常不向外抛） */
++    /** 缓存失效的安全封装（缓存层已移除，此方法为空操作） */
+     private void invalidateCachesSafely(OfflinePlayer player, String key) {
+-        try {
+-            cacheManager.invalidateCache(player, key);
+-        } catch (Exception e) {
+-            logger.debug("清理缓存失败: " + key + " - " + e.getMessage());
+-        }
++        // 缓存层已移除，此方法保留仅为代码兼容
+     }
+ 
+     /** 统一出口：在返回前应用渐进恢复 */
+     private String finalizeValueWithRegen(OfflinePlayer player, Variable variable, VariableValue storage, String value) {
+         return applyRegenIfNeeded(player, variable, storage, value);
+     }
+ 
+     /**
+@@ -1226,22 +1225,17 @@ public class RefactoredVariablesManager {
+             logger.warn("表达式解析达到最大递归深度限制: " + maxDepth);
+         }
+ 
+         // 根据变量类型规范化结果格式
+         if (variable != null) {
+             result = normalizeValueByType(result, variable.getValueType());
+         }
+ 
+-        boolean skipRegenCache = shouldSkipExpressionCacheForRegen(expression, variable);
+-        if (!skipRegenCache) {
+-            cacheManager.cacheExpression(expression, player, result);
+-        } else {
+-            logger.debug("跳过表达式缓存（包含 regen 变量）: " + expression);
+-        }
++        // 缓存层已移除，不再缓存表达式结果
+         return result;
+     }
+ 
+     /** 判断表达式是否涉及 regen 变量，涉及则跳过缓存以防时间驱动的数值被延迟 */
+     private boolean shouldSkipExpressionCacheForRegen(String expression, Variable variable) {
+         if (variable != null && variable.hasRegenRule()) {
+             return true;
+         }
+@@ -1732,38 +1726,25 @@ public class RefactoredVariablesManager {
+                             // 数据加载时进行类型规范化，确保历史数据格式正确
+                             Variable var = getVariableDefinition(key);
+                             String normalizedValue = (var != null)
+                                 ? normalizeValueByType(tri.value, var.getValueType())
+                                 : tri.value;
+                             memoryStorage.loadPlayerVariable(
+                                     player.getUniqueId(), key, normalizedValue, tri.updatedAt, tri.firstModifiedAt);
+                         } else {
+-                            if (memoryStorage.removePlayerVariable(player.getUniqueId(), key, false)) {
+-                                cacheManager.invalidateCache(player, key);
+-                            }
++                            memoryStorage.removePlayerVariable(player.getUniqueId(), key, false);
+                         }
+                     }).exceptionally(ex -> {
+                         logger.error("加载玩家变量失败: " + pid + " - " + key, ex);
+                         return null;
+                     }));
+                 }
+                 CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
+-
+-                // 加载完成后，主动进行一次缓存预热，确保 join 后首次读取命中缓存
+-                try {
+-                    for (String key : getPlayerVariableKeys()) {
+-                        Variable var = getVariableDefinition(key);
+-                        if (var != null && !var.hasConditions()) {
+-                            cacheManager.preloadCache(player, key, var);
+-                        }
+-                    }
+-                } catch (Exception e) {
+-                    logger.debug("玩家变量缓存预热失败: " + player.getName());
+-                }
++                logger.debug("玩家变量加载完成: " + player.getName());
+             } catch (Exception e) {
+                 logger.error("加载玩家变量失败: " + player.getUniqueId(), e);
+             }
+         }, asyncTaskManager.getExecutor());
+     }
+ 
+     /** 服务器变量统一三元组查询 */
+     private CompletableFuture<ValueTriple> fetchServerTriple(String key) {
+diff --git a/src/main/java/cn/drcomo/storage/BatchPersistenceManager.java b/src/main/java/cn/drcomo/storage/BatchPersistenceManager.java
+index 625a814..db97887 100644
+--- a/src/main/java/cn/drcomo/storage/BatchPersistenceManager.java
++++ b/src/main/java/cn/drcomo/storage/BatchPersistenceManager.java
+@@ -211,24 +211,24 @@ public class BatchPersistenceManager {
+     /**
+      * 内存压力触发的持久化
+      */
+     public CompletableFuture<Void> flushOnMemoryPressure() {
+         return CompletableFuture.runAsync(() -> {
+             try {
+                 VariableMemoryStorage.MemoryStats stats = memoryStorage.getMemoryStats();
+                 if (stats.getMemoryUsagePercent() < memoryPressureThreshold) return;
+-                logger.warn("内存压力触发持久化，当前使用率: " +
++                logger.info("内存压力触发持久化，当前使用率: " +
+                         String.format("%.1f%%", stats.getMemoryUsagePercent()));
+                 List<PersistenceTask> tasks = collectPersistenceTasks(memoryStorage.getAllDirtyData());
+                 // 冷数据优先：按照等待时间降序
+                 tasks.sort(Comparator.comparingLong(
+                         (PersistenceTask t) -> t.getDirtyFlag().getPendingDuration()).reversed());
+                 executeBatchPersistence(tasks);
+-                logger.info("内存压力持久化完成");
++                logger.debug("内存压力持久化完成");
+             } catch (Exception e) {
+                 logger.error("内存压力持久化失败", e);
+                 failedPersistenceOperations.incrementAndGet();
+                 throw new RuntimeException("内存压力持久化失败", e);
+             }
+         }, persistenceExecutor);
+     }
+ 
+diff --git a/src/main/java/cn/drcomo/storage/MultiLevelCacheManager.java b/src/main/java/cn/drcomo/storage/MultiLevelCacheManager.java
+deleted file mode 100644
+index b6f707d..0000000
+--- a/src/main/java/cn/drcomo/storage/MultiLevelCacheManager.java
++++ /dev/null
+@@ -1,685 +0,0 @@
+-package cn.drcomo.storage;
+-
+-import cn.drcomo.corelib.util.DebugUtil;
+-import cn.drcomo.model.structure.Variable;
+-import com.github.benmanes.caffeine.cache.Cache;
+-import com.github.benmanes.caffeine.cache.Caffeine;
+-import com.github.benmanes.caffeine.cache.RemovalCause;
+-import com.github.benmanes.caffeine.cache.stats.CacheStats;
+-import org.bukkit.OfflinePlayer;
+-
+-import java.time.Duration;
+-import java.util.concurrent.atomic.AtomicLong;
+-import java.util.concurrent.ConcurrentHashMap;
+-import java.util.Map;
+-import java.util.Set;
+-import java.util.HashSet;
+-import java.util.regex.Matcher;
+-import java.util.regex.Pattern;
+-
+-/**
+- * 多级缓存管理器
+- * 
+- * L1: 内存原始数据 (永不过期，由 VariableMemoryStorage 管理)
+- * L2: 解析后的表达式结果 (长TTL: 5分钟)  
+- * L3: 最终计算结果缓存 (中TTL: 2分钟)
+- * 
+- * 通过多级缓存提升系统性能，减少重复计算和数据库访问。
+- * 
+- * @author BaiMo
+- */
+-public class MultiLevelCacheManager {
+-    
+-    private final DebugUtil logger;
+-    private final VariableMemoryStorage l1Cache; // L1缓存就是内存存储
+-    
+-    // L2缓存：解析后的表达式结果
+-    private final Cache<String, String> l2ExpressionCache;
+-    
+-    // L3缓存：最终计算结果
+-    private final Cache<String, CacheEntry> l3ResultCache;
+-    
+-    // 变量依赖关系追踪
+-    private final ConcurrentHashMap<String, Set<String>> dependencyGraph = new ConcurrentHashMap<>();
+-
+-    // 反向依赖映射：变量 -> 依赖它的缓存键集合
+-    private final Map<String, Set<String>> reverseDependencyMap = new ConcurrentHashMap<>();
+-
+-    // L2 反向依赖映射：变量 -> (上下文 -> 表达式缓存键集合)
+-    private final Map<String, Map<String, Set<String>>> l2ReverseDependencyMap = new ConcurrentHashMap<>();
+-
+-    // L2 表达式键到其依赖项（变量|上下文）的映射，用于失效时快速清理索引
+-    private final Map<String, Set<String>> l2ExprToDeps = new ConcurrentHashMap<>();
+-    
+-    // 表达式模式匹配器
+-    private final Pattern variablePattern = Pattern.compile("\\$\\{([^}]+)\\}");
+-    private final Pattern placeholderPattern = Pattern.compile("%([^%]+)%");
+-    // 解析算术表达式所需的数字与运算符模式
+-    private static final Pattern EXPRESSION_PATTERN = Pattern.compile("(?=.*\\d)(?=.*[+\\-*/()^])");
+-    
+-    // 缓存统计
+-    private final AtomicLong l1Hits = new AtomicLong(0);
+-    private final AtomicLong l1Misses = new AtomicLong(0);
+-    private final AtomicLong totalRequests = new AtomicLong(0);
+-    private final AtomicLong l2InvalidationsTotal = new AtomicLong(0);
+-    private final AtomicLong l3InvalidationsTotal = new AtomicLong(0);
+-    
+-    /**
+-     * 构造函数
+-     */
+-    public MultiLevelCacheManager(DebugUtil logger, VariableMemoryStorage memoryStorage, 
+-                                 CacheConfig config) {
+-        this.logger = logger;
+-        this.l1Cache = memoryStorage;
+-        
+-        // 初始化L2表达式缓存
+-        this.l2ExpressionCache = Caffeine.newBuilder()
+-                .maximumSize(config.getL2MaximumSize())
+-                .expireAfterWrite(Duration.ofMinutes(config.getL2ExpireMinutes()))
+-                .recordStats()
+-                .removalListener((String k, String v, RemovalCause cause) -> {
+-                    try {
+-                        removeMappingForExpressionKey(k);
+-                    } catch (Exception ignore) {}
+-                })
+-                .build();
+-                
+-        // 初始化L3结果缓存
+-        this.l3ResultCache = Caffeine.newBuilder()
+-                .maximumSize(config.getL3MaximumSize())
+-                .expireAfterWrite(Duration.ofMinutes(config.getL3ExpireMinutes()))
+-                .recordStats()
+-                .build();
+-                
+-        logger.info("多级缓存管理器初始化完成，L2容量: " + config.getL2MaximumSize() + 
+-                   ", L3容量: " + config.getL3MaximumSize());
+-    }
+-    
+-    /**
+-     * 从多级缓存获取变量值
+-     */
+-    public CacheResult getFromCache(OfflinePlayer player, String key, Variable variable) {
+-        totalRequests.incrementAndGet();
+-        
+-        try {
+-            // L1缓存查找（内存存储）
+-            VariableValue l1Value = getFromL1Cache(player, key, variable);
+-            if (l1Value == null) {
+-                l1Misses.incrementAndGet();
+-                logger.debug("L1缓存未命中: " + buildPlayerKey(player, key));
+-                return CacheResult.miss("L1缓存未命中");
+-            }
+-            
+-            l1Hits.incrementAndGet();
+-            String rawValue = l1Value.getValue();
+-            String cacheKey = buildCacheKey(player, key);
+-            boolean hasExpr = containsExpressions(rawValue);
+-            boolean hasPlaceholder = containsPlaceholders(rawValue);
+-            
+-            // L3缓存查找（最终结果） - 带版本验证
+-            CacheEntry l3Entry = l3ResultCache.getIfPresent(cacheKey);
+-            if (l3Entry != null && l3Entry.isValid(rawValue, l1Value.getVersion())) {
+-                logger.debug("L3缓存命中（版本" + l1Value.getVersion() + "): " + cacheKey);
+-                return CacheResult.hit("L3", l3Entry.getResult());
+-            } else if (l3Entry != null) {
+-                // 缓存存在但版本不匹配，清除失效的缓存
+-                l3ResultCache.invalidate(cacheKey);
+-                logger.debug("版本不匹配，清除L3缓存: " + cacheKey + 
+-                          ", 缓存版本: " + l3Entry.getVersion() + 
+-                          ", 当前版本: " + l1Value.getVersion());
+-            }
+-            
+-            // L2表达式缓存查找（跳过PlaceholderAPI占位符）
+-            if (hasExpr && !hasPlaceholder) {
+-                String expressionKey = buildExpressionKey(rawValue, player);
+-                String l2Result = l2ExpressionCache.getIfPresent(expressionKey);
+-                
+-                if (l2Result != null) {
+-                    logger.debug("L2缓存命中: " + expressionKey);
+-                    // 将结果放入L3缓存（带版本号）
+-                    l3ResultCache.put(cacheKey, new CacheEntry(rawValue, l2Result, l1Value.getVersion()));
+-                    return CacheResult.hit("L2", l2Result);
+-                }
+-            } else if (hasPlaceholder) {
+-                logger.debug("跳过L2缓存（包含PlaceholderAPI占位符）: " + buildPlayerKey(player, key));
+-            }
+-
+-            // 所有缓存未命中，返回L1的原始值用于进一步处理
+-            if (hasPlaceholder) {
+-                logger.debug("多级缓存未命中（包含占位符，将及时解析），版本" + l1Value.getVersion() + ": " + cacheKey);
+-            } else {
+-                logger.debug("多级缓存未命中，返回L1原始值（版本" + l1Value.getVersion() + "): " + cacheKey);
+-            }
+-            return CacheResult.miss("需要表达式解析", rawValue);
+-            
+-        } catch (Exception e) {
+-            logger.error("多级缓存查找失败: " + key, e);
+-            return CacheResult.error("缓存查找异常: " + e.getMessage());
+-        }
+-    }
+-    
+-    /**
+-     * 缓存表达式解析结果到L2缓存（优化版 - 跳过占位符表达式）
+-     */
+-    public void cacheExpression(String expression, OfflinePlayer player, String result) {
+-        try {
+-            if (expression != null && result != null && !containsPlaceholders(expression)) {
+-                String expressionKey = buildExpressionKey(expression, player);
+-                String playerContext = player != null ? player.getUniqueId().toString() : "server";
+-                l2ExpressionCache.put(expressionKey, result);
+-
+-                // 建立 L2 反向索引
+-                Set<String> deps = extractDependencies(expression);
+-                if (deps != null && !deps.isEmpty()) {
+-                    // 记录 expr -> deps 映射（变量|上下文）
+-                    Set<String> depComposites = java.util.Collections.newSetFromMap(new ConcurrentHashMap<>());
+-                    for (String depVar : deps) {
+-                        depComposites.add(depVar + "|" + playerContext);
+-                        l2ReverseDependencyMap
+-                                .computeIfAbsent(depVar, k -> new ConcurrentHashMap<>())
+-                                .compute(playerContext, (ctx, set) -> {
+-                                    if (set == null) set = ConcurrentHashMap.newKeySet();
+-                                    set.add(expressionKey);
+-                                    return set;
+-                                });
+-                    }
+-                    l2ExprToDeps.put(expressionKey, depComposites);
+-                }
+-
+-                logger.debug("L2缓存表达式结果: " + expressionKey);
+-            } else if (containsPlaceholders(expression)) {
+-                logger.debug("跳过L2缓存（包含PlaceholderAPI占位符）: " + expression);
+-            }
+-        } catch (Exception e) {
+-            logger.error("缓存表达式失败", e);
+-        }
+-    }
+-    
+-    /**
+-     * 精确清除L2缓存中与特定变量相关的项
+-     */
+-    private void invalidateL2CacheForVariable(OfflinePlayer player, String key) {
+-        String playerContext = player != null ? player.getUniqueId().toString() : "server";
+-        try {
+-            Map<String, Set<String>> ctxMap = l2ReverseDependencyMap.get(key);
+-            if (ctxMap == null) return;
+-            Set<String> exprKeys = ctxMap.get(playerContext);
+-            if (exprKeys == null || exprKeys.isEmpty()) return;
+-            // 复制一份，避免并发修改
+-            Set<String> toInvalidate = new HashSet<>(exprKeys);
+-            l2ExpressionCache.invalidateAll(toInvalidate);
+-            l2InvalidationsTotal.addAndGet(toInvalidate.size());
+-            logger.debug("L2精准清理: key=" + key + ", ctx=" + playerContext + ", 条目=" + toInvalidate.size());
+-        } catch (Exception e) {
+-            logger.error("L2精准清理失败: key=" + key, e);
+-        }
+-    }
+-
+-    /**
+-     * 缓存最终结果到L3缓存
+-     */
+-    public void cacheResult(OfflinePlayer player, String key, String originalValue, String result) {
+-        try {
+-            if (originalValue != null && result != null && !containsPlaceholders(originalValue)) {
+-                String cacheKey = buildCacheKey(player, key);
+-                l3ResultCache.put(cacheKey, new CacheEntry(originalValue, result));
+-                // 登记依赖关系
+-                registerDependencies(cacheKey, extractDependencies(originalValue));
+-                logger.debug("L3缓存结果: " + cacheKey);
+-            } else if (containsPlaceholders(originalValue)) {
+-                logger.debug("跳过L3缓存（包含占位符，及时解析）: " + originalValue);
+-            }
+-        } catch (Exception e) {
+-            logger.error("缓存结果失败", e);
+-        }
+-    }
+-
+-    /**
+-     * 登记变量依赖关系
+-     */
+-    private void registerDependencies(String cacheKey, Set<String> dependencies) {
+-        // 如果没有依赖，移除旧记录
+-        if (dependencies == null || dependencies.isEmpty()) {
+-            Set<String> oldDeps = dependencyGraph.remove(cacheKey);
+-            if (oldDeps != null) {
+-                for (String dep : oldDeps) {
+-                    reverseDependencyMap.computeIfPresent(dep, (k, v) -> {
+-                        v.remove(cacheKey);
+-                        return v.isEmpty() ? null : v;
+-                    });
+-                }
+-            }
+-            return;
+-        }
+-
+-        // 移除旧依赖并更新反向映射
+-        Set<String> oldDeps = dependencyGraph.put(cacheKey, dependencies);
+-        if (oldDeps != null) {
+-            for (String dep : oldDeps) {
+-                reverseDependencyMap.computeIfPresent(dep, (k, v) -> {
+-                    v.remove(cacheKey);
+-                    return v.isEmpty() ? null : v;
+-                });
+-            }
+-        }
+-
+-        // 记录新依赖
+-        for (String dep : dependencies) {
+-            reverseDependencyMap.compute(dep, (k, v) -> {
+-                if (v == null) {
+-                    v = ConcurrentHashMap.newKeySet();
+-                }
+-                v.add(cacheKey);
+-                return v;
+-            });
+-        }
+-    }
+-
+-    /**
+-     * 从表达式中提取变量依赖
+-     */
+-    private Set<String> extractDependencies(String value) {
+-        Set<String> dependencies = new HashSet<>();
+-        if (value == null) {
+-            return dependencies;
+-        }
+-        Matcher matcher = variablePattern.matcher(value);
+-        while (matcher.find()) {
+-            dependencies.add(matcher.group(1));
+-        }
+-        return dependencies;
+-    }
+-
+-    /**
+-     * 递归清除依赖变量的缓存
+-     */
+-    private void invalidateDependentCaches(OfflinePlayer player, String key) {
+-        Set<String> dependentCacheKeys = reverseDependencyMap.remove(key);
+-        if (dependentCacheKeys == null || dependentCacheKeys.isEmpty()) {
+-            return;
+-        }
+-
+-        for (String dependentCacheKey : dependentCacheKeys) {
+-            // 清除依赖变量的L3缓存
+-            l3ResultCache.invalidate(dependentCacheKey);
+-            l3InvalidationsTotal.incrementAndGet();
+-
+-            // 同步更新映射
+-            Set<String> deps = dependencyGraph.remove(dependentCacheKey);
+-            if (deps != null) {
+-                for (String dep : deps) {
+-                    reverseDependencyMap.computeIfPresent(dep, (k, v) -> {
+-                        v.remove(dependentCacheKey);
+-                        return v.isEmpty() ? null : v;
+-                    });
+-                }
+-            }
+-
+-            // 解析出依赖变量的信息进行递归清理
+-            String[] keyParts = dependentCacheKey.split(":", 2);
+-            if (keyParts.length == 2) {
+-                String dependentKey = keyParts[1];
+-                invalidateL2CacheForVariable(player, dependentKey);
+-                invalidateDependentCaches(player, dependentKey);
+-            }
+-
+-            logger.debug("清除依赖变量缓存: " + dependentCacheKey);
+-        }
+-    }
+-    
+-    /**
+-     * 使缓存失效（优化版 - 支持依赖关系追踪）
+-     */
+-    public void invalidateCache(OfflinePlayer player, String key) {
+-        try {
+-            String cacheKey = buildCacheKey(player, key);
+-            
+-            // 清除L3缓存
+-            l3ResultCache.invalidate(cacheKey);
+-            l3InvalidationsTotal.incrementAndGet();
+-
+-            // 精确清除相关的L2表达式缓存
+-            invalidateL2CacheForVariable(player, key);
+-
+-            // 移除自身依赖记录
+-            Set<String> deps = dependencyGraph.remove(cacheKey);
+-            if (deps != null) {
+-                for (String dep : deps) {
+-                    reverseDependencyMap.computeIfPresent(dep, (k, v) -> {
+-                        v.remove(cacheKey);
+-                        return v.isEmpty() ? null : v;
+-                    });
+-                }
+-            }
+-
+-            // 递归清除依赖此变量的其他变量缓存
+-            invalidateDependentCaches(player, key);
+-            
+-            logger.debug("清除缓存及依赖项: " + cacheKey);
+-            
+-        } catch (Exception e) {
+-            logger.error("清除缓存失败: " + key, e);
+-        }
+-    }
+-
+-    /**
+-     * 仅清理 L3（最终结果）缓存，不触碰 L2 表达式缓存
+-     */
+-    public void invalidateL3Only(OfflinePlayer player, String key) {
+-        try {
+-            String cacheKey = buildCacheKey(player, key);
+-            l3ResultCache.invalidate(cacheKey);
+-            l3InvalidationsTotal.incrementAndGet();
+-            logger.debug("仅清L3缓存: " + cacheKey);
+-        } catch (Exception e) {
+-            logger.error("清理L3缓存失败: " + key, e);
+-        }
+-    }
+-
+-    /**
+-     * 一次性清除某玩家上下文下的所有 L2 表达式缓存（不影响 L3）
+-     * @return 实际清除的 L2 条目数
+-     */
+-    public int invalidateAllL2ForPlayer(OfflinePlayer player) {
+-        String playerContext = player != null ? player.getUniqueId().toString() : "server";
+-        try {
+-            Set<String> agg = new HashSet<>();
+-            for (Map<String, Set<String>> ctxMap : l2ReverseDependencyMap.values()) {
+-                Set<String> set = ctxMap.get(playerContext);
+-                if (set != null && !set.isEmpty()) {
+-                    agg.addAll(set);
+-                }
+-            }
+-            if (!agg.isEmpty()) {
+-                l2ExpressionCache.invalidateAll(agg);
+-                l2InvalidationsTotal.addAndGet(agg.size());
+-            }
+-            logger.debug("一次性清除玩家上下文 L2: ctx=" + playerContext + ", 条目=" + agg.size());
+-            return agg.size();
+-        } catch (Exception e) {
+-            logger.error("一次性清除玩家 L2 失败: ctx=" + playerContext, e);
+-            return 0;
+-        }
+-    }
+-
+-    /**
+-     * 获取累计的 L2/L3 清理次数（条目数）
+-     */
+-    public long getL2InvalidationsTotal() { return l2InvalidationsTotal.get(); }
+-    public long getL3InvalidationsTotal() { return l3InvalidationsTotal.get(); }
+-
+-    /**
+-     * 清理 L2 索引中关于指定表达式键的记录
+-     */
+-    private void removeMappingForExpressionKey(String expressionKey) {
+-        Set<String> comps = l2ExprToDeps.remove(expressionKey);
+-        if (comps == null || comps.isEmpty()) return;
+-        for (String comp : comps) {
+-            int idx = comp.lastIndexOf('|');
+-            if (idx <= 0) continue;
+-            String var = comp.substring(0, idx);
+-            String ctx = comp.substring(idx + 1);
+-            l2ReverseDependencyMap.computeIfPresent(var, (k, ctxMap) -> {
+-                if (ctxMap == null) return null;
+-                Set<String> set = ctxMap.get(ctx);
+-                if (set != null) {
+-                    set.remove(expressionKey);
+-                    if (set.isEmpty()) {
+-                        ctxMap.remove(ctx);
+-                    }
+-                }
+-                return ctxMap.isEmpty() ? null : ctxMap;
+-            });
+-        }
+-    }
+-    
+-    /**
+-     * 预热缓存 - 预加载热点数据
+-     */
+-    public void preloadCache(OfflinePlayer player, String key, Variable variable) {
+-        try {
+-            // 触发一次缓存查找，如果未命中会自动加载
+-            CacheResult result = getFromCache(player, key, variable);
+-            if (result.isHit()) {
+-                logger.debug("缓存预热成功: " + buildPlayerKey(player, key));
+-            }
+-        } catch (Exception e) {
+-            logger.error("缓存预热失败: " + key, e);
+-        }
+-    }
+-    
+-    /**
+-     * 从L1缓存获取数据
+-     */
+-    private VariableValue getFromL1Cache(OfflinePlayer player, String key, Variable variable) {
+-        if (variable.isPlayerScoped() && player != null) {
+-            return l1Cache.getPlayerVariable(player.getUniqueId(), key);
+-        } else if (variable.isGlobal()) {
+-            return l1Cache.getServerVariable(key);
+-        }
+-        return null;
+-    }
+-    
+-    /**
+-     * 检查值是否包含需要解析的表达式
+-     */
+-    private boolean containsExpressions(String value) {
+-        if (value == null) return false;
+-        return value.contains("%") || value.contains("${") ||
+-               EXPRESSION_PATTERN.matcher(value).find();
+-    }
+-    
+-    /**
+-     * 检查表达式是否包含PlaceholderAPI占位符（%placeholder%）
+-     */
+-    private boolean containsPlaceholders(String value) {
+-        if (value == null) return false;
+-        return value.contains("%");
+-    }
+-    
+-    /**
+-     * 构建缓存键
+-     */
+-    private String buildCacheKey(OfflinePlayer player, String key) {
+-        if (player != null) {
+-            return player.getUniqueId().toString() + ":" + key;
+-        } else {
+-            return "server:" + key;
+-        }
+-    }
+-    
+-    /**
+-     * 构建表达式缓存键
+-     */
+-    private String buildExpressionKey(String expression, OfflinePlayer player) {
+-        String playerContext = player != null ? player.getUniqueId().toString() : "server";
+-        return "expr:" + expression.hashCode() + ":" + playerContext;
+-    }
+-    
+-    /**
+-     * 构建玩家键
+-     */
+-    private String buildPlayerKey(OfflinePlayer player, String key) {
+-        return player != null ? (player.getName() + ":" + key) : ("SERVER:" + key);
+-    }
+-    
+-    /**
+-     * 清空所有缓存
+-     */
+-    public void clearAllCaches() {
+-        try {
+-            // 清空L1内存缓存
+-            if (l1Cache != null) {
+-                l1Cache.clearAllCaches();
+-                logger.debug("L1内存缓存已清空");
+-            }
+-            
+-            // 检查缓存对象是否还可用
+-            if (l2ExpressionCache != null) {
+-                l2ExpressionCache.invalidateAll();
+-                logger.debug("L2表达式缓存已清空");
+-            }
+-            
+-            if (l3ResultCache != null) {
+-                l3ResultCache.invalidateAll();
+-                logger.debug("L3结果缓存已清空");
+-            }
+-
+-            // 清空依赖关系图及反向映射
+-            dependencyGraph.clear();
+-            reverseDependencyMap.clear();
+-            logger.debug("变量依赖关系图已清空");
+-            logger.debug("变量反向依赖映射已清空");
+-            
+-            logger.info("清空所有多级缓存完成（含L1/L2/L3缓存和占位符优化）");
+-        } catch (IllegalStateException e) {
+-            // 插件关闭时可能发生的类加载器关闭异常
+-            if (e.getMessage() != null && e.getMessage().contains("zip file closed")) {
+-                logger.debug("插件正在关闭，跳过缓存清理操作");
+-            } else {
+-                logger.error("清空缓存失败: " + e.getMessage());
+-            }
+-        } catch (Exception e) {
+-            logger.error("清空缓存失败", e);
+-        }
+-    }
+-    
+-    /**
+-     * 缓存条目类（增强版 - 支持版本验证）
+-     */
+-    private static class CacheEntry {
+-        private final String originalValue;
+-        private final String result;
+-        private final long timestamp;
+-        private final long version; // 版本号支持
+-        
+-        // 旧的构造函数（兼容性）
+-        public CacheEntry(String originalValue, String result) {
+-            this(originalValue, result, 0L);
+-        }
+-        
+-        // 新的构造函数（带版本号）
+-        public CacheEntry(String originalValue, String result, long version) {
+-            this.originalValue = originalValue;
+-            this.result = result;
+-            this.timestamp = System.currentTimeMillis();
+-            this.version = version;
+-        }
+-        
+-        public String getResult() {
+-            return result;
+-        }
+-        
+-        public long getVersion() {
+-            return version;
+-        }
+-        
+-        // 旧的验证方法（兼容性）
+-        public boolean isValid(String currentOriginalValue) {
+-            return isValid(currentOriginalValue, 0L);
+-        }
+-        
+-        // 新的验证方法（带版本号验证）
+-        public boolean isValid(String currentOriginalValue, long currentVersion) {
+-            // 检查原始值是否发生变化
+-            boolean valueMatches = originalValue != null && originalValue.equals(currentOriginalValue);
+-            
+-            // 如果有版本号，也要检查版本是否匹配
+-            if (version > 0 && currentVersion > 0) {
+-                return valueMatches && (version == currentVersion);
+-            }
+-            
+-            // 如果没有版本号，只检查值
+-            return valueMatches;
+-        }
+-        
+-        public long getAge() {
+-            return System.currentTimeMillis() - timestamp;
+-        }
+-        
+-        @Override
+-        public String toString() {
+-            return String.format("CacheEntry{value='%s', version=%d, age=%dms}", 
+-                    originalValue, version, getAge());
+-        }
+-    }
+-    
+-    /**
+-     * 缓存查找结果类
+-     */
+-    public static class CacheResult {
+-        private final boolean isHit;
+-        private final String level; // L1, L2, L3 或 MISS
+-        private final String value;
+-        private final String reason;
+-        
+-        private CacheResult(boolean isHit, String level, String value, String reason) {
+-            this.isHit = isHit;
+-            this.level = level;
+-            this.value = value;
+-            this.reason = reason;
+-        }
+-        
+-        public static CacheResult hit(String level, String value) {
+-            return new CacheResult(true, level, value, "缓存命中");
+-        }
+-        
+-        public static CacheResult miss(String reason) {
+-            return new CacheResult(false, "MISS", null, reason);
+-        }
+-        
+-        public static CacheResult miss(String reason, String rawValue) {
+-            return new CacheResult(false, "MISS", rawValue, reason);
+-        }
+-        
+-        public static CacheResult error(String reason) {
+-            return new CacheResult(false, "ERROR", null, reason);
+-        }
+-        
+-        public boolean isHit() { return isHit; }
+-        public String getLevel() { return level; }
+-        public String getValue() { return value; }
+-        public String getReason() { return reason; }
+-        
+-        @Override
+-        public String toString() {
+-            return String.format("CacheResult{hit=%b, level=%s, reason='%s'}", 
+-                    isHit, level, reason);
+-        }
+-    }
+-    
+-    /**
+-     * 缓存配置类
+-     */
+-    public static class CacheConfig {
+-        private int l2MaximumSize = 10000;
+-        private int l2ExpireMinutes = 5;
+-        private int l3MaximumSize = 5000;
+-        private int l3ExpireMinutes = 2;
+-        
+-        // Getters and Setters
+-        public int getL2MaximumSize() { return l2MaximumSize; }
+-        public CacheConfig setL2MaximumSize(int l2MaximumSize) { 
+-            this.l2MaximumSize = l2MaximumSize; 
+-            return this;
+-        }
+-        
+-        public int getL2ExpireMinutes() { return l2ExpireMinutes; }
+-        public CacheConfig setL2ExpireMinutes(int l2ExpireMinutes) { 
+-            this.l2ExpireMinutes = l2ExpireMinutes; 
+-            return this;
+-        }
+-        
+-        public int getL3MaximumSize() { return l3MaximumSize; }
+-        public CacheConfig setL3MaximumSize(int l3MaximumSize) { 
+-            this.l3MaximumSize = l3MaximumSize; 
+-            return this;
+-        }
+-        
+-        public int getL3ExpireMinutes() { return l3ExpireMinutes; }
+-        public CacheConfig setL3ExpireMinutes(int l3ExpireMinutes) { 
+-            this.l3ExpireMinutes = l3ExpireMinutes; 
+-            return this;
+-        }
+-    }
+-}
+\ No newline at end of file
+diff --git a/src/main/java/cn/drcomo/tasks/VariableCycleTask.java b/src/main/java/cn/drcomo/tasks/VariableCycleTask.java
+index 048e301..9d15cd8 100644
+--- a/src/main/java/cn/drcomo/tasks/VariableCycleTask.java
++++ b/src/main/java/cn/drcomo/tasks/VariableCycleTask.java
+@@ -150,46 +150,58 @@ public class VariableCycleTask {
+         }
+         if (waitForInitializationLogged) {
+             logger.info("变量管理器初始化完成，开始执行周期重置检查");
+             waitForInitializationLogged = false;
+         }
+ 
+         ZoneId zone = getValidatedTimeZone();
+         ZonedDateTime now = ZonedDateTime.now(zone);
++        int standardResetCount = 0;
++        int cronResetCount = 0;
+         try {
+-            processStandardCycles(now);
+-            processCronCycles(now);
++            standardResetCount = processStandardCycles(now);
++            cronResetCount = processCronCycles(now);
+         } catch (DateTimeException e) {
+             logger.error("时间计算异常，请检查时区配置: " + zone.getId(), e);
+             logBoundaryConditionInfo(now, zone);
+         } catch (Exception e) {
+             logger.error("周期变量检测任务执行异常", e);
+         }
++
++        // 仅在有重置时输出汇总日志
++        if (standardResetCount > 0 || cronResetCount > 0) {
++            logger.info("周期检测完成: 标准周期 " + standardResetCount + " 个, Cron " + cronResetCount + " 个");
++        }
+     }
+ 
+     // ============ 新的窗口驱动周期实现（标准 + Cron 调度入口使用） ============
+ 
+-    /** 长周期优先执行，避免短周期补偿占满时间 */
+-    private void processStandardCycles(ZonedDateTime now) {
++    /** 长周期优先执行，避免短周期补偿占满时间。返回本轮重置的变量总数。 */
++    private int processStandardCycles(ZonedDateTime now) {
+         String[] order = new String[]{"yearly", "monthly", "weekly", "daily", "hour", "minute"};
++        int totalResetCount = 0;
+         for (String type : order) {
+             CycleWindow currentWindow = buildCurrentWindow(type, now);
+             List<CycleWindow> pending = buildPendingWindows(type, currentWindow, now);
+             if (pending.isEmpty()) {
+                 continue;
+             }
+             Map<String, Long> firstModifiedCache = preloadFirstModifiedForCycle(type, now);
+-            int success = resetVariablesGroupedByVariable(type, pending, now, firstModifiedCache);
+-            logger.info("完成标准周期检测: " + type + " 窗口数 " + success + "/" + pending.size());
++            int[] result = resetVariablesGroupedByVariable(type, pending, now, firstModifiedCache);
++            int successWindows = result[0];
++            int resetCount = result[1];
++            totalResetCount += resetCount;
++            logger.debug("完成标准周期检测: " + type + " 窗口数 " + successWindows + "/" + pending.size() + " 重置变量 " + resetCount + " 个");
+         }
++        return totalResetCount;
+     }
+ 
+-    /** 统一 Cron 重置入口（窗口化判定） */
+-    private void processCronCycles(ZonedDateTime now) {
++    /** 统一 Cron 重置入口（窗口化判定）。返回本轮重置的变量数量。 */
++    private int processCronCycles(ZonedDateTime now) {
+         Set<String> keys = variablesManager.getAllVariableKeys();
+         int resetCount = 0;
+         for (String key : keys) {
+             Variable var = variablesManager.getVariableDefinition(key);
+             if (var == null) {
+                 continue;
+             }
+             String expr = var.getCycle();
+@@ -240,17 +252,17 @@ public class VariableCycleTask {
+             if (lastResetTime != null && !lastResetTime.isBefore(lastScheduledExec)) {
+                 logger.debug("跳过Cron重置(本刻度已重置): " + key);
+                 continue;
+             }
+ 
+             Optional<ZonedDateTime> nextExecOpt = executionTime.nextExecution(now);
+             String nextInfo = nextExecOpt.map(Object::toString).orElse("N/A");
+ 
+-            logger.info("Cron变量需要重置: " + key +
++            logger.debug("Cron变量需要重置: " + key +
+                     " 上次计划执行: " + lastScheduledExec +
+                     " 下次计划执行: " + nextInfo +
+                     " 当前时间: " + now +
+                     " (" + expr + ")");
+ 
+             if (safeDeleteAndClear(var.isGlobal(), key, 0, true)) {
+                 updateVariableResetTime(key, lastScheduledExec.toInstant().toEpochMilli());
+                 resetCount++;
+@@ -259,18 +271,19 @@ public class VariableCycleTask {
+                 } catch (Exception actEx) {
+                     logger.error("执行重置动作失败: " + key, actEx);
+                 }
+             } else {
+                 logger.warn("Cron变量重置失败: " + key);
+             }
+         }
+         if (resetCount > 0) {
+-            logger.info("已完成 Cron 表达式周期变量重置，共重置 " + resetCount + " 个变量");
++            logger.debug("已完成 Cron 表达式周期变量重置，共重置 " + resetCount + " 个变量");
+         }
++        return resetCount;
+     }
+ 
+     /** 构建当前窗口 */
+     private CycleWindow buildCurrentWindow(String cycleType, ZonedDateTime now) {
+         ZonedDateTime start = normalizeCycleStart(cycleType, now);
+         ZonedDateTime end = advanceCycleStart(start, cycleType);
+         return new CycleWindow(cycleType, start, end);
+     }
+@@ -290,18 +303,19 @@ public class VariableCycleTask {
+             result.add(new CycleWindow(cycleType, start, end));
+         }
+         return result;
+     }
+ 
+     /**
+      * 按变量聚合处理所有待补偿窗口，避免重复阻塞查询。
+      * 保持原有业务判定与补偿规则不变，仅调整遍历顺序与预取策略。
++     * @return int数组: [成功的窗口数, 重置的变量总数]
+      */
+-    private int resetVariablesGroupedByVariable(String cycleType, List<CycleWindow> pending, ZonedDateTime now,
++    private int[] resetVariablesGroupedByVariable(String cycleType, List<CycleWindow> pending, ZonedDateTime now,
+                                                 Map<String, Long> firstModifiedCache) {
+         Set<String> keys = variablesManager.getAllVariableKeys();
+         int windowCount = pending.size();
+         boolean[] windowFailed = new boolean[windowCount];
+         int[] windowResetCount = new int[windowCount];
+ 
+         for (String key : keys) {
+             Variable var = variablesManager.getVariableDefinition(key);
+@@ -353,17 +367,17 @@ public class VariableCycleTask {
+                     }
+                     sleepQuietly(100L * retry);
+                 }
+ 
+                 if (success) {
+                     lastResetTime = window.getStart();
+                     updateVariableResetTime(key, window.getStart().toInstant().toEpochMilli());
+                     windowResetCount[i]++;
+-                    logger.info("重置变量: " + key +
++                    logger.debug("重置变量: " + key +
+                             " 周期: " + cycleType +
+                             " 窗口起点: " + window.getStart() +
+                             " 当前: " + now);
+                     try {
+                         variablesManager.executeCycleActionsOnReset(var, null);
+                     } catch (Exception actEx) {
+                         logger.error("执行重置动作失败: " + key, actEx);
+                     }
+@@ -371,28 +385,30 @@ public class VariableCycleTask {
+                     logger.warn("变量 " + key + " 重置失败，已重试3次");
+                     windowFailed[i] = true;
+                     currentVarStop = true;
+                 }
+             }
+         }
+ 
+         int successWindows = 0;
++        int totalResetCount = 0;
+         for (int i = 0; i < windowCount; i++) {
++            totalResetCount += windowResetCount[i];
+             CycleWindow window = pending.get(i);
+             if (!windowFailed[i]) {
+                 writeGlobalLastReset(cycleType, window.getStart());
+-                logger.info("窗口执行完成: " + cycleType + " 窗口 " + window.getStart() + " 成功 " + windowResetCount[i]);
++                logger.debug("窗口执行完成: " + cycleType + " 窗口 " + window.getStart() + " 成功 " + windowResetCount[i]);
+                 successWindows++;
+             } else {
+-                logger.warn("窗口执行存在失败: " + cycleType + " 窗口 " + window.getStart() + " 成功 " + windowResetCount[i]);
++                logger.info("窗口执行存在失败: " + cycleType + " 窗口 " + window.getStart() + " 成功 " + windowResetCount[i]);
+                 break;
+             }
+         }
+-        return successWindows;
++        return new int[]{successWindows, totalResetCount};
+     }
+ 
+     /** 预取指定周期的变量首次修改时间，减少循环内阻塞查询 */
+     private Map<String, Long> preloadFirstModifiedForCycle(String cycleType, ZonedDateTime now) {
+         Map<String, Long> cache = new HashMap<>();
+         Set<String> keys = variablesManager.getAllVariableKeys();
+         for (String key : keys) {
+             Variable var = variablesManager.getVariableDefinition(key);
+@@ -441,31 +457,31 @@ public class VariableCycleTask {
+             ZonedDateTime fallback = retreatCycleStart(currentWindow.getStart(), cycleType);
+             if (fallback == null) {
+                 fallback = currentWindow.getStart().minusSeconds(1);
+             }
+             synchronized (yamlUtil) {
+                 setDataValue("cycle.last-" + cycleType.toLowerCase() + "-reset", fallback.toInstant().toEpochMilli());
+                 saveDataConfig("自动纠正未来周期记录: " + cycleType);
+             }
+-            logger.warn("检测到未来的 " + cycleType + " 全局重置记录，已回调到 " + fallback);
++            logger.info("检测到未来的 " + cycleType + " 全局重置记录，已回调到 " + fallback);
+             return fallback;
+         }
+         return normalizeCycleStart(cycleType, recorded);
+     }
+ 
+     /** 校正变量维度未来时间，确保不会阻断补偿 */
+     private ZonedDateTime sanitizeVariableFutureTime(String key, ZonedDateTime recordedTime, CycleWindow window, ZonedDateTime now, String cycleLabel) {
+         if (recordedTime == null) {
+             return null;
+         }
+         if (recordedTime.isAfter(now.plus(Duration.ofMillis(FUTURE_DRIFT_MILLIS)))) {
+             ZonedDateTime corrected = window.getStart().minusSeconds(1);
+             updateVariableResetTime(key, corrected.toInstant().toEpochMilli());
+-            logger.warn("检测到未来的重置时间记录，已自动回调: 变量=" + key + " 周期=" + cycleLabel +
++            logger.info("检测到未来的重置时间记录，已自动回调: 变量=" + key + " 周期=" + cycleLabel +
+                     " 原记录=" + recordedTime + " 窗口=" + window.getStart() + " 新记录=" + corrected);
+             return corrected;
+         }
+         return recordedTime;
+     }
+ 
+     // ============ 公共工具方法 ============
+ 
+@@ -553,20 +569,21 @@ public class VariableCycleTask {
+             if (deleted == null) {
+                 return false;
+             }
+ 
+             totalDeleted += deleted;
+ 
+             if (deleted < playerDeleteBatchSize) {
+                 if (totalDeleted == 0) {
+-                    logger.warn("玩家变量分批删除结束但未删除任何数据: " + key);
+-                    return false;
++                    // 无数据可删 = 成功（变量从未被修改过，无需重置）
++                    logger.debug("玩家变量无数据需要删除（可能从未修改过）: " + key);
++                    return true;  // 返回 true，不触发重试
+                 }
+-                logger.info("玩家变量分批删除完成: " + key + " 共删除 " + totalDeleted + " 行");
++                logger.debug("玩家变量分批删除完成: " + key + " 共删除 " + totalDeleted + " 行");
+                 return true;
+             }
+ 
+             if (!sleepQuietly(10L)) {
+                 logger.warn("删除玩家变量被中断: " + key);
+                 return false;
+             }
+         }
+@@ -603,20 +620,21 @@ public class VariableCycleTask {
+                     }
+                     return r;
+                 });
+         Integer affected = f.get(dbTimeoutMillis, TimeUnit.MILLISECONDS);
+         if (affected == null) {
+             return false;
+         }
+         if (affected <= 0) {
+-            logger.warn("删除全局变量未删除任何数据: " + key);
+-            return false;
++            // 无数据可删 = 成功（变量从未被修改过，无需重置）
++            logger.debug("全局变量无数据需要删除: " + key);
++            return true;
+         }
+-        logger.info("删除全局变量成功: " + key + " 共删除 " + affected + " 行");
++        logger.debug("删除全局变量成功: " + key + " 共删除 " + affected + " 行");
+         return true;
+     }
+ 
+     /**
+      * 安静睡眠，避免过度占用数据库线程。
+      */
+     private boolean sleepQuietly(long millis) {
+         try {
+@@ -695,17 +713,17 @@ public class VariableCycleTask {
+     ) {
+         if (recordedTime == null || referencePoint == null) {
+             return recordedTime;
+         }
+         // 允许极小漂移（1分钟），超过则认为记录异常
+         if (recordedTime.isAfter(now.plusMinutes(1))) {
+             ZonedDateTime corrected = referencePoint.minusSeconds(1);
+             updateVariableResetTime(key, corrected.toInstant().toEpochMilli());
+-            logger.warn("检测到未来的重置时间记录，已自动回调: " +
++            logger.info("检测到未来的重置时间记录，已自动回调: " +
+                     "变量=" + key +
+                     " 周期=" + cycleLabel +
+                     " 原记录=" + recordedTime +
+                     " 参考点=" + referencePoint +
+                     " 当前=" + now +
+                     " 新记录=" + corrected);
+             return corrected;
+         }
+@@ -800,23 +818,23 @@ public class VariableCycleTask {
+             return pending;
+         }
+ 
+         ZoneId zone = cycleStart.getZone();
+         ZonedDateTime lastReset = Instant.ofEpochMilli(lastResetMillis).atZone(zone);
+         ZonedDateTime normalizedLast = normalizeCycleStart(cycleType, lastReset);
+ 
+         if (normalizedLast.isAfter(cycleStart)) {
+-            logger.warn("检测到未来的" + cycleType + "重置记录，准备自动纠正: 上次="
++            logger.info("检测到未来的" + cycleType + "重置记录，准备自动纠正: 上次="
+                     + normalizedLast + " 当前=" + cycleStart);
+             ZonedDateTime corrected = rectifyFutureResetTimestamp(cycleType, cycleStart);
+             if (corrected != null) {
+                 normalizedLast = corrected;
+             } else {
+-                logger.warn("未来时间纠正失败，仍将尝试执行当前周期补偿: " + cycleType);
++                logger.info("未来时间纠正失败，仍将尝试执行当前周期补偿: " + cycleType);
+                 pending.add(cycleStart);
+                 return pending;
+             }
+         }
+         if (!normalizedLast.isBefore(cycleStart)) {
+             return pending;
+         }
+ 
+@@ -843,17 +861,17 @@ public class VariableCycleTask {
+ 
+         if (!pending.isEmpty() && pending.get(pending.size() - 1).isBefore(cycleStart)) {
+             pending.add(cycleStart);
+         }
+ 
+         if (pending.isEmpty()) {
+             pending.add(cycleStart);
+         } else if (pending.size() > 1) {
+-            logger.warn("检测到 " + cycleType + " 周期补偿 " + pending.size() +
++            logger.info("检测到 " + cycleType + " 周期补偿 " + pending.size() +
+                     " 次，自上次重置 " + normalizedLast + " 至当前起点 " + cycleStart);
+         }
+         return pending;
+     }
+ 
+     /**
+      * 自动纠正记录在未来的 last-reset 时间，避免跳过补偿
+      */
+@@ -863,17 +881,17 @@ public class VariableCycleTask {
+             corrected = cycleStart.minusSeconds(1);
+         }
+         corrected = normalizeCycleStart(cycleType, corrected);
+         long correctedMillis = corrected.toInstant().toEpochMilli();
+         synchronized (yamlUtil) {
+             setDataValue("cycle.last-" + cycleType.toLowerCase() + "-reset", correctedMillis);
+             saveDataConfig("自动纠正未来周期记录: " + cycleType);
+         }
+-        logger.warn("已自动将 " + cycleType + " 周期的最后重置时间回调至 " + corrected
++        logger.info("已自动将 " + cycleType + " 周期的最后重置时间回调至 " + corrected
+                 + "，请检查服务器时间与数据库删除流程是否正常");
+         return corrected;
+     }
+ 
+     /**
+      * 统一将任意时间对齐到对应周期的起点
+      */
+     private ZonedDateTime normalizeCycleStart(String cycleType, ZonedDateTime time) {
+@@ -1031,19 +1049,19 @@ public class VariableCycleTask {
+      * @param isCron   是否 Cron 重置
+      * @return 删除并清理成功返回 true
+      */
+     private boolean safeDeleteAndClear(
+             boolean isGlobal, String key, int attempt, boolean isCron) {
+         if (deleteVariableFromDb(isGlobal, key)) {
+             String label = isCron ? "Cron变量" : "变量";
+             String attemptInfo = isCron ? "" : " (第" + attempt + "次尝试)";
+-            logger.info("正在重置" + label + ": " + key + attemptInfo);
++            logger.debug("正在重置" + label + ": " + key + attemptInfo);
+             clearCachesAndWait(key);
+-            logger.info(label + " " + key + " 重置完成，数据库记录已删除，所有缓存已清理");
++            logger.debug(label + " " + key + " 重置完成，数据库记录已删除，所有缓存已清理");
+             return true;
+         }
+         return false;
+     }
+ 
+     /** 清理内存和缓存并短暂等待，确保异步完成 */
+     private void clearCachesAndWait(String key) {
+         variablesManager.removeVariableFromMemoryAndCache(key);

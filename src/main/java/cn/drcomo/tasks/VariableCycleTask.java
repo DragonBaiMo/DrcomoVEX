@@ -155,22 +155,30 @@ public class VariableCycleTask {
 
         ZoneId zone = getValidatedTimeZone();
         ZonedDateTime now = ZonedDateTime.now(zone);
+        int standardResetCount = 0;
+        int cronResetCount = 0;
         try {
-            processStandardCycles(now);
-            processCronCycles(now);
+            standardResetCount = processStandardCycles(now);
+            cronResetCount = processCronCycles(now);
         } catch (DateTimeException e) {
             logger.error("时间计算异常，请检查时区配置: " + zone.getId(), e);
             logBoundaryConditionInfo(now, zone);
         } catch (Exception e) {
             logger.error("周期变量检测任务执行异常", e);
         }
+
+        // 仅在有重置时输出汇总日志
+        if (standardResetCount > 0 || cronResetCount > 0) {
+            logger.info("周期检测完成: 标准周期 " + standardResetCount + " 个, Cron " + cronResetCount + " 个");
+        }
     }
 
     // ============ 新的窗口驱动周期实现（标准 + Cron 调度入口使用） ============
 
-    /** 长周期优先执行，避免短周期补偿占满时间 */
-    private void processStandardCycles(ZonedDateTime now) {
+    /** 长周期优先执行，避免短周期补偿占满时间。返回本轮重置的变量总数。 */
+    private int processStandardCycles(ZonedDateTime now) {
         String[] order = new String[]{"yearly", "monthly", "weekly", "daily", "hour", "minute"};
+        int totalResetCount = 0;
         for (String type : order) {
             CycleWindow currentWindow = buildCurrentWindow(type, now);
             List<CycleWindow> pending = buildPendingWindows(type, currentWindow, now);
@@ -178,13 +186,17 @@ public class VariableCycleTask {
                 continue;
             }
             Map<String, Long> firstModifiedCache = preloadFirstModifiedForCycle(type, now);
-            int success = resetVariablesGroupedByVariable(type, pending, now, firstModifiedCache);
-            logger.info("完成标准周期检测: " + type + " 窗口数 " + success + "/" + pending.size());
+            int[] result = resetVariablesGroupedByVariable(type, pending, now, firstModifiedCache);
+            int successWindows = result[0];
+            int resetCount = result[1];
+            totalResetCount += resetCount;
+            logger.debug("完成标准周期检测: " + type + " 窗口数 " + successWindows + "/" + pending.size() + " 重置变量 " + resetCount + " 个");
         }
+        return totalResetCount;
     }
 
-    /** 统一 Cron 重置入口（窗口化判定） */
-    private void processCronCycles(ZonedDateTime now) {
+    /** 统一 Cron 重置入口（窗口化判定）。返回本轮重置的变量数量。 */
+    private int processCronCycles(ZonedDateTime now) {
         Set<String> keys = variablesManager.getAllVariableKeys();
         int resetCount = 0;
         for (String key : keys) {
@@ -245,7 +257,7 @@ public class VariableCycleTask {
             Optional<ZonedDateTime> nextExecOpt = executionTime.nextExecution(now);
             String nextInfo = nextExecOpt.map(Object::toString).orElse("N/A");
 
-            logger.info("Cron变量需要重置: " + key +
+            logger.debug("Cron变量需要重置: " + key +
                     " 上次计划执行: " + lastScheduledExec +
                     " 下次计划执行: " + nextInfo +
                     " 当前时间: " + now +
@@ -264,8 +276,9 @@ public class VariableCycleTask {
             }
         }
         if (resetCount > 0) {
-            logger.info("已完成 Cron 表达式周期变量重置，共重置 " + resetCount + " 个变量");
+            logger.debug("已完成 Cron 表达式周期变量重置，共重置 " + resetCount + " 个变量");
         }
+        return resetCount;
     }
 
     /** 构建当前窗口 */
@@ -295,8 +308,9 @@ public class VariableCycleTask {
     /**
      * 按变量聚合处理所有待补偿窗口，避免重复阻塞查询。
      * 保持原有业务判定与补偿规则不变，仅调整遍历顺序与预取策略。
+     * @return int数组: [成功的窗口数, 重置的变量总数]
      */
-    private int resetVariablesGroupedByVariable(String cycleType, List<CycleWindow> pending, ZonedDateTime now,
+    private int[] resetVariablesGroupedByVariable(String cycleType, List<CycleWindow> pending, ZonedDateTime now,
                                                 Map<String, Long> firstModifiedCache) {
         Set<String> keys = variablesManager.getAllVariableKeys();
         int windowCount = pending.size();
@@ -358,7 +372,7 @@ public class VariableCycleTask {
                     lastResetTime = window.getStart();
                     updateVariableResetTime(key, window.getStart().toInstant().toEpochMilli());
                     windowResetCount[i]++;
-                    logger.info("重置变量: " + key +
+                    logger.debug("重置变量: " + key +
                             " 周期: " + cycleType +
                             " 窗口起点: " + window.getStart() +
                             " 当前: " + now);
@@ -376,18 +390,20 @@ public class VariableCycleTask {
         }
 
         int successWindows = 0;
+        int totalResetCount = 0;
         for (int i = 0; i < windowCount; i++) {
+            totalResetCount += windowResetCount[i];
             CycleWindow window = pending.get(i);
             if (!windowFailed[i]) {
                 writeGlobalLastReset(cycleType, window.getStart());
-                logger.info("窗口执行完成: " + cycleType + " 窗口 " + window.getStart() + " 成功 " + windowResetCount[i]);
+                logger.debug("窗口执行完成: " + cycleType + " 窗口 " + window.getStart() + " 成功 " + windowResetCount[i]);
                 successWindows++;
             } else {
-                logger.warn("窗口执行存在失败: " + cycleType + " 窗口 " + window.getStart() + " 成功 " + windowResetCount[i]);
+                logger.info("窗口执行存在失败: " + cycleType + " 窗口 " + window.getStart() + " 成功 " + windowResetCount[i]);
                 break;
             }
         }
-        return successWindows;
+        return new int[]{successWindows, totalResetCount};
     }
 
     /** 预取指定周期的变量首次修改时间，减少循环内阻塞查询 */
@@ -446,7 +462,7 @@ public class VariableCycleTask {
                 setDataValue("cycle.last-" + cycleType.toLowerCase() + "-reset", fallback.toInstant().toEpochMilli());
                 saveDataConfig("自动纠正未来周期记录: " + cycleType);
             }
-            logger.warn("检测到未来的 " + cycleType + " 全局重置记录，已回调到 " + fallback);
+            logger.info("检测到未来的 " + cycleType + " 全局重置记录，已回调到 " + fallback);
             return fallback;
         }
         return normalizeCycleStart(cycleType, recorded);
@@ -460,7 +476,7 @@ public class VariableCycleTask {
         if (recordedTime.isAfter(now.plus(Duration.ofMillis(FUTURE_DRIFT_MILLIS)))) {
             ZonedDateTime corrected = window.getStart().minusSeconds(1);
             updateVariableResetTime(key, corrected.toInstant().toEpochMilli());
-            logger.warn("检测到未来的重置时间记录，已自动回调: 变量=" + key + " 周期=" + cycleLabel +
+            logger.info("检测到未来的重置时间记录，已自动回调: 变量=" + key + " 周期=" + cycleLabel +
                     " 原记录=" + recordedTime + " 窗口=" + window.getStart() + " 新记录=" + corrected);
             return corrected;
         }
@@ -558,10 +574,11 @@ public class VariableCycleTask {
 
             if (deleted < playerDeleteBatchSize) {
                 if (totalDeleted == 0) {
-                    logger.warn("玩家变量分批删除结束但未删除任何数据: " + key);
-                    return false;
+                    // 无数据可删 = 成功（变量从未被修改过，无需重置）
+                    logger.debug("玩家变量无数据需要删除（可能从未修改过）: " + key);
+                    return true;  // 返回 true，不触发重试
                 }
-                logger.info("玩家变量分批删除完成: " + key + " 共删除 " + totalDeleted + " 行");
+                logger.debug("玩家变量分批删除完成: " + key + " 共删除 " + totalDeleted + " 行");
                 return true;
             }
 
@@ -608,10 +625,11 @@ public class VariableCycleTask {
             return false;
         }
         if (affected <= 0) {
-            logger.warn("删除全局变量未删除任何数据: " + key);
-            return false;
+            // 无数据可删 = 成功（变量从未被修改过，无需重置）
+            logger.debug("全局变量无数据需要删除: " + key);
+            return true;
         }
-        logger.info("删除全局变量成功: " + key + " 共删除 " + affected + " 行");
+        logger.debug("删除全局变量成功: " + key + " 共删除 " + affected + " 行");
         return true;
     }
 
@@ -700,7 +718,7 @@ public class VariableCycleTask {
         if (recordedTime.isAfter(now.plusMinutes(1))) {
             ZonedDateTime corrected = referencePoint.minusSeconds(1);
             updateVariableResetTime(key, corrected.toInstant().toEpochMilli());
-            logger.warn("检测到未来的重置时间记录，已自动回调: " +
+            logger.info("检测到未来的重置时间记录，已自动回调: " +
                     "变量=" + key +
                     " 周期=" + cycleLabel +
                     " 原记录=" + recordedTime +
@@ -805,13 +823,13 @@ public class VariableCycleTask {
         ZonedDateTime normalizedLast = normalizeCycleStart(cycleType, lastReset);
 
         if (normalizedLast.isAfter(cycleStart)) {
-            logger.warn("检测到未来的" + cycleType + "重置记录，准备自动纠正: 上次="
+            logger.info("检测到未来的" + cycleType + "重置记录，准备自动纠正: 上次="
                     + normalizedLast + " 当前=" + cycleStart);
             ZonedDateTime corrected = rectifyFutureResetTimestamp(cycleType, cycleStart);
             if (corrected != null) {
                 normalizedLast = corrected;
             } else {
-                logger.warn("未来时间纠正失败，仍将尝试执行当前周期补偿: " + cycleType);
+                logger.info("未来时间纠正失败，仍将尝试执行当前周期补偿: " + cycleType);
                 pending.add(cycleStart);
                 return pending;
             }
@@ -848,7 +866,7 @@ public class VariableCycleTask {
         if (pending.isEmpty()) {
             pending.add(cycleStart);
         } else if (pending.size() > 1) {
-            logger.warn("检测到 " + cycleType + " 周期补偿 " + pending.size() +
+            logger.info("检测到 " + cycleType + " 周期补偿 " + pending.size() +
                     " 次，自上次重置 " + normalizedLast + " 至当前起点 " + cycleStart);
         }
         return pending;
@@ -868,7 +886,7 @@ public class VariableCycleTask {
             setDataValue("cycle.last-" + cycleType.toLowerCase() + "-reset", correctedMillis);
             saveDataConfig("自动纠正未来周期记录: " + cycleType);
         }
-        logger.warn("已自动将 " + cycleType + " 周期的最后重置时间回调至 " + corrected
+        logger.info("已自动将 " + cycleType + " 周期的最后重置时间回调至 " + corrected
                 + "，请检查服务器时间与数据库删除流程是否正常");
         return corrected;
     }
@@ -1036,9 +1054,9 @@ public class VariableCycleTask {
         if (deleteVariableFromDb(isGlobal, key)) {
             String label = isCron ? "Cron变量" : "变量";
             String attemptInfo = isCron ? "" : " (第" + attempt + "次尝试)";
-            logger.info("正在重置" + label + ": " + key + attemptInfo);
+            logger.debug("正在重置" + label + ": " + key + attemptInfo);
             clearCachesAndWait(key);
-            logger.info(label + " " + key + " 重置完成，数据库记录已删除，所有缓存已清理");
+            logger.debug(label + " " + key + " 重置完成，数据库记录已删除，所有缓存已清理");
             return true;
         }
         return false;

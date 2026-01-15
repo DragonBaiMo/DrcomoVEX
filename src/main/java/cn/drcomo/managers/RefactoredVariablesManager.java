@@ -16,9 +16,6 @@ import cn.drcomo.managers.components.ActionExecutor;
 import cn.drcomo.managers.components.VariableDefinitionLoader;
 import cn.drcomo.storage.BatchPersistenceManager;
 import cn.drcomo.storage.BatchPersistenceManager.PersistenceConfig;
-import cn.drcomo.storage.MultiLevelCacheManager;
-import cn.drcomo.storage.MultiLevelCacheManager.CacheConfig;
-import cn.drcomo.storage.MultiLevelCacheManager.CacheResult;
 import cn.drcomo.storage.VariableMemoryStorage;
 import cn.drcomo.storage.VariableValue;
 import cn.drcomo.config.ConfigsManager;
@@ -83,7 +80,6 @@ public class RefactoredVariablesManager {
     // ======================== 核心存储和缓存组件 ========================
     private final VariableMemoryStorage memoryStorage;
     private final BatchPersistenceManager persistenceManager;
-    private final MultiLevelCacheManager cacheManager;
     private final DependencyResolver dependencyResolver;
     private final ConfigsManager configsManager;
     private final ActionExecutor actionExecutor;
@@ -122,14 +118,6 @@ public class RefactoredVariablesManager {
 
         // 初始化内存存储（256MB）
         this.memoryStorage = new VariableMemoryStorage(logger, database, 256 * 1024 * 1024);
-
-        // 初始化多级缓存
-        CacheConfig cacheConfig = new CacheConfig()
-                .setL2MaximumSize(10000)
-                .setL2ExpireMinutes(5)
-                .setL3MaximumSize(5000)
-                .setL3ExpireMinutes(2);
-        this.cacheManager = new MultiLevelCacheManager(logger, memoryStorage, cacheConfig);
 
         // 初始化批量持久化管理器
         PersistenceConfig persistenceConfig = new PersistenceConfig()
@@ -207,11 +195,11 @@ public class RefactoredVariablesManager {
                 }
                 throw new RuntimeException("关闭变量管理系统失败", e);
             }
-            // 关闭后尝试清理缓存（异常不影响流程）
+            // 关闭后清理内存存储
             try {
-                cacheManager.clearAllCaches();
+                memoryStorage.clearAllCaches();
             } catch (Exception e) {
-                logger.debug("缓存清理跳过: " + e.getMessage());
+                logger.debug("内存存储清理跳过: " + e.getMessage());
             }
         }, asyncTaskManager.getExecutor());
     }
@@ -294,28 +282,13 @@ public class RefactoredVariablesManager {
                 Optional<VariableResult> pre = checkOpPreconditions(player, variable, key, "GET", playerName, false);
                 if (pre.isPresent()) return pre.get();
 
-                // 条件变量及 regen 变量禁用缓存读，避免条件或时间驱动的值被延迟
-                if (!variable.hasConditions() && !variable.hasRegenRule()) {
-                    CacheResult cacheResult = cacheManager.getFromCache(player, key, variable);
-                    if (cacheResult.isHit()) {
-                        logger.debug("缓存命中(" + cacheResult.getLevel() + "): " + key);
-                        String cachedValue = cacheResult.getValue();
-                        // 对缓存值也进行类型规范化
-                        cachedValue = normalizeValueByType(cachedValue, variable.getValueType());
-                        return VariableResult.success(cachedValue, "GET", key, playerName);
-                    }
-                }
-
+                // 直接从内存读取，不再使用多级缓存
                 String finalValue = getVariableFromMemoryOrDefault(player, variable);
                 if (!isFormulaVariable(variable)) {
                     finalValue = resolveExpression(finalValue, player, variable);
                 }
                 // 确保最终返回值经过类型规范化
                 finalValue = normalizeValueByType(finalValue, variable.getValueType());
-                // 条件变量及 regen 变量禁用缓存写，避免在条件/时间失效后残留不当缓存
-                if (!variable.hasConditions() && !variable.hasRegenRule()) {
-                    cacheManager.cacheResult(player, key, finalValue, finalValue);
-                }
                 return VariableResult.success(finalValue, "GET", key, playerName);
             } catch (Exception e) {
                 logger.error("获取变量失败: " + key, e);
@@ -518,21 +491,10 @@ public class RefactoredVariablesManager {
      * 玩家上线时的数据预加载
      */
     public CompletableFuture<Void> handlePlayerJoin(OfflinePlayer player) {
-        // 先加载该玩家的持久化数据，再进行缓存预热，避免玩家加入后读到默认值
+        // 加载该玩家的持久化数据到内存
         return loadPlayerVariables(player)
                 .thenRunAsync(() -> {
-                    try {
-                        Set<String> keys = getPlayerVariableKeys();
-                        for (String key : keys) {
-                            Variable var = getVariableDefinition(key);
-                            if (var != null && !var.hasConditions()) {
-                                cacheManager.preloadCache(player, key, var);
-                            }
-                        }
-                        logger.debug("玩家上线预加载完成: " + player.getName() + "，变量数: " + keys.size());
-                    } catch (Exception e) {
-                        logger.error("玩家上线数据预加载失败: " + player.getName(), e);
-                    }
+                    logger.debug("玩家上线数据加载完成: " + player.getName());
                 }, asyncTaskManager.getExecutor());
     }
 
@@ -540,6 +502,51 @@ public class RefactoredVariablesManager {
 
     public Variable getVariableDefinition(String key) {
         return variableRegistry.get(key);
+    }
+
+    /**
+     * 从数据库重载指定玩家的变量到内存（用于跨服同步）
+     *
+     * @param player 玩家
+     * @param key 变量键
+     * @return CompletableFuture
+     */
+    public CompletableFuture<Void> reloadVariableFromDB(OfflinePlayer player, String key) {
+        // 使用 thenCompose 链式组合，避免在异步任务中阻塞线程导致线程池死锁
+        return CompletableFuture.supplyAsync(() -> getVariableDefinition(key), asyncTaskManager.getExecutor())
+            .thenCompose(var -> {
+                if (var == null) {
+                    logger.debug("重载变量失败: 变量定义不存在 key=" + key);
+                    return CompletableFuture.completedFuture(null);
+                }
+
+                if (var.isPlayerScoped() && player != null) {
+                    // 从数据库查询并更新内存
+                    String pid = player.getUniqueId().toString();
+                    return fetchPlayerTriple(pid, key).thenAccept(tri -> {
+                        if (tri.value != null) {
+                            String normalizedValue = normalizeValueByType(tri.value, var.getValueType());
+                            memoryStorage.loadPlayerVariable(
+                                    player.getUniqueId(), key, normalizedValue, tri.updatedAt, tri.firstModifiedAt);
+                            logger.debug("重载玩家变量成功: player=" + player.getName() + ", key=" + key);
+                        }
+                    });
+                } else if (var.isGlobal()) {
+                    // 全局变量从数据库重载
+                    return fetchServerTriple(key).thenAccept(tri -> {
+                        if (tri.value != null) {
+                            String normalizedValue = normalizeValueByType(tri.value, var.getValueType());
+                            memoryStorage.loadServerVariable(key, normalizedValue, tri.updatedAt, tri.firstModifiedAt);
+                            logger.debug("重载全局变量成功: key=" + key);
+                        }
+                    });
+                }
+                return CompletableFuture.completedFuture(null);
+            })
+            .exceptionally(ex -> {
+                logger.debug("重载变量失败: " + key + ", 错误: " + ex.getMessage());
+                return null;
+            });
     }
 
     public Set<String> getAllVariableKeys() {
@@ -583,14 +590,13 @@ public class RefactoredVariablesManager {
 
     /**
      * 清理指定变量的全局上下文缓存（仅 server 上下文）
+     * @deprecated 缓存层已移除，此方法仅为 API 兼容保留
      */
+    @Deprecated
     public void invalidateGlobalCaches(String key) {
-        try {
-            cacheManager.invalidateCache(null, key);
-            logger.debug("已清理全局上下文变量缓存: " + key);
-        } catch (Exception e) {
-            logger.error("清理全局上下文变量缓存失败: " + key, e);
-        }
+        // 缓存已移除，此方法保留仅为 API 兼容
+        // 注意：不再删除 L1 内存数据，避免数据丢失风险
+        logger.debug("invalidateGlobalCaches 已弃用，缓存层已移除: " + key);
     }
 
     /**
@@ -647,7 +653,7 @@ public class RefactoredVariablesManager {
 
     /**
      * 清理指定变量的所有缓存
-     * @deprecated 语义不清，等同于清理全局上下文缓存；请改用 {@link #invalidateGlobalCaches(String)}
+     * @deprecated 缓存层已移除，此方法仅为 API 兼容保留
      */
     @Deprecated
     public void invalidateAllCaches(String key) {
@@ -656,51 +662,50 @@ public class RefactoredVariablesManager {
 
     /**
      * 清理指定玩家上下文下的变量缓存（不触碰内存存储，不产生删除标记）
+     * @deprecated 缓存层已移除，此方法仅为 API 兼容保留
      */
+    @Deprecated
     public void invalidateCachesForPlayer(OfflinePlayer player, String key) {
-        try {
-            cacheManager.invalidateCache(player, key);
-            logger.debug("已清理玩家上下文变量缓存: player=" + (player != null ? player.getName() : "null") + ", key=" + key);
-        } catch (Exception e) {
-            logger.error("清理玩家上下文变量缓存失败: " + key, e);
-        }
+        // 缓存已移除，此方法保留仅为 API 兼容
+        logger.debug("invalidateCachesForPlayer 已弃用，缓存层已移除");
     }
 
     /**
      * 一次性清理指定玩家上下文下的所有 L2 表达式缓存（不影响 L3）
      * @return 实际清理的 L2 条目数
+     * @deprecated 缓存层已移除，此方法仅为 API 兼容保留，始终返回 0
      */
+    @Deprecated
     public int invalidateAllL2ForPlayer(OfflinePlayer player) {
-        try {
-            int n = cacheManager.invalidateAllL2ForPlayer(player);
-            logger.debug("已批量清理玩家 L2 表达式缓存: player=" + (player != null ? player.getName() : "SERVER") + ", 条目=" + n);
-            return n;
-        } catch (Exception e) {
-            logger.error("批量清理玩家 L2 表达式缓存失败: " + (player != null ? player.getName() : "SERVER"), e);
-            return 0;
-        }
+        // 缓存已移除，返回 0 表示未清理任何条目
+        return 0;
     }
 
-    /** 获取累计的 L2 清理条目数（自插件启动以来） */
-    public long getL2InvalidationsTotal() { return cacheManager.getL2InvalidationsTotal(); }
+    /**
+     * 获取累计的 L2 清理条目数（自插件启动以来）
+     * @deprecated 缓存层已移除，此方法仅为 API 兼容保留，始终返回 0
+     */
+    @Deprecated
+    public long getL2InvalidationsTotal() { return 0L; }
 
-    /** 获取累计的 L3 清理条目数（自插件启动以来） */
-    public long getL3InvalidationsTotal() { return cacheManager.getL3InvalidationsTotal(); }
+    /**
+     * 获取累计的 L3 清理条目数（自插件启动以来）
+     * @deprecated 缓存层已移除，此方法仅为 API 兼容保留，始终返回 0
+     */
+    @Deprecated
+    public long getL3InvalidationsTotal() { return 0L; }
 
     /**
      * 仅清理 L3（最终结果）缓存，不触碰 L2
+     * @deprecated 缓存层已移除，此方法仅为 API 兼容保留
      */
+    @Deprecated
     public void invalidateL3Only(OfflinePlayer player, String key) {
-        try {
-            cacheManager.invalidateL3Only(player, key);
-            logger.debug("仅清L3缓存: player=" + (player != null ? player.getName() : "SERVER") + ", key=" + key);
-        } catch (Exception e) {
-            logger.error("仅清L3缓存失败: " + key, e);
-        }
+        // 缓存已移除，此方法保留仅为 API 兼容
     }
 
     /**
-     * 从内存与多级缓存中删除变量
+     * 从内存中删除变量
      * @param key 变量键
      */
     public void removeVariableFromMemoryAndCache(String key) {
@@ -712,16 +717,12 @@ public class RefactoredVariablesManager {
             }
             if (variable.isGlobal()) {
                 memoryStorage.removeServerVariable(key);
-                cacheManager.invalidateCache(null, key);
             } else if (variable.isPlayerScoped()) {
-                Set<UUID> affectedPlayers = memoryStorage.removeVariableForAllPlayers(key, true);
-                for (UUID affected : affectedPlayers) {
-                    cacheManager.invalidateCache(Bukkit.getOfflinePlayer(affected), key);
-                }
+                memoryStorage.removeVariableForAllPlayers(key, true);
             }
-            logger.debug("已从内存与缓存删除变量: " + key);
+            logger.debug("已从内存删除变量: " + key);
         } catch (Exception e) {
-            logger.error("删除变量缓存失败: " + key, e);
+            logger.error("删除变量失败: " + key, e);
         }
     }
 
@@ -999,13 +1000,9 @@ public class RefactoredVariablesManager {
         invalidateCachesSafely(player, variable.getKey());
     }
 
-    /** 缓存失效的安全封装（异常不向外抛） */
+    /** 缓存失效的安全封装（缓存层已移除，此方法为空操作） */
     private void invalidateCachesSafely(OfflinePlayer player, String key) {
-        try {
-            cacheManager.invalidateCache(player, key);
-        } catch (Exception e) {
-            logger.debug("清理缓存失败: " + key + " - " + e.getMessage());
-        }
+        // 缓存层已移除，此方法保留仅为代码兼容
     }
 
     /** 统一出口：在返回前应用渐进恢复 */
@@ -1231,12 +1228,7 @@ public class RefactoredVariablesManager {
             result = normalizeValueByType(result, variable.getValueType());
         }
 
-        boolean skipRegenCache = shouldSkipExpressionCacheForRegen(expression, variable);
-        if (!skipRegenCache) {
-            cacheManager.cacheExpression(expression, player, result);
-        } else {
-            logger.debug("跳过表达式缓存（包含 regen 变量）: " + expression);
-        }
+        // 缓存层已移除，不再缓存表达式结果
         return result;
     }
 
@@ -1737,9 +1729,7 @@ public class RefactoredVariablesManager {
                             memoryStorage.loadPlayerVariable(
                                     player.getUniqueId(), key, normalizedValue, tri.updatedAt, tri.firstModifiedAt);
                         } else {
-                            if (memoryStorage.removePlayerVariable(player.getUniqueId(), key, false)) {
-                                cacheManager.invalidateCache(player, key);
-                            }
+                            memoryStorage.removePlayerVariable(player.getUniqueId(), key, false);
                         }
                     }).exceptionally(ex -> {
                         logger.error("加载玩家变量失败: " + pid + " - " + key, ex);
@@ -1747,18 +1737,7 @@ public class RefactoredVariablesManager {
                     }));
                 }
                 CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
-
-                // 加载完成后，主动进行一次缓存预热，确保 join 后首次读取命中缓存
-                try {
-                    for (String key : getPlayerVariableKeys()) {
-                        Variable var = getVariableDefinition(key);
-                        if (var != null && !var.hasConditions()) {
-                            cacheManager.preloadCache(player, key, var);
-                        }
-                    }
-                } catch (Exception e) {
-                    logger.debug("玩家变量缓存预热失败: " + player.getName());
-                }
+                logger.debug("玩家变量加载完成: " + player.getName());
             } catch (Exception e) {
                 logger.error("加载玩家变量失败: " + player.getUniqueId(), e);
             }

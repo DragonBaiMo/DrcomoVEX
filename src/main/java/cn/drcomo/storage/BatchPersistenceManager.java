@@ -216,14 +216,14 @@ public class BatchPersistenceManager {
             try {
                 VariableMemoryStorage.MemoryStats stats = memoryStorage.getMemoryStats();
                 if (stats.getMemoryUsagePercent() < memoryPressureThreshold) return;
-                logger.warn("内存压力触发持久化，当前使用率: " +
+                logger.info("内存压力触发持久化，当前使用率: " +
                         String.format("%.1f%%", stats.getMemoryUsagePercent()));
                 List<PersistenceTask> tasks = collectPersistenceTasks(memoryStorage.getAllDirtyData());
                 // 冷数据优先：按照等待时间降序
                 tasks.sort(Comparator.comparingLong(
                         (PersistenceTask t) -> t.getDirtyFlag().getPendingDuration()).reversed());
                 executeBatchPersistence(tasks);
-                logger.info("内存压力持久化完成");
+                logger.debug("内存压力持久化完成");
             } catch (Exception e) {
                 logger.error("内存压力持久化失败", e);
                 failedPersistenceOperations.incrementAndGet();

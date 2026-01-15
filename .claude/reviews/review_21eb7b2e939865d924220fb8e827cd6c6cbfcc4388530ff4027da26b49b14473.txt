@@ -1,0 +1,59 @@
+# 变更摘要：移除多级缓存（L2/L3）架构，转为直连数据库的内存同步模型，并优化周期任务日志与容错。
+
+## 文件：src/main/java/cn/drcomo/managers/RefactoredVariablesManager.java
+
+### L596-L602：[HIGH] `invalidateGlobalCaches` 清除内存可能导致数据丢失/回滚
+```java
+    public void invalidateGlobalCaches(String key) {
+        // 缓存已移除，仅清理内存中该变量
+        if (key != null) {
+            memoryStorage.removeServerVariable(key);
+        }
+        logger.debug("invalidateGlobalCaches 已弃用，缓存层已移除: " + key);
+    }
+```
+**问题**：旧逻辑仅清除 L2/L3 缓存，L1（内存）仍保留有效值。新逻辑直接调用 `removeServerVariable` 清除内存（L1）。
+如果 `getVariable` 方法没有实现"内存缺失时自动回源数据库查询"（Lazy Load）的逻辑，那么调用此方法将导致该变量在内存中消失，后续读取将直接返回配置文件的默认值，造成**线上数据暂时性丢失或回滚**，直到下次服务器重载。
+**对比**：同文件下方的 `invalidateCachesForPlayer` (L670) 实现为空操作（安全），两者行为不一致。
+
+**建议**：
+如果系统是非 Lazy Load 设计（即依赖启动加载/入服加载），此方法应改为**空操作**（仅打印日志），或者触发异步重载（但无法保证时序）。建议改为与 `invalidateCachesForPlayer` 一致的空操作。
+
+```diff
+     public void invalidateGlobalCaches(String key) {
+-        // 缓存已移除，仅清理内存中该变量
+-        if (key != null) {
+-            memoryStorage.removeServerVariable(key);
+-        }
++        // 缓存已移除，此方法保留仅为 API 兼容
+         logger.debug("invalidateGlobalCaches 已弃用，缓存层已移除: " + key);
+     }
+```
+
+### L520-L550：[MEDIUM] `reloadVariableFromDB` 并发加载的健壮性
+实现逻辑使用了 `CompletableFuture` 链式调用，整体正确。
+建议确认：`memoryStorage.loadPlayerVariable` 与 `memoryStorage.loadServerVariable` 是否是线程安全的？（因为多个 `reload` 任务会并发写入 memoryStorage）。如果 `memoryStorage` 内部是 `ConcurrentHashMap` 则无问题；若是普通 Map 则有并发风险。
+（根据代码上下文 `ConcurrentHashMap<String, Variable> variableRegistry` 推测存储层应该也是并发安全的，此处仅做提醒，无需修改代码）。
+
+## 文件：src/main/java/cn/drcomo/listeners/PlayerListener.java
+### L171：[LOW] 异步任务中的阻塞超时设置
+```java
+    ).orTimeout(5, java.util.concurrent.TimeUnit.SECONDS).exceptionally(t -> null).join();
+```
+**确认**：入服数据同步在 `runTaskAsynchronously` 中执行，因此 5 秒的 `join()` 阻塞是安全的，不会卡顿主线程。
+**优点**：增加了 `exceptionally` 兜底，防止单个变量加载失败导致整个流程中断。
+
+## 文件：src/main/java/cn/drcomo/tasks/VariableCycleTask.java
+### L576-L580：[MEDIUM] 修正变量删除逻辑的判断
+```java
+                if (totalDeleted == 0) {
+                    // 无数据可删 = 成功（变量从未被修改过，无需重置）
+                    logger.debug("玩家变量无数据需要删除（可能从未修改过）: " + key);
+                    return true;  // 返回 true，不触发重试
+                }
+```
+**改进**：这是一个很好的修复。之前版本如果数据库无数据会返回 `false` 导致不必要的重试或报错日志。现在的逻辑符合幂等性要求。
+
+---
+**总结**：
+除了 `invalidateGlobalCaches` 存在误删内存数据的风险外，其余变更逻辑清晰，去除了复杂的缓存层，简化了架构，且增强了对数据库空状态的处理。请务必修复 `invalidateGlobalCaches`。

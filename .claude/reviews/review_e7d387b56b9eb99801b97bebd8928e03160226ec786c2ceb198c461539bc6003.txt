@@ -1,0 +1,99 @@
+Generating code review context...
+# 变更摘要：移除多级缓存架构，重构入服数据同步逻辑为直读数据库，并优化周期任务的空数据处理与日志。
+
+## 文件：src/main/java/cn/drcomo/managers/RefactoredVariablesManager.java
+### L468-L498（大致范围）：[HIGH] 异步任务内部嵌套阻塞等待，存在线程池死锁风险
+`reloadVariableFromDB` 方法使用了 `CompletableFuture.runAsync` 包装逻辑，但内部却调用了 `.join()` 阻塞等待数据库查询结果。
+如果 `runAsync` 使用的 `asyncTaskManager.getExecutor()` 与 `fetchPlayerTriple` 内部使用的线程池是同一个（常见情况），当并发量较高时，所有工作线程可能都被 `runAsync` 的任务占用并处于 `join()` 等待状态，而子任务（fetch）无法获得线程执行，导致线程池**死锁**。
+
+**修复建议**：使用 `thenCompose` 进行异步链式组合，避免在异步任务中阻塞线程。
+
+```diff
+     public CompletableFuture<Void> reloadVariableFromDB(OfflinePlayer player, String key) {
+-        return CompletableFuture.runAsync(() -> {
+-            try {
+-                Variable var = getVariableDefinition(key);
+-                if (var == null) {
+-                    logger.debug("重载变量失败: 变量定义不存在 key=" + key);
+-                    return;
+-                }
+-
+-                if (var.isPlayerScoped() && player != null) {
+-                    // 从数据库查询并更新内存
+-                    String pid = player.getUniqueId().toString();
+-                    fetchPlayerTriple(pid, key).thenAccept(tri -> {
+-                        if (tri.value != null) {
+-                            String normalizedValue = normalizeValueByType(tri.value, var.getValueType());
+-                            memoryStorage.loadPlayerVariable(
+-                                    player.getUniqueId(), key, normalizedValue, tri.updatedAt, tri.firstModifiedAt);
+-                            logger.debug("重载玩家变量成功: player=" + player.getName() + ", key=" + key);
+-                        }
+-                    }).exceptionally(ex -> {
+-                        logger.debug("重载玩家变量失败: " + key + ", 错误: " + ex.getMessage());
+-                        return null;
+-                    }).join();
+-                } else if (var.isGlobal()) {
+-                    // 全局变量从数据库重载
+-                    fetchServerTriple(key).thenAccept(tri -> {
+-                        if (tri.value != null) {
+-                            String normalizedValue = normalizeValueByType(tri.value, var.getValueType());
+-                            memoryStorage.loadServerVariable(key, normalizedValue, tri.updatedAt, tri.firstModifiedAt);
+-                            logger.debug("重载全局变量成功: key=" + key);
+-                        }
+-                    }).exceptionally(ex -> {
+-                        logger.debug("重载全局变量失败: " + key + ", 错误: " + ex.getMessage());
+-                        return null;
+-                    }).join();
+-                }
+-            } catch (Exception e) {
+-                logger.debug("重载变量失败: " + key + ", 错误: " + e.getMessage());
+-            }
+-        }, asyncTaskManager.getExecutor());
++        return CompletableFuture.supplyAsync(() -> getVariableDefinition(key), asyncTaskManager.getExecutor())
++            .thenCompose(var -> {
++                if (var == null) {
++                    logger.debug("重载变量失败: 变量定义不存在 key=" + key);
++                    return CompletableFuture.completedFuture(null);
++                }
++
++                if (var.isPlayerScoped() && player != null) {
++                    String pid = player.getUniqueId().toString();
++                    return fetchPlayerTriple(pid, key).thenAccept(tri -> {
++                        if (tri.value != null) {
++                            String normalizedValue = normalizeValueByType(tri.value, var.getValueType());
++                            memoryStorage.loadPlayerVariable(
++                                    player.getUniqueId(), key, normalizedValue, tri.updatedAt, tri.firstModifiedAt);
++                            logger.debug("重载玩家变量成功: player=" + player.getName() + ", key=" + key);
++                        }
++                    });
++                } else if (var.isGlobal()) {
++                    return fetchServerTriple(key).thenAccept(tri -> {
++                        if (tri.value != null) {
++                            String normalizedValue = normalizeValueByType(tri.value, var.getValueType());
++                            memoryStorage.loadServerVariable(key, normalizedValue, tri.updatedAt, tri.firstModifiedAt);
++                            logger.debug("重载全局变量成功: key=" + key);
++                        }
++                    });
++                }
++                return CompletableFuture.completedFuture(null);
++            })
++            .exceptionally(ex -> {
++                logger.debug("重载变量失败: " + key + ", 错误: " + ex.getMessage());
++                return null;
++            });
+     }
+```
+
+## 文件：src/main/java/cn/drcomo/storage/BatchPersistenceManager.java
+### L219：[LOW] 日志级别变更
+`logger.warn` 变更为 `logger.info`。
+如果内存压力是一个需要运维关注的非正常状态，`WARN` 可能更合适；如果这是预期的自动调节行为，`INFO` 是合理的。这属于业务决策，确认无误。
+
+## 文件：src/main/java/cn/drcomo/tasks/VariableCycleTask.java
+### L576 & L612：[MEDIUM] 0行删除视为成功（逻辑修正）
+代码逻辑从“删除0行视为失败”变更为“删除0行视为成功（debug日志）”。
+这是一个**正确的逻辑修复**。若变量本身未存储（使用默认值），重置操作理应成功而非报错。此变更消除了由于空数据导致的错误日志噪音。
+
+## 其他确认
+- **PlayerListener.java**：移除了 L2/L3 缓存清理，改为直接调用新的 `reloadVariableFromDB` 并等待（带超时）。只要 `scheduleJoinConsistencyRefresh` 是在异步线程执行（docstring 提到“异步延迟执行”），这里的 5秒超时阻塞是可接受的，旨在确保玩家入服时数据已从 DB 同步。
+- **MultiLevelCacheManager.java**：文件被删除。已确认 `RefactoredVariablesManager` 中相关调用已移除或存根化 (stubbed)，无残留编译错误风险。
