@@ -31,7 +31,8 @@ public class Variable {
     private final Limitations limitations;
     private final List<String> conditions;
     private final List<String> cycleActions;
-    
+    private final List<ParameterGroup> groups;
+
     // 编译时计算的元数据
     private final boolean isDynamic;
     private final boolean isPeriodic;
@@ -56,7 +57,14 @@ public class Variable {
         this.cycleActions = builder.cycleActions == null
                 ? Collections.emptyList()
                 : Collections.unmodifiableList(new ArrayList<>(builder.cycleActions));
-        
+        if (builder.groups == null) {
+            this.groups = Collections.emptyList();
+        } else {
+            List<ParameterGroup> sorted = new ArrayList<>(builder.groups);
+            Collections.sort(sorted);
+            this.groups = Collections.unmodifiableList(sorted);
+        }
+
         // 计算元数据
         this.isDynamic = variableType.isDynamic();
         this.isPeriodic = variableType.isPeriodic();
@@ -129,6 +137,17 @@ public class Variable {
     }
 
     /**
+     * 参数组列表（按 priority 降序）
+     */
+    public List<ParameterGroup> getGroups() {
+        return groups;
+    }
+
+    public boolean hasGroups() {
+        return !groups.isEmpty();
+    }
+
+    /**
      * 是否配置了条件门控
      */
     public boolean hasConditions() {
@@ -141,7 +160,7 @@ public class Variable {
     public boolean hasCycleActions() {
         return cycleActions != null && !cycleActions.isEmpty();
     }
-    
+
     public boolean isDynamic() {
         return isDynamic;
     }
@@ -278,6 +297,32 @@ public class Variable {
     public boolean hasRegenRule() {
         return regenRule != null && !regenRule.isEmpty();
     }
+
+    /**
+     * 是否存在任何可用的恢复规则（包含参数组覆盖）
+     */
+    public boolean hasAnyRegenRule() {
+        if (hasRegenRule()) {
+            return true;
+        }
+        if (groups == null || groups.isEmpty()) {
+            return false;
+        }
+        for (ParameterGroup group : groups) {
+            if (group == null) {
+                continue;
+            }
+            RegenRule rule = group.getRegenRule();
+            if (rule != null && !rule.isEmpty()) {
+                return true;
+            }
+            String raw = group.getRegenRaw();
+            if (raw != null && !raw.trim().isEmpty()) {
+                return true;
+            }
+        }
+        return false;
+    }
     
     /**
      * 获取变量类型描述
@@ -362,7 +407,8 @@ public class Variable {
         private Limitations limitations;
         private List<String> conditions;
         private List<String> cycleActions;
-        
+        private List<ParameterGroup> groups;
+
         public Builder(String key) {
             this.key = key;
         }
@@ -443,10 +489,30 @@ public class Variable {
             return this;
         }
 
+        public Builder groups(List<ParameterGroup> groups) {
+            if (groups == null) {
+                this.groups = null;
+            } else {
+                this.groups = new ArrayList<>(groups);
+            }
+            return this;
+        }
+
+        public Builder addGroup(ParameterGroup group) {
+            if (group == null) {
+                return this;
+            }
+            if (this.groups == null) {
+                this.groups = new ArrayList<>();
+            }
+            this.groups.add(group);
+            return this;
+        }
+
         public ValueType getValueType() {
             return valueType;
         }
-        
+
         /**
          * 自动推导类型并构建变量
          */
@@ -458,15 +524,15 @@ public class Variable {
             if (valueType == null) {
                 valueType = ValueType.STRING; // 默认类型
             }
-            
+
             // 自动推导 VariableType
             if (variableType == null) {
-                boolean hasDynamicExpression = (initial != null && 
+                boolean hasDynamicExpression = (initial != null &&
                     (initial.contains("%") || initial.contains("${")));
                 boolean hasCycle = (cycle != null && !cycle.trim().isEmpty());
                 variableType = VariableType.inferType(hasDynamicExpression, hasCycle);
             }
-            
+
             return new Variable(this);
         }
     }

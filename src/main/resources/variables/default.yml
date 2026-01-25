@@ -359,3 +359,64 @@ variables:
     type: "INT"
     initial: 0
     cycle: "0 * * * * ?" # Cron表达式: 每分钟重置
+
+  # ======================== 参数组（Groups）示例 ========================
+  # 参数组允许在不同条件下使用不同的变量参数
+  # 按 priority 降序匹配，第一个满足条件的组生效
+  # 组中未定义的参数继承基础配置
+
+  # 玩家能量（带 VIP 分级配置）
+  player_power:
+    name: "玩家能量"
+    scope: "player"
+    type: "INT"
+
+    # 基础配置（默认，无组匹配时使用）
+    initial: 100
+    min: 0
+    max: 100
+    cycle: "daily"
+    regen: "1/10m"
+
+    # 条件组列表
+    groups:
+      # VIP3 及以上：高配置
+      - name: "VIP3精英"
+        priority: 100
+        conditions:
+          - "${player_vip_level} >= 3"
+        initial: 200
+        max: 200
+        regen: "1/3m"
+
+      # VIP1-2：中等配置
+      - name: "VIP普通"
+        priority: 50
+        conditions:
+          - "${player_vip_level} >= 1"
+        initial: 150
+        max: 150
+        regen: "1/5m"
+
+      # 活动期间：恢复加速（无需修改其他参数）
+      - name: "活动加速"
+        priority: 30
+        conditions:
+          - "${double_regen_event} == true"
+        regen: "2/10m"
+
+  # VIP 等级变量（供上面的条件使用）
+  player_vip_level:
+    name: "VIP等级"
+    scope: "player"
+    type: "INT"
+    initial: 0
+    min: 0
+    max: 10
+
+  # 双倍恢复活动开关
+  double_regen_event:
+    name: "双倍恢复活动"
+    scope: "global"
+    type: "STRING"
+    initial: "false"

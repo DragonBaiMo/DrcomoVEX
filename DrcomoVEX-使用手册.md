@@ -308,6 +308,69 @@ player_focus_next_regen:
   initial: "${regen_next:player_focus}"
 ```
 
+## 参数组（Groups）
+
+参数组允许在不同条件下为变量配置不同的参数值。
+
+### 配置格式
+
+```yaml
+variables:
+  player_energy:
+    name: "玩家体力"
+    scope: "player"
+    type: "INT"
+
+    # 基础配置（默认）
+    initial: 50
+    min: 0
+    max: 50
+    cycle: "daily"
+    regen: "1/5m"
+
+    # 条件组列表
+    groups:
+      - name: "VIP3精英"
+        priority: 100          # 数值越大优先级越高
+        conditions:
+          - "${player_vip_level} >= 3"
+        max: 100               # 覆盖参数
+        regen: "1/3m"
+        initial: 100
+
+      - name: "VIP普通"
+        priority: 50
+        conditions:
+          - "${player_vip_level} >= 1"
+        max: 75
+        regen: "1/4m"
+```
+
+### 组匹配规则
+
+| 规则 | 说明 |
+|------|------|
+| 条件求值 | 每组的 `conditions` 列表按 AND 逻辑 |
+| 优先级 | 按 `priority` 降序，第一个满足条件的组生效 |
+| Fallback | 无组匹配时使用基础配置 |
+| 参数合并 | 组中未定义的参数继承基础配置 |
+
+### 可覆盖的参数
+
+- `initial` - 初始值（重置时使用覆盖后的值）
+- `min` - 最小值
+- `max` - 最大值
+- `regen` - 渐进恢复规则
+
+> **注意**：`cycle`（重置周期）目前不支持通过参数组覆盖。周期重置任务统一使用变量的基础 cycle 配置，因为后台任务无法在玩家离线时评估条件。
+
+### 使用场景
+
+1. **VIP 分级**：不同 VIP 等级享受不同的资源上限和恢复速度
+2. **活动加成**：活动期间临时调整参数
+3. **世界限定**：不同世界使用不同配置
+4. **时段调整**：夜间/周末等特定时段的参数调整
+
 #### `limitations`
 + **类型**: `Object`
 + **说明**: 一个包含高级限制与行为控制的配置块。

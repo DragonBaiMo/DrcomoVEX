@@ -488,6 +488,7 @@ public class MainCommand implements CommandExecutor, TabCompleter {
                 plugin.onDisable();
                 plugin.onEnable();
 
+
                 // 触发重载后事件，通知依赖插件重新获取引用
                 try {
                     Bukkit.getPluginManager().callEvent(new VexPostReloadEvent());

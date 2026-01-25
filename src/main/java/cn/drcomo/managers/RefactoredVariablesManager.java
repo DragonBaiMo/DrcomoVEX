@@ -4,15 +4,18 @@ import cn.drcomo.DrcomoVEX;
 import cn.drcomo.corelib.async.AsyncTaskManager;
 import cn.drcomo.corelib.config.YamlUtil;
 import cn.drcomo.corelib.hook.placeholder.PlaceholderAPIUtil;
+import cn.drcomo.corelib.hook.placeholder.parse.PlaceholderConditionEvaluator;
 import cn.drcomo.corelib.util.DebugUtil;
 import cn.drcomo.database.HikariConnection;
 import cn.drcomo.model.VariableResult;
 import cn.drcomo.model.structure.DependencySnapshot;
+import cn.drcomo.model.structure.EffectiveParams;
 import cn.drcomo.model.structure.Limitations;
 import cn.drcomo.model.structure.ScopeType;
 import cn.drcomo.model.structure.ValueType;
 import cn.drcomo.model.structure.Variable;
 import cn.drcomo.managers.components.ActionExecutor;
+import cn.drcomo.managers.components.ParameterGroupResolver;
 import cn.drcomo.managers.components.VariableDefinitionLoader;
 import cn.drcomo.storage.BatchPersistenceManager;
 import cn.drcomo.storage.BatchPersistenceManager.PersistenceConfig;
@@ -25,6 +28,7 @@ import cn.drcomo.corelib.math.FormulaCalculator;
 import cn.drcomo.events.PlayerVariableChangeEvent;
 import org.bukkit.Bukkit;
 import org.bukkit.OfflinePlayer;
+import org.bukkit.entity.Player;
  
 
 
@@ -33,7 +37,9 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.time.ZoneId;
 import java.time.zone.ZoneRulesException;
+import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -84,6 +90,10 @@ public class RefactoredVariablesManager {
     private final ConfigsManager configsManager;
     private final ActionExecutor actionExecutor;
     private final VariableDefinitionLoader definitionLoader;
+    private final ParameterGroupResolver groupResolver;
+    private final PlaceholderConditionEvaluator conditionEvaluator;
+    private final Set<String> regenVariableKeys = ConcurrentHashMap.newKeySet();
+    private final ConcurrentHashMap<UUID, Long> recentAccessPlayers = new ConcurrentHashMap<>();
 
     // 变量定义注册表
     private final ConcurrentHashMap<String, Variable> variableRegistry = new ConcurrentHashMap<>();
@@ -133,6 +143,20 @@ public class RefactoredVariablesManager {
 
         // 初始化变量定义加载组件
         this.definitionLoader = new VariableDefinitionLoader(this.plugin, this.logger);
+
+        // 初始化参数组解析器
+        this.groupResolver = new ParameterGroupResolver(
+                this.logger,
+                this::evaluateConditionsList
+        );
+
+        // 初始化条件表达式评估器（支持比较/逻辑/数学/占位符）
+        this.conditionEvaluator = new PlaceholderConditionEvaluator(
+                this.plugin,
+                this.logger,
+                this.placeholderUtil,
+                this.asyncTaskManager
+        );
     }
 
     // ======================== 生命周期管理 ========================
@@ -146,6 +170,7 @@ public class RefactoredVariablesManager {
         return CompletableFuture.runAsync(() -> {
             try {
                 loadAllVariableDefinitions();
+                rebuildRegenVariableKeys();
                 validateVariableDefinitions();
                 persistenceManager.start();
                 logger.info("变量管理系统初始化完成！已加载 " + variableRegistry.size() + " 个变量定义");
@@ -289,6 +314,7 @@ public class RefactoredVariablesManager {
                 }
                 // 确保最终返回值经过类型规范化
                 finalValue = normalizeValueByType(finalValue, variable.getValueType());
+                touchRecentPlayer(player);
                 return VariableResult.success(finalValue, "GET", key, playerName);
             } catch (Exception e) {
                 logger.error("获取变量失败: " + key, e);
@@ -360,7 +386,7 @@ public class RefactoredVariablesManager {
                 }
 
                 // 统一进行限制适配：先校验，失败再尝试 ValueLimiter
-                String fitted = fitValueWithinLimitOrNull(variable, newIncrement);
+                String fitted = fitValueWithinLimitOrNull(variable, newIncrement, player);
                 if (fitted == null) {
                     return VariableResult.failure("加法结果超出限制", "ADD", key, playerName);
                 }
@@ -407,7 +433,7 @@ public class RefactoredVariablesManager {
                 }
 
                 // 统一进行限制适配：先校验，失败再尝试 ValueLimiter
-                String fitted = fitValueWithinLimitOrNull(variable, newIncrement);
+                String fitted = fitValueWithinLimitOrNull(variable, newIncrement, player);
                 if (fitted == null) {
                     return VariableResult.failure("删除结果超出限制", "REMOVE", key, playerName);
                 }
@@ -504,6 +530,29 @@ public class RefactoredVariablesManager {
         return variableRegistry.get(key);
     }
 
+    public void rebuildRegenVariableKeys() {
+        regenVariableKeys.clear();
+        for (Map.Entry<String, Variable> entry : variableRegistry.entrySet()) {
+            Variable variable = entry.getValue();
+            if (variable != null && variable.hasAnyRegenRule()) {
+                regenVariableKeys.add(entry.getKey());
+            }
+        }
+    }
+
+    public void reloadVariableDefinitions() {
+        Map<String, Variable> nextRegistry = new HashMap<>();
+        definitionLoader.loadAll(variable -> nextRegistry.put(variable.getKey(), variable));
+        if (nextRegistry.isEmpty()) {
+            logger.warn("变量定义重载失败：新配置为空，保留旧定义。");
+            return;
+        }
+        variableRegistry.putAll(nextRegistry);
+        variableRegistry.keySet().removeIf(key -> !nextRegistry.containsKey(key));
+        rebuildRegenVariableKeys();
+        validateVariableDefinitions();
+    }
+
     /**
      * 从数据库重载指定玩家的变量到内存（用于跨服同步）
      *
@@ -568,6 +617,98 @@ public class RefactoredVariablesManager {
     }
 
     /**
+     * 按在线玩家上下文刷新 regen（用于定时任务）
+     */
+    public void tickRegenForOnlinePlayers(List<? extends OfflinePlayer> players, long activeWindowMillis, int maxPlayers) {
+        if (activeWindowMillis <= 0) {
+            activeWindowMillis = 15000L;
+        }
+        if (maxPlayers <= 0) {
+            maxPlayers = 64;
+        }
+        if (players == null || players.isEmpty()) {
+            tickRegenForGlobal(null);
+            return;
+        }
+        OfflinePlayer context = players.get(0);
+        tickRegenForGlobal(context);
+        List<OfflinePlayer> activePlayers = selectActivePlayers(players, activeWindowMillis, maxPlayers);
+        for (OfflinePlayer player : activePlayers) {
+            if (player == null) {
+                continue;
+            }
+            Map<String, VariableValue> vars = memoryStorage.getPlayerVariables(player.getUniqueId());
+            if (vars.isEmpty()) {
+                continue;
+            }
+            for (Map.Entry<String, VariableValue> entry : vars.entrySet()) {
+                if (!regenVariableKeys.contains(entry.getKey())) {
+                    continue;
+                }
+                Variable variable = getVariableDefinition(entry.getKey());
+                if (variable == null || !variable.isPlayerScoped()) {
+                    continue;
+                }
+                VariableValue storage = entry.getValue();
+                if (storage == null) {
+                    continue;
+                }
+                applyRegenIfNeeded(player, variable, storage, storage.getActualValue());
+            }
+        }
+    }
+
+    private void tickRegenForGlobal(OfflinePlayer contextPlayer) {
+        Map<String, VariableValue> vars = memoryStorage.getServerVariables();
+        if (vars.isEmpty()) {
+            return;
+        }
+        for (Map.Entry<String, VariableValue> entry : vars.entrySet()) {
+            if (!regenVariableKeys.contains(entry.getKey())) {
+                continue;
+            }
+            Variable variable = getVariableDefinition(entry.getKey());
+            if (variable == null || !variable.isGlobal()) {
+                continue;
+            }
+            VariableValue storage = entry.getValue();
+            if (storage == null) {
+                continue;
+            }
+            applyRegenIfNeeded(contextPlayer, variable, storage, storage.getActualValue());
+        }
+    }
+
+    private void touchRecentPlayer(OfflinePlayer player) {
+        if (player == null) {
+            return;
+        }
+        recentAccessPlayers.put(player.getUniqueId(), System.currentTimeMillis());
+    }
+
+    private List<OfflinePlayer> selectActivePlayers(List<? extends OfflinePlayer> players, long activeWindowMillis, int maxPlayers) {
+        long now = System.currentTimeMillis();
+        recentAccessPlayers.entrySet().removeIf(entry -> now - entry.getValue() > activeWindowMillis);
+        List<OfflinePlayer> active = new ArrayList<>();
+        List<? extends OfflinePlayer> candidates = new ArrayList<>(players);
+        Collections.shuffle(candidates);
+        for (OfflinePlayer player : candidates) {
+            if (player == null) {
+                continue;
+            }
+            Long last = recentAccessPlayers.get(player.getUniqueId());
+            if (last == null || now - last > activeWindowMillis) {
+                continue;
+            }
+            active.add(player);
+            if (active.size() >= maxPlayers) {
+                break;
+            }
+        }
+        return active;
+    }
+
+    /**
      * 验证变量作用域是否符合预期
      *
      * @param key       变量键
@@ -617,7 +758,8 @@ public class RefactoredVariablesManager {
         VariableValue memVal = getMemoryValue(player, variable);
         String currInc = getCurrentIncrementForFormula(memVal);
         String newIncrement = calculateFormulaIncrement(variable.getValueType(), currInc, resolvedAdd, true);
-        String base = resolveExpression(variable.getInitial(), player, variable);
+        EffectiveParams params = getEffectiveParams(variable, player);
+        String base = resolveExpression(params.getInitial(), player, variable);
         String displayValue = addFormulaIncrement(base, newIncrement, variable.getValueType());
         logger.debug("公式加法: key=" + variable.getKey()
                 + ", strict=" + (memVal != null && memVal.isStrictComputed())
@@ -639,7 +781,8 @@ public class RefactoredVariablesManager {
         String resolvedRemove = resolveExpression(removeValue, player, variable);
         String newIncrement = calculateFormulaIncrement(
                 variable.getValueType(), currInc, resolvedRemove, false);
-        String base = resolveExpression(variable.getInitial(), player, variable);
+        EffectiveParams params = getEffectiveParams(variable, player);
+        String base = resolveExpression(params.getInitial(), player, variable);
         String displayValue = addFormulaIncrement(base, newIncrement, variable.getValueType());
         logger.debug("公式删除: key=" + variable.getKey()
                 + ", strict=" + (memVal != null && memVal.isStrictComputed())
@@ -772,20 +915,23 @@ public class RefactoredVariablesManager {
                 logger.debug("变量条件为空，视为不通过: " + variable.getKey());
                 return false;
             }
-            String resolved;
+            String resolved = resolveInternalVariables(raw, player);
+            if (!isConditionLengthValid(resolved, variable)) {
+                logger.debug("变量条件长度超限，视为不通过: key=" + variable.getKey());
+                return false;
+            }
+
+            boolean pass;
             try {
-                // 解析条件表达式；此处传入 variable 以应用其安全限制
-                resolved = resolveExpression(raw, player, variable);
+                pass = conditionEvaluator.parse(toOnlinePlayer(player), resolved);
             } catch (Exception e) {
                 logger.debug("变量条件解析异常: key=" + variable.getKey() + ", 条件#" + idx + " => 异常: " + e.getMessage());
                 return false;
             }
 
-            boolean pass = interpretAsBoolean(resolved);
             if (!pass) {
-                String rv = (resolved == null ? "null" : (resolved.length() > 64 ? resolved.substring(0, 64) + "..." : resolved));
                 String condPreview = raw.length() > 64 ? raw.substring(0, 64) + "..." : raw;
-                logger.debug("变量门控失败: key=" + variable.getKey() + ", 条件#" + idx + " '" + condPreview + "' => '" + rv + "'");
+                logger.debug("变量门控失败: key=" + variable.getKey() + ", 条件#" + idx + " '" + condPreview + "'");
                 return false;
             }
         }
@@ -795,18 +941,59 @@ public class RefactoredVariablesManager {
         }
     }
 
-    /** 严格布尔解释："true"(忽略大小写) 或 非零数字 为 true；其它均为 false */
-    private boolean interpretAsBoolean(String val) {
-        if (val == null) return false;
-        String s = val.trim().toLowerCase();
-        if ("true".equals(s)) return true;
-        if ("false".equals(s)) return false;
-        try {
-            double d = Double.parseDouble(s);
-            return Math.abs(d) > 1e-12;
-        } catch (Exception ignored) {
+    /**
+     * 评估条件列表（供 ParameterGroupResolver 复用）
+     *
+     * @param player 玩家上下文
+     * @param conditions 条件表达式列表
+     * @return 是否全部通过
+     */
+    private boolean evaluateConditionsList(OfflinePlayer player, List<String> conditions) {
+        if (conditions == null || conditions.isEmpty()) {
+            return true;
+        }
+        Player onlinePlayer = toOnlinePlayer(player);
+        for (String cond : conditions) {
+            if (cond == null || cond.trim().isEmpty()) {
+                return false;
+            }
+            String resolved = resolveInternalVariables(cond, player);
+            if (!isConditionLengthValid(resolved, null)) {
+                return false;
+            }
+            try {
+                if (!conditionEvaluator.parse(onlinePlayer, resolved)) {
+                    return false;
+                }
+            } catch (Exception e) {
+                logger.debug("参数组条件解析异常: " + e.getMessage());
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private Player toOnlinePlayer(OfflinePlayer player) {
+        return isOnline(player) ? player.getPlayer() : null;
+    }
+
+    private boolean isConditionLengthValid(String expression, Variable variable) {
+        if (expression == null) {
             return false;
         }
+        int maxLen = MAX_EXPRESSION_LENGTH;
+        if (variable != null && variable.getLimitations() != null) {
+            Limitations lim = variable.getLimitations();
+            if (lim.getMaxExpressionLength() != null) {
+                maxLen = lim.getMaxExpressionLength();
+            }
+        }
+        if (expression.length() > maxLen) {
+            logger.warn("条件表达式长度超出限制，已拒绝: "
+                    + expression.substring(0, Math.min(100, expression.length())) + "...");
+            return false;
+        }
+        return true;
     }
 
     /** 获取玩家名，若为空则返回 "SERVER" */
@@ -817,6 +1004,22 @@ public class RefactoredVariablesManager {
     /** 是否在线（避免 NPE 与 PAPI 无上下文问题） */
     private boolean isOnline(OfflinePlayer player) {
         return player != null && player.isOnline() && player.getPlayer() != null;
+    }
+
+    private boolean isNumberInRange(double value, String minStr, String maxStr) {
+        if (minStr != null) {
+            try {
+                double min = Double.parseDouble(minStr);
+                if (value < min) return false;
+            } catch (NumberFormatException ignored) { }
+        }
+        if (maxStr != null) {
+            try {
+                double max = Double.parseDouble(maxStr);
+                if (value > max) return false;
+            } catch (NumberFormatException ignored) { }
+        }
+        return true;
     }
 
     /** 字符串判空（包含 trim） */
@@ -849,9 +1052,13 @@ public class RefactoredVariablesManager {
             return "";
         }
 
+        EffectiveParams params = getEffectiveParams(variable, player);
         VariableValue val = getMemoryValue(player, variable);
-        String init = variable.getInitial();
-        boolean isFormula = isFormulaVariable(variable);
+        String init = params.getInitial();
+        boolean isFormula = init != null && !init.trim().isEmpty()
+                && (PLACEHOLDER_PATTERN.matcher(init).find()
+                || INTERNAL_VAR_PATTERN.matcher(init).find()
+                || init.matches(".*[+\\-*/()^].*"));
 
         // 严格初始值模式
         if (variable.isStrictInitialMode() && !isBlank(init)) {
@@ -1014,7 +1221,11 @@ public class RefactoredVariablesManager {
      * 数值渐进恢复：仅对 INT/DOUBLE、生效 regen 规则的变量执行
      */
     private String applyRegenIfNeeded(OfflinePlayer player, Variable variable, VariableValue storage, String currentValue) {
-        if (variable == null || !variable.hasRegenRule() || storage == null) {
+        if (variable == null || storage == null) {
+            return currentValue;
+        }
+        EffectiveParams params = getEffectiveParams(variable, player);
+        if (!params.hasRegenRule()) {
             return currentValue;
         }
         ValueType vt = variable.getValueType();
@@ -1031,7 +1242,7 @@ public class RefactoredVariablesManager {
         }
         long last = storage.getLastModified();
         long now = System.currentTimeMillis();
-        double gain = variable.getRegenRule().calculateGain(last, now, resolveRegenZone());
+        double gain = params.getRegenRule().calculateGain(last, now, resolveRegenZone());
         if (gain <= 0) {
             return currentValue;
         }
@@ -1049,19 +1260,21 @@ public class RefactoredVariablesManager {
     }
 
     private Double resolveMax(OfflinePlayer player, Variable variable) {
-        Double v = parseDoubleWithPlaceholders(variable.getMax(), player, variable);
+        EffectiveParams params = getEffectiveParams(variable, player);
+        Double v = parseDoubleWithPlaceholders(params.getMax(), player, variable);
         if (v != null) return v;
         if (variable.getLimitations() != null) {
-            v = parseDoubleWithPlaceholders(variable.getLimitations().getMaxValue(), player, variable);
+            v = parseDoubleWithPlaceholders(params.getLimitations().getMaxValue(), player, variable);
         }
         return v;
     }
 
     private Double resolveMin(OfflinePlayer player, Variable variable) {
-        Double v = parseDoubleWithPlaceholders(variable.getMin(), player, variable);
+        EffectiveParams params = getEffectiveParams(variable, player);
+        Double v = parseDoubleWithPlaceholders(params.getMin(), player, variable);
         if (v != null) return v;
         if (variable.getLimitations() != null) {
-            v = parseDoubleWithPlaceholders(variable.getLimitations().getMinValue(), player, variable);
+            v = parseDoubleWithPlaceholders(params.getLimitations().getMinValue(), player, variable);
         }
         return v;
     }
@@ -1102,7 +1315,11 @@ public class RefactoredVariablesManager {
             return null;
         }
         Variable target = getVariableDefinition(targetKey);
-        if (target == null || !target.hasRegenRule()) {
+        if (target == null) {
+            return "0";
+        }
+        EffectiveParams params = getEffectiveParams(target, player);
+        if (!params.hasRegenRule()) {
             return "0";
         }
         ValueType vt = target.getValueType();
@@ -1118,7 +1335,7 @@ public class RefactoredVariablesManager {
         if (current != null && maxVal != null && current >= maxVal - 1e-9) {
             return "0";
         }
-        long delta = target.getRegenRule().calculateNextMillis(
+        long delta = params.getRegenRule().calculateNextMillis(
                 storage.getLastModified(),
                 System.currentTimeMillis(),
                 resolveRegenZone()
@@ -1150,6 +1367,17 @@ public class RefactoredVariablesManager {
             logger.warn("解析恢复时区失败，回退系统默认: " + ex.getMessage());
             return ZoneId.systemDefault();
         }
+    }
+
+    /**
+     * 获取变量的有效参数（考虑参数组覆盖）
+     *
+     * @param variable 变量定义
+     * @param player 玩家上下文
+     * @return 合并后的有效参数
+     */
+    public EffectiveParams getEffectiveParams(Variable variable, OfflinePlayer player) {
+        return groupResolver.resolve(variable, player);
     }
 
     /**
@@ -1300,14 +1528,15 @@ public class RefactoredVariablesManager {
 
     /**
      * 将候选值按变量限制进行适配：
-     * - 先调用 {@link #validateValue(Variable, String)} 校验；
-     * - 若失败，尝试通过 {@link ValueLimiter#apply(Variable, String)} 进行修正；
+     * - 先调用 {@link #validateValue(Variable, String, OfflinePlayer)} 校验；
+     * - 若失败，尝试通过 {@link ValueLimiter#apply(EffectiveParams, String)} 进行修正；
      * - 若修正后仍不通过，返回 null。
      */
-    private String fitValueWithinLimitOrNull(Variable variable, String candidate) {
-        if (validateValue(variable, candidate)) return candidate;
-        String adjusted = ValueLimiter.apply(variable, candidate);
-        if (adjusted != null && validateValue(variable, adjusted)) {
+    private String fitValueWithinLimitOrNull(Variable variable, String candidate, OfflinePlayer player) {
+        if (validateValue(variable, candidate, player)) return candidate;
+        EffectiveParams params = getEffectiveParams(variable, player);
+        String adjusted = ValueLimiter.apply(params, candidate);
+        if (adjusted != null && validateValue(variable, adjusted, player)) {
             return adjusted;
         }
         return null;
@@ -1349,7 +1578,7 @@ public class RefactoredVariablesManager {
     private String processAndValidateValue(Variable variable, String value, OfflinePlayer player) {
         if (value == null) return null;
         String resolved = resolveExpression(value, player, variable);
-        return validateValue(variable, resolved) ? resolved : null;
+        return validateValue(variable, resolved, player) ? resolved : null;
     }
 
     /**
@@ -1358,7 +1587,7 @@ public class RefactoredVariablesManager {
      * @param value    已解析的值
      * @return true 若验证通过
      */
-    private boolean validateValue(Variable variable, String value) {
+    private boolean validateValue(Variable variable, String value, OfflinePlayer player) {
         ValueType type = variable.getValueType();
         if (type == null) type = inferTypeFromValue(value);
 
@@ -1381,44 +1610,52 @@ public class RefactoredVariablesManager {
             }
         }
 
-        Limitations lim = variable.getLimitations();
-        if (lim != null) {
-            if (lim.hasValueConstraints()) {
-                switch (type) {
-                    case INT, DOUBLE -> {
-                        try {
-                            double num = (value != null) ? Double.parseDouble(value) : 0D;
-                            if (!lim.isValueInRange(num)) {
-                                logger.warn("变量 " + variable.getKey() + " 的值 " + num
-                                        + " 超出范围 [" + lim.getMinValue() + ", " + lim.getMaxValue() + "]");
-                                return false;
-                            }
-                        } catch (NumberFormatException ignored) { }
-                    }
-                    case STRING, LIST -> {
-                        if (lim.getMinValue() != null || lim.getMaxValue() != null) {
-                            int min = 0, max = Integer.MAX_VALUE;
-                            try {
-                                if (lim.getMinValue() != null) min = Integer.parseInt(lim.getMinValue());
-                                if (lim.getMaxValue() != null) max = Integer.parseInt(lim.getMaxValue());
-                                if (value != null && (value.length() < min || value.length() > max)) {
-                                    logger.warn("变量 " + variable.getKey() + " 的长度 "
-                                            + value.length() + " 超出范围 [" + min + ", " + max + "]");
-                                    return false;
-                                }
-                            } catch (NumberFormatException ignored) {
-                                logger.debug("字符串类型长度限制解析异常: " + variable.getKey());
-                            }
+        EffectiveParams params = getEffectiveParams(variable, player);
+        Limitations lim = params.getLimitations();
+        String minStr = params.getMin();
+        String maxStr = params.getMax();
+        if (minStr == null && lim != null) {
+            minStr = lim.getMinValue();
+        }
+        if (maxStr == null && lim != null) {
+            maxStr = lim.getMaxValue();
+        }
+        boolean hasValueConstraints = minStr != null || maxStr != null;
+
+        if (hasValueConstraints) {
+            switch (type) {
+                case INT, DOUBLE -> {
+                    try {
+                        double num = (value != null) ? Double.parseDouble(value) : 0D;
+                        if (!isNumberInRange(num, minStr, maxStr)) {
+                            logger.warn("变量 " + variable.getKey() + " 的值 " + num
+                                    + " 超出范围 [" + minStr + ", " + maxStr + "]");
+                            return false;
                         }
+                    } catch (NumberFormatException ignored) { }
+                }
+                case STRING, LIST -> {
+                    int min = 0, max = Integer.MAX_VALUE;
+                    try {
+                        if (minStr != null) min = Integer.parseInt(minStr);
+                        if (maxStr != null) max = Integer.parseInt(maxStr);
+                        if (value != null && (value.length() < min || value.length() > max)) {
+                            logger.warn("变量 " + variable.getKey() + " 的长度 "
+                                    + value.length() + " 超出范围 [" + min + ", " + max + "]");
+                            return false;
+                        }
+                    } catch (NumberFormatException ignored) {
+                        logger.debug("字符串类型长度限制解析异常: " + variable.getKey());
                     }
                 }
             }
-            if (lim.hasSecurityLimitations() && !lim.isExpressionLengthValid(value)) {
-                if (value != null) {
-                    logger.warn("变量 " + variable.getKey() + " 的表达式长度超出安全限制: " + value.length());
-                }
-                return false;
+        }
+
+        if (lim != null && lim.hasSecurityLimitations() && !lim.isExpressionLengthValid(value)) {
+            if (value != null) {
+                logger.warn("变量 " + variable.getKey() + " 的表达式长度超出安全限制: " + value.length());
             }
+            return false;
         }
         return true;
     }
@@ -1518,7 +1755,8 @@ public class RefactoredVariablesManager {
 
     /** 为公式变量计算设置值相对于基础公式的增量 */
     private String calculateIncrementForSet(Variable variable, String setValue, OfflinePlayer player) {
-        String base = resolveExpression(variable.getInitial(), player, variable);
+        EffectiveParams params = getEffectiveParams(variable, player);
+        String base = resolveExpression(params.getInitial(), player, variable);
         ValueType type = variable.getValueType();
         if (type == null) type = inferTypeFromValue(base);
 

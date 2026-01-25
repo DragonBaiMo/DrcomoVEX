@@ -48,6 +48,7 @@ public class DrcomoVEX extends JavaPlugin {
     // 定时任务
     private DataSaveTask dataSaveTask;
     private VariableCycleTask variableCycleTask;
+    private cn.drcomo.tasks.VariableRegenTask variableRegenTask;
     
     @Override
     public void onEnable() {
@@ -92,6 +93,9 @@ public class DrcomoVEX extends JavaPlugin {
         }
         if (variableCycleTask != null) {
             variableCycleTask.stop();
+        }
+        if (variableRegenTask != null) {
+            variableRegenTask.stop();
         }
         
         // 2. 关闭高性能变量管理器（会自动持久化所有数据并关闭数据库）
@@ -232,6 +236,11 @@ public class DrcomoVEX extends JavaPlugin {
         playerVariablesManager.initialize();
     }
 
+    public void reloadAll() {
+        configsManager.reload();
+        messagesManager.reload();
+    }
+
     /**
      * 从数据库加载持久化变量数据到内存
      */
@@ -277,6 +286,11 @@ public class DrcomoVEX extends JavaPlugin {
                 this, logger, variablesManager, configsManager, yamlUtil
         );
         variableCycleTask.start();
+
+        variableRegenTask = new cn.drcomo.tasks.VariableRegenTask(
+                this, logger, variablesManager, configsManager.getMainConfig()
+        );
+        variableRegenTask.start();
     }
     
     /**

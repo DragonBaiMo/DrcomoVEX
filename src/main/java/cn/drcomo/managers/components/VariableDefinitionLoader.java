@@ -6,12 +6,15 @@ import cn.drcomo.model.structure.Limitations;
 import cn.drcomo.model.structure.ValueType;
 import cn.drcomo.model.structure.RegenRule;
 import cn.drcomo.model.structure.Variable;
+import cn.drcomo.model.structure.ParameterGroup;
 import org.bukkit.configuration.ConfigurationSection;
 import org.bukkit.configuration.file.FileConfiguration;
 import org.bukkit.configuration.file.YamlConfiguration;
 
 import java.io.File;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.function.Consumer;
 
 /**
@@ -179,7 +182,126 @@ public class VariableDefinitionLoader {
             }
         }
 
+        // 解析参数组列表
+        if (section.isList("groups")) {
+            List<ParameterGroup> groups = parseGroups(key, section);
+            if (!groups.isEmpty()) {
+                builder.groups(groups);
+            }
+        }
+
         builder.limitations(lb.build());
+        return builder.build();
+    }
+
+    /**
+     * 解析变量的参数组列表
+     */
+    private List<ParameterGroup> parseGroups(String varKey, ConfigurationSection varSection) {
+        List<ParameterGroup> result = new ArrayList<>();
+        List<?> rawList = varSection.getList("groups");
+        if (rawList == null || rawList.isEmpty()) {
+            return result;
+        }
+
+        for (int i = 0; i < rawList.size(); i++) {
+            Object item = rawList.get(i);
+            if (item instanceof Map) {
+                @SuppressWarnings("unchecked")
+                Map<String, Object> map = (Map<String, Object>) item;
+                ParameterGroup group = parseGroupFromMap(varKey, i, map);
+                if (group != null) {
+                    result.add(group);
+                }
+            } else {
+                logger.warn("变量 " + varKey + " 的 groups 第 " + i + " 项类型无效，需为 Map，已忽略");
+            }
+        }
+
+        return result;
+    }
+
+    /**
+     * 从 Map 解析单个参数组（YAML 列表项格式）
+     */
+    @SuppressWarnings("unchecked")
+    private ParameterGroup parseGroupFromMap(String varKey, int index, Map<String, Object> map) {
+        if (map == null || map.isEmpty()) {
+            logger.warn("变量 " + varKey + " 的 groups 第 " + index + " 项为空，已忽略");
+            return null;
+        }
+
+        ParameterGroup.Builder builder = new ParameterGroup.Builder();
+
+        Object nameObj = map.get("name");
+        String groupName = (nameObj instanceof String && !((String) nameObj).trim().isEmpty())
+                ? ((String) nameObj).trim()
+                : "group_" + index;
+        builder.name(groupName);
+
+        if (map.containsKey("priority")) {
+            Object pObj = map.get("priority");
+            try {
+                int p = Integer.parseInt(String.valueOf(pObj));
+                builder.priority(p);
+            } catch (Exception e) {
+                logger.warn("变量 " + varKey + " 的 groups." + groupName + " priority 无法解析，使用默认 0");
+            }
+        }
+
+        if (map.containsKey("conditions")) {
+            Object condObj = map.get("conditions");
+            List<String> conds = new ArrayList<>();
+            if (condObj instanceof List<?>) {
+                for (Object o : (List<?>) condObj) {
+                    if (o != null) {
+                        String c = String.valueOf(o).trim();
+                        if (!c.isEmpty()) {
+                            conds.add(c);
+                        }
+                    }
+                }
+            } else if (condObj instanceof String) {
+                String c = ((String) condObj).trim();
+                if (!c.isEmpty()) conds.add(c);
+            } else {
+                logger.warn("变量 " + varKey + " 的 groups." + groupName + " conditions 类型无效，已忽略");
+            }
+            if (!conds.isEmpty()) {
+                builder.conditions(conds);
+            }
+        }
+
+        if (map.containsKey("initial")) {
+            Object v = map.get("initial");
+            if (v != null) builder.initial(String.valueOf(v));
+        }
+        if (map.containsKey("min")) {
+            Object v = map.get("min");
+            if (v != null) builder.min(String.valueOf(v));
+        }
+        if (map.containsKey("max")) {
+            Object v = map.get("max");
+            if (v != null) builder.max(String.valueOf(v));
+        }
+        if (map.containsKey("cycle")) {
+            Object v = map.get("cycle");
+            if (v != null) builder.cycle(String.valueOf(v));
+        }
+
+        if (map.containsKey("regen")) {
+            Object regenObj = map.get("regen");
+            if (regenObj != null) {
+                String regenRaw = String.valueOf(regenObj);
+                RegenRule rule = RegenRule.parse(regenRaw, logger);
+                if (rule != null) {
+                    builder.regen(rule, regenRaw);
+                } else {
+                    logger.warn("变量 " + varKey + " 的 groups." + groupName + " regen 配置无效，已忽略");
+                }
+            }
+        }
+
         return builder.build();
     }
 

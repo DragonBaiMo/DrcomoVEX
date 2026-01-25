@@ -2,6 +2,7 @@ package cn.drcomo.config;
 
 import cn.drcomo.DrcomoVEX;
 import cn.drcomo.corelib.util.DebugUtil;
+import cn.drcomo.managers.RefactoredVariablesManager;
 import cn.drcomo.corelib.config.YamlUtil;
 import org.bukkit.configuration.file.FileConfiguration;
 
@@ -55,10 +56,15 @@ public class ConfigsManager {
      */
     public void reload() {
         logger.info("正在重载所有配置...");
-        
+
         mainConfigManager.reload();
         variablesConfigManager.reload();
-        
+
+        RefactoredVariablesManager variablesManager = plugin.getVariablesManager();
+        if (variablesManager != null) {
+            variablesManager.reloadVariableDefinitions();
+        }
+
         logger.info("所有配置已重载完成！");
     }
     

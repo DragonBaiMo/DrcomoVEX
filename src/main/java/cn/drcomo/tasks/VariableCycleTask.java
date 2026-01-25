@@ -3,9 +3,12 @@ package cn.drcomo.tasks;
 import cn.drcomo.DrcomoVEX;
 import cn.drcomo.config.ConfigsManager;
 import cn.drcomo.corelib.config.YamlUtil;
+import org.bukkit.OfflinePlayer;
 import org.bukkit.configuration.file.FileConfiguration;
 import cn.drcomo.managers.RefactoredVariablesManager;
 import cn.drcomo.model.structure.Variable;
+import cn.drcomo.model.structure.EffectiveParams;
+import cn.drcomo.model.structure.ParameterGroup;
 import cn.drcomo.corelib.util.DebugUtil;
 
 import com.cronutils.model.Cron;
@@ -359,6 +362,13 @@ public class VariableCycleTask {
                     continue;
                 }
 
+                // 参数组的 cycle 覆盖在运行时生效，周期任务统一使用基础配置
+                String effectiveCycle = definedCycle;
+
+                if (!cycleType.equalsIgnoreCase(effectiveCycle)) {
+                    continue;
+                }
+
                 boolean success = false;
                 for (int retry = 1; retry <= 3; retry++) {
                     if (safeDeleteAndClear(var.isGlobal(), key, retry, false)) {
@@ -379,7 +389,7 @@ public class VariableCycleTask {
                     try {
                         variablesManager.executeCycleActionsOnReset(var, null);
                     } catch (Exception actEx) {
-                        logger.error("执行重置动作失败: " + key, actEx);
+                        logger.error("执行重置动作失败: " + key + "，原因: " + actEx.getMessage());
                     }
                 } else {
                     logger.warn("变量 " + key + " 重置失败，已重试3次");

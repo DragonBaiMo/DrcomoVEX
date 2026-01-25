@@ -59,6 +59,13 @@ cycle:
     max-concurrency: 2      # 并发查询上限
     timeout-millis: 8000    # 读超时（毫秒），SQLite 建议更长以避开热重载初期波动
 
+# 渐进恢复刷新配置
+regen:
+  enabled: true             # 是否启用渐进恢复刷新任务
+  tick-interval-seconds: 1  # 刷新间隔（秒）
+  active-window-millis: 15000 # 仅刷新最近访问过的玩家窗口（毫秒）
+  max-players-per-tick: 64    # 每次刷新最多处理的玩家数量
+
 # 基本设置
 settings:
   # 是否检查更新
