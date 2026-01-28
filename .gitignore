@@ -6,3 +6,6 @@ target
 dependency-*.xml
 .claude/
 code_review/
+
+# local diff artifacts
+full_diff.patch

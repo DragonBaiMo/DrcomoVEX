@@ -109,7 +109,9 @@ public class VariableMemoryStorage {
             VariableValue oldValue = playerVars.get(key);
             if (oldValue != null) {
                 // 更新现有值
+                long oldSize = oldValue.getEstimatedMemoryUsage();
                 oldValue.setValue(value);
+                updateMemoryUsage(oldValue.getEstimatedMemoryUsage() - oldSize);
                 currentValue = oldValue;
                 if (oldValue.isDirty()) {
                     trackDirtyData(buildPlayerKey(playerId, key), DirtyFlag.Type.PLAYER_VARIABLE);
@@ -140,6 +142,75 @@ public class VariableMemoryStorage {
             
         } finally {
             memoryLock.writeLock().unlock();
+        }
+    }
+
+    /**
+     * 原子更新玩家变量（用于 Regen 等读-改-写场景）
+     */
+    public void updatePlayerVariableAtomic(UUID playerId, String key, java.util.function.UnaryOperator<VariableValue> updater) {
+        if (playerId == null || key == null || updater == null) {
+            return;
+        }
+        final boolean[] shouldCheckPressure = new boolean[1];
+        memoryLock.readLock().lock();
+        try {
+            ConcurrentHashMap<String, VariableValue> playerVars = playerVariables.get(playerId);
+            if (playerVars == null) {
+                return;
+            }
+            playerVars.compute(key, (k, old) -> {
+                long oldSize = (old == null) ? 0 : old.getEstimatedMemoryUsage();
+                VariableValue updated = updater.apply(old);
+                if (updated != null) {
+                    updateMemoryUsage(updated.getEstimatedMemoryUsage() - oldSize);
+                    if (updated.isDirty()) {
+                        trackDirtyData(buildPlayerKey(playerId, key), DirtyFlag.Type.PLAYER_VARIABLE);
+                    }
+                    long first = updated.getFirstModifiedAt();
+                    playerFirstModifiedIndex.compute(key, (kk, v) -> v == null || first < v ? first : v);
+                    shouldCheckPressure[0] = true;
+                }
+                return updated;
+            });
+        } finally {
+            memoryLock.readLock().unlock();
+        }
+        if (shouldCheckPressure[0]) {
+            checkMemoryPressure();
+        }
+    }
+
+    /**
+     * 原子更新服务器变量（用于 Regen 等读-改-写场景）
+     */
+    public void updateServerVariableAtomic(String key, java.util.function.UnaryOperator<VariableValue> updater) {
+        if (key == null || updater == null) {
+            return;
+        }
+        final boolean[] shouldCheckPressure = new boolean[1];
+        memoryLock.readLock().lock();
+        try {
+            if (!serverVariables.containsKey(key)) {
+                return;
+            }
+            serverVariables.compute(key, (k, old) -> {
+                long oldSize = (old == null) ? 0 : old.getEstimatedMemoryUsage();
+                VariableValue updated = updater.apply(old);
+                if (updated != null) {
+                    updateMemoryUsage(updated.getEstimatedMemoryUsage() - oldSize);
+                    if (updated.isDirty()) {
+                        trackDirtyData(buildServerKey(key), DirtyFlag.Type.SERVER_VARIABLE);
+                    }
+                    shouldCheckPressure[0] = true;
+                }
+                return updated;
+            });
+        } finally {
+            memoryLock.readLock().unlock();
+        }
+        if (shouldCheckPressure[0]) {
+            checkMemoryPressure();
         }
     }
 
@@ -261,7 +332,9 @@ public class VariableMemoryStorage {
             VariableValue oldValue = serverVariables.get(key);
             if (oldValue != null) {
                 // 更新现有值
+                long oldSize = oldValue.getEstimatedMemoryUsage();
                 oldValue.setValue(value);
+                updateMemoryUsage(oldValue.getEstimatedMemoryUsage() - oldSize);
                 if (oldValue.isDirty()) {
                     trackDirtyData(buildServerKey(key), DirtyFlag.Type.SERVER_VARIABLE);
                 }

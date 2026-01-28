@@ -109,7 +109,26 @@ public class VariableValue {
         // 只有值真正发生变化时才标记为脏
         if (!newValue.equals(this.value)) {
             this.value = newValue;
-            markDirty();
+            this.isDirty = true;
+            this.lastModified = System.currentTimeMillis();
+            this.version.incrementAndGet();
+            updateMemoryUsage();
+        }
+        updateAccess();
+    }
+
+    /**
+     * 直接设置值并标记为脏（不会触发额外逻辑）
+     */
+    public void setValueAndMarkDirty(String newValue) {
+        if (newValue == null) {
+            newValue = "";
+        }
+        if (!newValue.equals(this.value)) {
+            this.value = newValue;
+            this.isDirty = true;
+            this.lastModified = System.currentTimeMillis();
+            this.version.incrementAndGet();
             updateMemoryUsage();
         }
         updateAccess();

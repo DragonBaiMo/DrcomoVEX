@@ -14,6 +14,7 @@ import cn.drcomo.model.structure.Limitations;
 import cn.drcomo.model.structure.ScopeType;
 import cn.drcomo.model.structure.ValueType;
 import cn.drcomo.model.structure.Variable;
+import cn.drcomo.model.structure.RegenRule;
 import cn.drcomo.managers.components.ActionExecutor;
 import cn.drcomo.managers.components.ParameterGroupResolver;
 import cn.drcomo.managers.components.VariableDefinitionLoader;
@@ -105,6 +106,8 @@ public class RefactoredVariablesManager {
     private final ThreadLocal<String> currentValidatingVariable = new ThreadLocal<>();
     // 门控评估中的变量栈，防止条件中自引用导致的递归
     private final ThreadLocal<Set<String>> gatingEvaluatingStack = ThreadLocal.withInitial(HashSet::new);
+    // 变量值解析栈，防止跨变量循环引用
+    private final ThreadLocal<Set<String>> valueResolvingStack = ThreadLocal.withInitial(HashSet::new);
 
     // ======================== 构造函数 ========================
     public RefactoredVariablesManager(
@@ -300,27 +303,48 @@ public class RefactoredVariablesManager {
      * 获取变量值（完全异步，无阻塞）
      */
     public CompletableFuture<VariableResult> getVariable(OfflinePlayer player, String key) {
-        final String playerName = getPlayerName(player);
-        return CompletableFuture.supplyAsync(() -> {
-            try {
-                Variable variable = getVariableDefinition(key);
-                Optional<VariableResult> pre = checkOpPreconditions(player, variable, key, "GET", playerName, false);
-                if (pre.isPresent()) return pre.get();
+        if (Bukkit.isPrimaryThread()) {
+            return CompletableFuture.completedFuture(getVariableSync(player, key, true));
+        }
+        return CompletableFuture.supplyAsync(() -> getVariableSync(player, key, false), asyncTaskManager.getExecutor());
+    }
 
-                // 直接从内存读取，不再使用多级缓存
-                String finalValue = getVariableFromMemoryOrDefault(player, variable);
-                if (!isFormulaVariable(variable)) {
-                    finalValue = resolveExpression(finalValue, player, variable);
+    public VariableResult getVariableSync(OfflinePlayer player, String key) {
+        return getVariableSync(player, key, Bukkit.isPrimaryThread());
+    }
+
+    private VariableResult getVariableSync(OfflinePlayer player, String key, boolean allowPapi) {
+        final String playerName = getPlayerName(player);
+        try {
+            Variable variable = getVariableDefinition(key);
+            Optional<VariableResult> pre = checkOpPreconditions(player, variable, key, "GET", playerName, false, allowPapi);
+            if (pre.isPresent()) return pre.get();
+
+            // 直接从内存读取，不再使用多级缓存
+            String finalValue = getVariableFromMemoryOrDefault(player, variable, allowPapi);
+            if (!isFormulaVariable(variable)) {
+                if (allowPapi) {
+                    finalValue = resolveExpression(finalValue, player, variable, allowPapi);
+                } else {
+                    finalValue = resolveExpressionWithoutPapi(finalValue, player, variable);
                 }
-                // 确保最终返回值经过类型规范化
-                finalValue = normalizeValueByType(finalValue, variable.getValueType());
-                touchRecentPlayer(player);
-                return VariableResult.success(finalValue, "GET", key, playerName);
-            } catch (Exception e) {
-                logger.error("获取变量失败: " + key, e);
-                return VariableResult.fromException(e, "GET", key, playerName);
             }
-        }, asyncTaskManager.getExecutor());
+            // 确保最终返回值经过类型规范化
+            finalValue = normalizeValueByType(finalValue, variable.getValueType());
+            touchRecentPlayer(player);
+            return VariableResult.success(finalValue, "GET", key, playerName);
+        } catch (Exception e) {
+            logger.error("获取变量失败: " + key, e);
+            return VariableResult.fromException(e, "GET", key, playerName);
+        }
+    }
+
+    private String resolveExpressionWithoutPapi(String expression, OfflinePlayer player, Variable variable) {
+        return resolveExpression(expression, player, variable, false);
+    }
+
+    private String resolveInternalVariables(String text, OfflinePlayer player, boolean allowPapi) {
+        return resolveInternalVariablesInternal(text, player, allowPapi);
     }
 
     /**
@@ -328,31 +352,40 @@ public class RefactoredVariablesManager {
      */
     public CompletableFuture<VariableResult> setVariable(OfflinePlayer player, String key, String value) {
         final String playerName = getPlayerName(player);
-        return CompletableFuture.supplyAsync(() -> {
-            try {
-                Variable variable = getVariableDefinition(key);
-                Optional<VariableResult> pre = checkOpPreconditions(player, variable, key, "SET", playerName, true);
-                if (pre.isPresent()) return pre.get();
+        if (Bukkit.isPrimaryThread()) {
+            return CompletableFuture.completedFuture(setVariableSync(player, key, value, true));
+        }
+        return CompletableFuture.supplyAsync(
+                () -> setVariableSync(player, key, value, false),
+                asyncTaskManager.getExecutor()
+        );
+    }
 
-                String processed = processAndValidateValue(variable, value, player);
-                if (processed == null) {
-                    return VariableResult.failure("值格式错误或超出约束: " + value, "SET", key, playerName);
-                }
+    private VariableResult setVariableSync(OfflinePlayer player, String key, String value, boolean allowPapi) {
+        final String playerName = getPlayerName(player);
+        try {
+            Variable variable = getVariableDefinition(key);
+            Optional<VariableResult> pre = checkOpPreconditions(player, variable, key, "SET", playerName, true, allowPapi);
+            if (pre.isPresent()) return pre.get();
 
-                if (isFormulaVariable(variable)) {
-                    String increment = calculateIncrementForSet(variable, processed, player);
-                    updateMemoryAndInvalidate(player, variable, increment, PlayerVariableChangeEvent.ChangeReason.SET);
-                    logger.debug("设置公式变量: " + key + " 增量= " + increment + " 最终值= " + processed + " (异步持久化中)");
-                } else {
-                    updateMemoryAndInvalidate(player, variable, processed, PlayerVariableChangeEvent.ChangeReason.SET);
-                    logger.debug("设置变量: " + key + " = " + processed + " (异步持久化中)");
-                }
-                return VariableResult.success(processed, "SET", key, playerName);
-            } catch (Exception e) {
-                logger.error("设置变量失败: " + key, e);
-                return VariableResult.fromException(e, "SET", key, playerName);
+            String processed = processAndValidateValue(variable, value, player, allowPapi);
+            if (processed == null) {
+                return VariableResult.failure("值格式错误或超出约束: " + value, "SET", key, playerName);
             }
-        }, asyncTaskManager.getExecutor());
+
+            if (isFormulaVariable(variable)) {
+                String increment = calculateIncrementForSet(variable, processed, player, allowPapi);
+                updateMemoryAndInvalidate(player, variable, increment, PlayerVariableChangeEvent.ChangeReason.SET);
+                logger.debug("设置公式变量: " + key + " 增量= " + increment + " 最终值= " + processed + " (异步持久化中)");
+            } else {
+                updateMemoryAndInvalidate(player, variable, processed, PlayerVariableChangeEvent.ChangeReason.SET);
+                logger.debug("设置变量: " + key + " = " + processed + " (异步持久化中)");
+            }
+            return VariableResult.success(processed, "SET", key, playerName);
+        } catch (Exception e) {
+            logger.error("设置变量失败: " + key, e);
+            return VariableResult.fromException(e, "SET", key, playerName);
+        }
     }
 
     /**
@@ -360,47 +393,56 @@ public class RefactoredVariablesManager {
      */
     public CompletableFuture<VariableResult> addVariable(OfflinePlayer player, String key, String addValue) {
         final String playerName = getPlayerName(player);
-        return CompletableFuture.supplyAsync(() -> {
-            try {
-                Variable variable = getVariableDefinition(key);
-                Optional<VariableResult> pre = checkOpPreconditions(player, variable, key, "ADD", playerName, true);
-                if (pre.isPresent()) return pre.get();
+        if (Bukkit.isPrimaryThread()) {
+            return CompletableFuture.completedFuture(addVariableSync(player, key, addValue, true));
+        }
+        return CompletableFuture.supplyAsync(
+                () -> addVariableSync(player, key, addValue, false),
+                asyncTaskManager.getExecutor()
+        );
+    }
 
-                String currentValue = getVariableFromMemoryOrDefault(player, variable);
-                String newIncrement;
-                String displayValue;
+    private VariableResult addVariableSync(OfflinePlayer player, String key, String addValue, boolean allowPapi) {
+        final String playerName = getPlayerName(player);
+        try {
+            Variable variable = getVariableDefinition(key);
+            Optional<VariableResult> pre = checkOpPreconditions(player, variable, key, "ADD", playerName, true, allowPapi);
+            if (pre.isPresent()) return pre.get();
 
-                if (isFormulaVariable(variable)) {
-                    // 使用统一的公式加法计算
-                    FormulaOpResult r = computeFormulaAdd(variable, player, addValue);
-                    newIncrement = r.newIncrement;
-                    displayValue = r.displayValue;
-                } else {
-                    String resolvedAdd = resolveExpression(addValue, player, variable);
-                    newIncrement = calculateAddition(variable.getValueType(), currentValue, resolvedAdd);
-                    displayValue = newIncrement;
+            String currentValue = getVariableFromMemoryOrDefault(player, variable, allowPapi);
+            String newIncrement;
+            String displayValue;
+
+            if (isFormulaVariable(variable)) {
+                FormulaOpResult r = computeFormulaAdd(variable, player, addValue, allowPapi);
+                newIncrement = r.newIncrement;
+                displayValue = r.displayValue;
+            } else {
+                String resolvedAdd = resolveExpression(addValue, player, variable, allowPapi);
+                newIncrement = calculateAddition(variable.getValueType(), currentValue, resolvedAdd);
+                displayValue = newIncrement;
+            }
+
+            String rawCheckValue = isFormulaVariable(variable) ? displayValue : newIncrement;
+            String fitted = fitValueWithinLimitOrNull(variable, rawCheckValue, player, allowPapi);
+            if (fitted == null) {
+                return VariableResult.failure("加法结果超出限制", "ADD", key, playerName);
+            }
+            if (isFormulaVariable(variable)) {
+                if (!fitted.equals(rawCheckValue)) {
+                    newIncrement = calculateIncrementForSet(variable, fitted, player, allowPapi);
                 }
-
-                if (newIncrement == null) {
-                    return VariableResult.failure("加法操作失败或超出约束", "ADD", key, playerName);
-                }
-
-                // 统一进行限制适配：先校验，失败再尝试 ValueLimiter
-                String fitted = fitValueWithinLimitOrNull(variable, newIncrement, player);
-                if (fitted == null) {
-                    return VariableResult.failure("加法结果超出限制", "ADD", key, playerName);
-                }
+                displayValue = fitted;
+            } else {
                 newIncrement = fitted;
                 displayValue = fitted;
-
-                updateMemoryAndInvalidate(player, variable, newIncrement, PlayerVariableChangeEvent.ChangeReason.ADD);
-                logger.debug("加法操作: " + key + " = " + displayValue + " (当前: " + currentValue + " + 增加: " + addValue + ")");
-                return VariableResult.success(displayValue, "ADD", key, playerName);
-            } catch (Exception e) {
-                logger.error("增加变量失败: " + key, e);
-                return VariableResult.fromException(e, "ADD", key, playerName);
             }
-        }, asyncTaskManager.getExecutor());
+            updateMemoryAndInvalidate(player, variable, newIncrement, PlayerVariableChangeEvent.ChangeReason.ADD);
+            return VariableResult.success(displayValue, "ADD", key, playerName);
+        } catch (Exception e) {
+            logger.error("增加变量失败: " + key, e);
+            return VariableResult.fromException(e, "ADD", key, playerName);
+        }
     }
 
     /**
@@ -408,46 +450,56 @@ public class RefactoredVariablesManager {
      */
     public CompletableFuture<VariableResult> removeVariable(OfflinePlayer player, String key, String removeValue) {
         final String playerName = getPlayerName(player);
-        return CompletableFuture.supplyAsync(() -> {
-            try {
-                Variable variable = getVariableDefinition(key);
-                Optional<VariableResult> pre = checkOpPreconditions(player, variable, key, "REMOVE", playerName, true);
-                if (pre.isPresent()) return pre.get();
+        if (Bukkit.isPrimaryThread()) {
+            return CompletableFuture.completedFuture(removeVariableSync(player, key, removeValue, true));
+        }
+        return CompletableFuture.supplyAsync(
+                () -> removeVariableSync(player, key, removeValue, false),
+                asyncTaskManager.getExecutor()
+        );
+    }
 
-                String currentValue = getVariableFromMemoryOrDefault(player, variable);
-                String newIncrement;
-                String displayValue;
+    private VariableResult removeVariableSync(OfflinePlayer player, String key, String removeValue, boolean allowPapi) {
+        final String playerName = getPlayerName(player);
+        try {
+            Variable variable = getVariableDefinition(key);
+            Optional<VariableResult> pre = checkOpPreconditions(player, variable, key, "REMOVE", playerName, true, allowPapi);
+            if (pre.isPresent()) return pre.get();
 
-                if (isFormulaVariable(variable)) {
-                    // 使用统一的公式删除计算
-                    FormulaOpResult r = computeFormulaRemove(variable, player, removeValue);
-                    newIncrement = r.newIncrement;
-                    displayValue = r.displayValue;
-                } else {
-                    newIncrement = calculateRemoval(variable.getValueType(), currentValue, removeValue);
-                    displayValue = newIncrement;
+            String currentValue = getVariableFromMemoryOrDefault(player, variable, allowPapi);
+            String newIncrement;
+            String displayValue;
+
+            if (isFormulaVariable(variable)) {
+                FormulaOpResult r = computeFormulaRemove(variable, player, removeValue, allowPapi);
+                newIncrement = r.newIncrement;
+                displayValue = r.displayValue;
+            } else {
+                String resolvedRemove = resolveExpression(removeValue, player, variable, allowPapi);
+                newIncrement = calculateAddition(variable.getValueType(), currentValue, "-" + resolvedRemove);
+                displayValue = newIncrement;
+            }
+
+            String rawCheckValue = isFormulaVariable(variable) ? displayValue : newIncrement;
+            String fitted = fitValueWithinLimitOrNull(variable, rawCheckValue, player, allowPapi);
+            if (fitted == null) {
+                return VariableResult.failure("删除结果超出限制", "REMOVE", key, playerName);
+            }
+            if (isFormulaVariable(variable)) {
+                if (!fitted.equals(rawCheckValue)) {
+                    newIncrement = calculateIncrementForSet(variable, fitted, player, allowPapi);
                 }
-
-                if (newIncrement == null) {
-                    return VariableResult.failure("删除操作失败", "REMOVE", key, playerName);
-                }
-
-                // 统一进行限制适配：先校验，失败再尝试 ValueLimiter
-                String fitted = fitValueWithinLimitOrNull(variable, newIncrement, player);
-                if (fitted == null) {
-                    return VariableResult.failure("删除结果超出限制", "REMOVE", key, playerName);
-                }
+                displayValue = fitted;
+            } else {
                 newIncrement = fitted;
                 displayValue = fitted;
-
-                updateMemoryAndInvalidate(player, variable, newIncrement, PlayerVariableChangeEvent.ChangeReason.REMOVE);
-                logger.debug("删除操作: " + key + " = " + displayValue + " (删除: " + removeValue + ")");
-                return VariableResult.success(displayValue, "REMOVE", key, playerName);
-            } catch (Exception e) {
-                logger.error("移除变量失败: " + key, e);
-                return VariableResult.fromException(e, "REMOVE", key, playerName);
             }
-        }, asyncTaskManager.getExecutor());
+            updateMemoryAndInvalidate(player, variable, newIncrement, PlayerVariableChangeEvent.ChangeReason.REMOVE);
+            return VariableResult.success(displayValue, "REMOVE", key, playerName);
+        } catch (Exception e) {
+            logger.error("移除变量失败: " + key, e);
+            return VariableResult.fromException(e, "REMOVE", key, playerName);
+        }
     }
 
     /**
@@ -456,44 +508,51 @@ public class RefactoredVariablesManager {
     public CompletableFuture<VariableResult> resetVariable(OfflinePlayer player, String key) {
 
         final String playerName = getPlayerName(player);
-        return CompletableFuture.supplyAsync(() -> {
-            try {
-                Variable variable = getVariableDefinition(key);
-                Optional<VariableResult> pre = checkOpPreconditions(player, variable, key, "RESET", playerName, true);
-                if (pre.isPresent()) return pre.get();
+        if (Bukkit.isPrimaryThread()) {
+            return CompletableFuture.completedFuture(resetVariableSync(player, key, true));
+        }
+        return CompletableFuture.supplyAsync(
+                () -> resetVariableSync(player, key, false),
+                asyncTaskManager.getExecutor()
+        );
+    }
 
-                removeFromMemoryAndInvalidate(player, variable);
+    private VariableResult resetVariableSync(OfflinePlayer player, String key, boolean allowPapi) {
+        final String playerName = getPlayerName(player);
+        try {
+            Variable variable = getVariableDefinition(key);
+            Optional<VariableResult> pre = checkOpPreconditions(player, variable, key, "RESET", playerName, true, allowPapi);
+            if (pre.isPresent()) return pre.get();
 
-                // 清理依赖快照（如果是严格模式变量）
-                if (variable.isStrictInitialMode()) {
-                    dependencyResolver.clearSnapshot(player, key);
-                    logger.debug("清理变量依赖快照: " + key);
-                }
+            removeFromMemoryAndInvalidate(player, variable);
 
-                VariableValue resetVal = getMemoryValue(player, variable);
-                if (resetVal != null && variable.isStrictInitialMode()) {
-                    resetVal.resetStrictMode();
-                    logger.debug("重置变量严格模式状态: " + key);
-                }
-
-                String resetValue = getVariableFromMemoryOrDefault(player, variable);
-                if (isFormulaVariable(variable)) {
-                    logger.debug("重置公式变量: " + key + " = " + resetValue + " (清空增量)");
-                } else {
-                    logger.debug("重置变量: " + key + " = " + resetValue);
-                }
-                // 触发周期/重置后的动作
-                try {
-                    executeCycleActionsOnReset(variable, player);
-                } catch (Exception exAct) {
-                    logger.error("执行重置动作失败: " + key, exAct);
-                }
-                return VariableResult.success(resetValue, "RESET", key, playerName);
-            } catch (Exception e) {
-                logger.error("重置变量失败: " + key, e);
-                return VariableResult.fromException(e, "RESET", key, playerName);
+            if (variable.isStrictInitialMode()) {
+                dependencyResolver.clearSnapshot(player, key);
+                logger.debug("清理变量依赖快照: " + key);
             }
-        }, asyncTaskManager.getExecutor());
+
+            VariableValue resetVal = getMemoryValue(player, variable);
+            if (resetVal != null && variable.isStrictInitialMode()) {
+                resetVal.resetStrictMode();
+                logger.debug("重置变量严格模式状态: " + key);
+            }
+
+            String resetValue = getVariableFromMemoryOrDefault(player, variable, allowPapi);
+            if (isFormulaVariable(variable)) {
+                logger.debug("重置公式变量: " + key + " = " + resetValue + " (清空增量)");
+            } else {
+                logger.debug("重置变量: " + key + " = " + resetValue);
+            }
+            try {
+                executeCycleActionsOnReset(variable, player);
+            } catch (Exception exAct) {
+                logger.error("执行重置动作失败: " + key, exAct);
+            }
+            return VariableResult.success(resetValue, "RESET", key, playerName);
+        } catch (Exception e) {
+            logger.error("重置变量失败: " + key, e);
+            return VariableResult.fromException(e, "RESET", key, playerName);
+        }
     }
 
     /**
@@ -653,7 +712,7 @@ public class RefactoredVariablesManager {
                 if (storage == null) {
                     continue;
                 }
-                applyRegenIfNeeded(player, variable, storage, storage.getActualValue());
+                applyRegenIfNeeded(player, variable, storage, storage.getActualValue(), Bukkit.isPrimaryThread());
             }
         }
     }
@@ -675,7 +734,7 @@ public class RefactoredVariablesManager {
             if (storage == null) {
                 continue;
             }
-            applyRegenIfNeeded(contextPlayer, variable, storage, storage.getActualValue());
+            applyRegenIfNeeded(contextPlayer, variable, storage, storage.getActualValue(), Bukkit.isPrimaryThread());
         }
     }
 
@@ -753,13 +812,13 @@ public class RefactoredVariablesManager {
      * 统一封装：公式变量的加法计算
      * 返回新增量与用于展示的最终值
      */
-    private FormulaOpResult computeFormulaAdd(Variable variable, OfflinePlayer player, String addValue) {
-        String resolvedAdd = resolveExpression(addValue, player, variable);
+    private FormulaOpResult computeFormulaAdd(Variable variable, OfflinePlayer player, String addValue, boolean allowPapi) {
+        String resolvedAdd = resolveExpression(addValue, player, variable, allowPapi);
         VariableValue memVal = getMemoryValue(player, variable);
         String currInc = getCurrentIncrementForFormula(memVal);
         String newIncrement = calculateFormulaIncrement(variable.getValueType(), currInc, resolvedAdd, true);
-        EffectiveParams params = getEffectiveParams(variable, player);
-        String base = resolveExpression(params.getInitial(), player, variable);
+        EffectiveParams params = getEffectiveParams(variable, player, allowPapi);
+        String base = resolveExpression(params.getInitial(), player, variable, allowPapi);
         String displayValue = addFormulaIncrement(base, newIncrement, variable.getValueType());
         logger.debug("公式加法: key=" + variable.getKey()
                 + ", strict=" + (memVal != null && memVal.isStrictComputed())
@@ -775,14 +834,14 @@ public class RefactoredVariablesManager {
      * 统一封装：公式变量的删除/减法计算
      * 返回新增量与用于展示的最终值
      */
-    private FormulaOpResult computeFormulaRemove(Variable variable, OfflinePlayer player, String removeValue) {
+    private FormulaOpResult computeFormulaRemove(Variable variable, OfflinePlayer player, String removeValue, boolean allowPapi) {
         VariableValue memVal = getMemoryValue(player, variable);
         String currInc = getCurrentIncrementForFormula(memVal);
-        String resolvedRemove = resolveExpression(removeValue, player, variable);
+        String resolvedRemove = resolveExpression(removeValue, player, variable, allowPapi);
         String newIncrement = calculateFormulaIncrement(
                 variable.getValueType(), currInc, resolvedRemove, false);
-        EffectiveParams params = getEffectiveParams(variable, player);
-        String base = resolveExpression(params.getInitial(), player, variable);
+        EffectiveParams params = getEffectiveParams(variable, player, allowPapi);
+        String base = resolveExpression(params.getInitial(), player, variable, allowPapi);
         String displayValue = addFormulaIncrement(base, newIncrement, variable.getValueType());
         logger.debug("公式删除: key=" + variable.getKey()
                 + ", strict=" + (memVal != null && memVal.isStrictComputed())
@@ -876,7 +935,7 @@ public class RefactoredVariablesManager {
      * 1) 变量是否存在 2)（可选）是否可写
      */
     private Optional<VariableResult> checkOpPreconditions(
-            OfflinePlayer player, Variable variable, String key, String op, String playerName, boolean requireWritable) {
+            OfflinePlayer player, Variable variable, String key, String op, String playerName, boolean requireWritable, boolean allowPapi) {
         if (variable == null) {
             return Optional.of(VariableResult.failure("变量不存在: " + key, op, key, playerName));
         }
@@ -885,7 +944,7 @@ public class RefactoredVariablesManager {
         }
         // 条件门控：所有操作在继续前判定
         try {
-            if (variable.hasConditions() && !evaluateConditions(player, variable)) {
+            if (variable.hasConditions() && !evaluateConditions(player, variable, allowPapi)) {
                 logger.debug("变量门控未通过: op=" + op + ", key=" + key + ", player=" + playerName);
                 return Optional.of(VariableResult.failure("变量不满足访问条件: " + key, op, key, playerName));
             }
@@ -898,6 +957,10 @@ public class RefactoredVariablesManager {
 
     /** 评估变量的门控条件：全部为 true 才通过。解析错误按 false 处理 */
     private boolean evaluateConditions(OfflinePlayer player, Variable variable) {
+        return evaluateConditions(player, variable, true);
+    }
+
+    private boolean evaluateConditions(OfflinePlayer player, Variable variable, boolean allowPapi) {
         List<String> conds = variable.getConditions();
         if (conds == null || conds.isEmpty()) return true;
         Set<String> stack = gatingEvaluatingStack.get();
@@ -912,10 +975,10 @@ public class RefactoredVariablesManager {
         for (String raw : conds) {
             idx++;
             if (isBlank(raw)) {
-                logger.debug("变量条件为空，视为不通过: " + variable.getKey());
-                return false;
+                logger.debug("变量条件为空，忽略: " + variable.getKey());
+                continue;
             }
-            String resolved = resolveInternalVariables(raw, player);
+            String resolved = resolveInternalVariablesInternal(raw, player, allowPapi);
             if (!isConditionLengthValid(resolved, variable)) {
                 logger.debug("变量条件长度超限，视为不通过: key=" + variable.getKey());
                 return false;
@@ -923,7 +986,12 @@ public class RefactoredVariablesManager {
 
             boolean pass;
             try {
-                pass = conditionEvaluator.parse(toOnlinePlayer(player), resolved);
+                if (!allowPapi && resolved.contains("%")) {
+                    logger.debug("异步操作跳过含 PAPI 的条件评估: " + variable.getKey());
+                    pass = false;
+                } else {
+                    pass = conditionEvaluator.parse(allowPapi ? toOnlinePlayer(player) : null, resolved);
+                }
             } catch (Exception e) {
                 logger.debug("变量条件解析异常: key=" + variable.getKey() + ", 条件#" + idx + " => 异常: " + e.getMessage());
                 return false;
@@ -949,20 +1017,27 @@ public class RefactoredVariablesManager {
      * @return 是否全部通过
      */
     private boolean evaluateConditionsList(OfflinePlayer player, List<String> conditions) {
+        return evaluateConditionsList(player, conditions, Bukkit.isPrimaryThread());
+    }
+
+    private boolean evaluateConditionsList(OfflinePlayer player, List<String> conditions, boolean allowPapi) {
         if (conditions == null || conditions.isEmpty()) {
             return true;
         }
         Player onlinePlayer = toOnlinePlayer(player);
         for (String cond : conditions) {
             if (cond == null || cond.trim().isEmpty()) {
-                return false;
+                continue;
             }
-            String resolved = resolveInternalVariables(cond, player);
+            String resolved = resolveInternalVariablesInternal(cond, player, allowPapi);
             if (!isConditionLengthValid(resolved, null)) {
                 return false;
             }
             try {
-                if (!conditionEvaluator.parse(onlinePlayer, resolved)) {
+                if (!allowPapi && resolved.contains("%")) {
+                    return false;
+                }
+                if (!conditionEvaluator.parse(allowPapi ? onlinePlayer : null, resolved)) {
                     return false;
                 }
             } catch (Exception e) {
@@ -1039,90 +1114,104 @@ public class RefactoredVariablesManager {
 
     /** 从内存获取变量值或返回默认/初始值（含严格模式与公式处理） */
     private String getVariableFromMemoryOrDefault(OfflinePlayer player, Variable variable) {
-        // 内部访问也进行门控，但失败时返回空串避免连锁失败
+        return getVariableFromMemoryOrDefault(player, variable, true);
+    }
+
+        private String getVariableFromMemoryOrDefault(OfflinePlayer player, Variable variable, boolean allowPapi) {
+        String varKey = variable.getKey();
+        Set<String> stack = valueResolvingStack.get();
+        if (stack.contains(varKey)) {
+            logger.warn("检测到变量值循环引用: " + varKey);
+            return getDefaultValueByType(variable.getValueType());
+        }
+        stack.add(varKey);
+
         try {
-        if (variable.hasConditions()) {
-            if (!evaluateConditions(player, variable)) {
-                logger.debug("内部访问门控未通过: " + variable.getKey());
+            // 内部访问也进行门控，但失败时返回空串避免连锁失败
+            try {
+                if (variable.hasConditions()) {
+                    if (!evaluateConditions(player, variable, allowPapi)) {
+                        logger.debug("内部访问门控未通过: " + variable.getKey());
+                        return "";
+                    }
+                }
+            } catch (Exception e) {
+                logger.debug("内部访问门控评估异常，返回空串: " + variable.getKey());
                 return "";
             }
-        }
-        } catch (Exception e) {
-            logger.debug("内部访问门控评估异常，返回空串: " + variable.getKey());
-            return "";
-        }
 
-        EffectiveParams params = getEffectiveParams(variable, player);
-        VariableValue val = getMemoryValue(player, variable);
-        String init = params.getInitial();
-        boolean isFormula = init != null && !init.trim().isEmpty()
-                && (PLACEHOLDER_PATTERN.matcher(init).find()
-                || INTERNAL_VAR_PATTERN.matcher(init).find()
-                || init.matches(".*[+\\-*/()^].*"));
+            EffectiveParams params = getEffectiveParams(variable, player, allowPapi);
+            VariableValue val = getMemoryValue(player, variable);
+            String init = params.getInitial();
+            boolean isFormula = isFormulaVariable(variable);
 
-        // 严格初始值模式
-        if (variable.isStrictInitialMode() && !isBlank(init)) {
-            boolean hasCycle = !isBlank(variable.getCycle());
+            // 严格初始值模式
+            if (variable.isStrictInitialMode() && !isBlank(init)) {
+                boolean hasCycle = !isBlank(variable.getCycle());
 
-            if (val != null) {
-                // 已存在
-                if (val.isStrictComputed()) {
-                    String currentValue = val.getActualValue();
-                    logger.debug("使用已计算的严格模式值" + (hasCycle ? "(有cycle)" : "(无cycle)") + ": " + variable.getKey() + " = " + currentValue);
-                    return finalizeValueWithRegen(player, variable, val, currentValue);
-                } else {
-                    // 首次严格计算
-                    String calculatedValue = calculateStrictInitialValue(variable, player, init);
-                    String finalValue = calculatedValue;
+                if (val != null) {
+                    // 已存在
+                    if (val.isStrictComputed()) {
+                        String currentValue = val.getActualValue();
+                        logger.debug("使用已计算的严格模式值" + (hasCycle ? "(有cycle)" : "(无cycle)") + ": " + variable.getKey() + " = " + currentValue);
+                        return finalizeValueWithRegen(player, variable, val, currentValue, allowPapi);
+                    } else {
+                        // 首次严格计算
+                        String calculatedValue = calculateStrictInitialValue(variable, player, init, allowPapi);
+                        String finalValue = calculatedValue;
 
-                    // 公式变量叠加当前增量
-                    if (isFormula) {
-                        String currentVal = val.getActualValue();
-                        String defaultVal = getDefaultValueByType(variable.getValueType());
-                        try {
-                            double current = Double.parseDouble(currentVal);
-                            double defaultV = Double.parseDouble(defaultVal);
-                            double calculated = Double.parseDouble(calculatedValue);
-                            double increment = current - defaultV;
-                            if (variable.getValueType() == ValueType.INT) {
-                                int result = (int) Math.round(calculated + increment);
-                                finalValue = String.valueOf(result);
-                            } else {
-                                finalValue = String.valueOf(calculated + increment);
+                        // 公式变量叠加当前增量
+                        if (isFormula) {
+                            String currentVal = val.getActualValue();
+                            String defaultVal = getDefaultValueByType(variable.getValueType());
+                            try {
+                                double current = Double.parseDouble(currentVal);
+                                double defaultV = Double.parseDouble(defaultVal);
+                                double calculated = Double.parseDouble(calculatedValue);
+                                double increment = current - defaultV;
+                                if (variable.getValueType() == ValueType.INT) {
+                                    int result = (int) Math.round(calculated + increment);
+                                    finalValue = String.valueOf(result);
+                                } else {
+                                    finalValue = String.valueOf(calculated + increment);
+                                }
+                                logger.debug("严格模式公式变量增量计算: " + calculatedValue + " + " + increment + " = " + finalValue);
+                            } catch (NumberFormatException ignored) {
+                                finalValue = calculatedValue;
                             }
-                            logger.debug("严格模式公式变量增量计算: " + calculatedValue + " + " + increment + " = " + finalValue);
-                        } catch (NumberFormatException ignored) {
-                            finalValue = calculatedValue;
                         }
+
+                        // 标记完成严格计算
+                        val.setStrictValue(finalValue);
+                        logger.info("完成严格模式初始值计算" + (hasCycle ? "(有cycle)" : "(无cycle)") + ": " + variable.getKey() + " = " + finalValue);
+                        return finalizeValueWithRegen(player, variable, val, finalValue, allowPapi);
                     }
-
-                    // 标记完成严格计算
-                    val.setStrictValue(finalValue);
-                    logger.info("完成严格模式初始值计算" + (hasCycle ? "(有cycle)" : "(无cycle)") + ": " + variable.getKey() + " = " + finalValue);
-                    return finalizeValueWithRegen(player, variable, val, finalValue);
+                } else {
+                    // 首次创建
+                    String calculatedValue = calculateStrictInitialValue(variable, player, init, allowPapi);
+                    updateMemoryAndInvalidate(player, variable, "STRICT:" + calculatedValue + ":" + System.currentTimeMillis());
+                    logger.info("首次创建严格模式变量" + (hasCycle ? "(有cycle)" : "(无cycle)") + ": " + variable.getKey() + " = " + calculatedValue);
+                    return finalizeValueWithRegen(player, variable, val, calculatedValue, allowPapi);
                 }
-            } else {
-                // 首次创建
-                String calculatedValue = calculateStrictInitialValue(variable, player, init);
-                updateMemoryAndInvalidate(player, variable, "STRICT:" + calculatedValue + ":" + System.currentTimeMillis());
-                logger.info("首次创建严格模式变量" + (hasCycle ? "(有cycle)" : "(无cycle)") + ": " + variable.getKey() + " = " + calculatedValue);
-                return finalizeValueWithRegen(player, variable, val, calculatedValue);
             }
-        }
 
-        // 默认（非严格）行为
-        if (isFormula && !isBlank(init)) {
-            String base = resolveExpression(init, player, variable);
-            String res = (val != null) ? addFormulaIncrement(base, val.getActualValue(), variable.getValueType()) : base;
-            return finalizeValueWithRegen(player, variable, val, res);
+            // 默认（非严格）行为
+            if (isFormula && !isBlank(init)) {
+                String base = resolveExpression(init, player, variable, allowPapi);
+                String res = (val != null) ? addFormulaIncrement(base, val.getActualValue(), variable.getValueType()) : base;
+                return finalizeValueWithRegen(player, variable, val, res, allowPapi);
+            }
+            if (val != null) {
+                return finalizeValueWithRegen(player, variable, val, val.getActualValue(), allowPapi);
+            }
+            if (!isBlank(init)) {
+                String resolvedInit = resolveExpression(init, player, variable, allowPapi);
+                return finalizeValueWithRegen(player, variable, val, resolvedInit, allowPapi);
+            }
+            return finalizeValueWithRegen(player, variable, val, getDefaultValueByType(variable.getValueType()), allowPapi);
+        } finally {
+            stack.remove(varKey);
         }
-        if (val != null) {
-            return finalizeValueWithRegen(player, variable, val, val.getActualValue());
-        }
-        if (!isBlank(init)) {
-            return finalizeValueWithRegen(player, variable, val, resolveExpression(init, player, variable));
-        }
-        return finalizeValueWithRegen(player, variable, val, getDefaultValueByType(variable.getValueType()));
     }
 
     /** 设置变量到内存并按 persistable 配置处理脏标记与缓存失效（默认 OTHER 原因） */
@@ -1214,17 +1303,21 @@ public class RefactoredVariablesManager {
 
     /** 统一出口：在返回前应用渐进恢复 */
     private String finalizeValueWithRegen(OfflinePlayer player, Variable variable, VariableValue storage, String value) {
-        return applyRegenIfNeeded(player, variable, storage, value);
+        return finalizeValueWithRegen(player, variable, storage, value, true);
+    }
+
+    private String finalizeValueWithRegen(OfflinePlayer player, Variable variable, VariableValue storage, String value, boolean allowPapi) {
+        return applyRegenIfNeeded(player, variable, storage, value, allowPapi);
     }
 
     /**
      * 数值渐进恢复：仅对 INT/DOUBLE、生效 regen 规则的变量执行
      */
-    private String applyRegenIfNeeded(OfflinePlayer player, Variable variable, VariableValue storage, String currentValue) {
+    private String applyRegenIfNeeded(OfflinePlayer player, Variable variable, VariableValue storage, String currentValue, boolean allowPapi) {
         if (variable == null || storage == null) {
             return currentValue;
         }
-        EffectiveParams params = getEffectiveParams(variable, player);
+        EffectiveParams params = getEffectiveParams(variable, player, allowPapi);
         if (!params.hasRegenRule()) {
             return currentValue;
         }
@@ -1232,49 +1325,116 @@ public class RefactoredVariablesManager {
         if (vt != ValueType.INT && vt != ValueType.DOUBLE) {
             return currentValue;
         }
-        Double current = parseDoubleSafe(currentValue);
-        if (current == null) {
+        Double maxVal = resolveMax(player, variable, allowPapi);
+        Double minVal = resolveMin(player, variable, allowPapi);
+        Limitations lim = params.getLimitations();
+        String maxRaw = params.getMax();
+        String minRaw = params.getMin();
+        if (maxRaw == null && lim != null) {
+            maxRaw = lim.getMaxValue();
+        }
+        if (minRaw == null && lim != null) {
+            minRaw = lim.getMinValue();
+        }
+        if ((maxRaw != null && maxVal == null) || (minRaw != null && minVal == null)) {
             return currentValue;
         }
-        Double maxVal = resolveMax(player, variable);
-        if (maxVal != null && current >= maxVal - 1e-9) {
-            return currentValue;
-        }
-        long last = storage.getLastModified();
         long now = System.currentTimeMillis();
-        double gain = params.getRegenRule().calculateGain(last, now, resolveRegenZone());
-        if (gain <= 0) {
-            return currentValue;
+        RegenRule rule = params.getRegenRule();
+
+        if (variable.isPlayerScoped() && player != null) {
+            String[] resultHolder = new String[1];
+            memoryStorage.updatePlayerVariableAtomic(player.getUniqueId(), variable.getKey(), old -> {
+                if (old == null) {
+                    resultHolder[0] = currentValue;
+                    return old;
+                }
+                String baseValue = old.getActualValue();
+                Double current = parseDoubleSafe(baseValue);
+                if (current == null) {
+                    resultHolder[0] = baseValue;
+                    return old;
+                }
+                if (maxVal != null && current >= maxVal - 1e-9) {
+                    resultHolder[0] = baseValue;
+                    return old;
+                }
+                double gain = rule.calculateGain(old.getLastModified(), now, resolveRegenZone());
+                if (gain <= 0) {
+                    resultHolder[0] = baseValue;
+                    return old;
+                }
+                double next = current + gain;
+                if (maxVal != null) {
+                    next = Math.min(maxVal, next);
+                }
+                if (minVal != null) {
+                    next = Math.max(minVal, next);
+                }
+                String formatted = formatNumber(vt, next);
+                old.setValueAndMarkDirty(formatted);
+                resultHolder[0] = formatted;
+                return old;
+            });
+            return resultHolder[0] != null ? resultHolder[0] : currentValue;
         }
-        double next = current + gain;
-        Double minVal = resolveMin(player, variable);
-        if (maxVal != null) {
-            next = Math.min(maxVal, next);
+
+        if (variable.isGlobal()) {
+            String[] resultHolder = new String[1];
+            memoryStorage.updateServerVariableAtomic(variable.getKey(), old -> {
+                if (old == null) {
+                    resultHolder[0] = currentValue;
+                    return old;
+                }
+                String baseValue = old.getActualValue();
+                Double current = parseDoubleSafe(baseValue);
+                if (current == null) {
+                    resultHolder[0] = baseValue;
+                    return old;
+                }
+                if (maxVal != null && current >= maxVal - 1e-9) {
+                    resultHolder[0] = baseValue;
+                    return old;
+                }
+                double gain = rule.calculateGain(old.getLastModified(), now, resolveRegenZone());
+                if (gain <= 0) {
+                    resultHolder[0] = baseValue;
+                    return old;
+                }
+                double next = current + gain;
+                if (maxVal != null) {
+                    next = Math.min(maxVal, next);
+                }
+                if (minVal != null) {
+                    next = Math.max(minVal, next);
+                }
+                String formatted = formatNumber(vt, next);
+                old.setValueAndMarkDirty(formatted);
+                resultHolder[0] = formatted;
+                return old;
+            });
+            return resultHolder[0] != null ? resultHolder[0] : currentValue;
         }
-        if (minVal != null) {
-            next = Math.max(minVal, next);
-        }
-        String formatted = formatNumber(vt, next);
-        updateMemoryAndInvalidate(player, variable, formatted, PlayerVariableChangeEvent.ChangeReason.REGEN);
-        return formatted;
+
+        return currentValue;
     }
 
-    private Double resolveMax(OfflinePlayer player, Variable variable) {
-        EffectiveParams params = getEffectiveParams(variable, player);
-        Double v = parseDoubleWithPlaceholders(params.getMax(), player, variable);
+    private Double resolveMax(OfflinePlayer player, Variable variable, boolean allowPapi) {
+        EffectiveParams params = getEffectiveParams(variable, player, allowPapi);
+        Double v = parseDoubleWithPlaceholders(params.getMax(), player, variable, allowPapi);
         if (v != null) return v;
         if (variable.getLimitations() != null) {
-            v = parseDoubleWithPlaceholders(params.getLimitations().getMaxValue(), player, variable);
+            v = parseDoubleWithPlaceholders(params.getLimitations().getMaxValue(), player, variable, allowPapi);
         }
         return v;
     }
 
-    private Double resolveMin(OfflinePlayer player, Variable variable) {
-        EffectiveParams params = getEffectiveParams(variable, player);
-        Double v = parseDoubleWithPlaceholders(params.getMin(), player, variable);
+    private Double resolveMin(OfflinePlayer player, Variable variable, boolean allowPapi) {
+        EffectiveParams params = getEffectiveParams(variable, player, allowPapi);
+        Double v = parseDoubleWithPlaceholders(params.getMin(), player, variable, allowPapi);
         if (v != null) return v;
         if (variable.getLimitations() != null) {
-            v = parseDoubleWithPlaceholders(params.getLimitations().getMinValue(), player, variable);
+            v = parseDoubleWithPlaceholders(params.getLimitations().getMinValue(), player, variable, allowPapi);
         }
         return v;
     }
@@ -1289,12 +1449,12 @@ public class RefactoredVariablesManager {
     }
 
     /** 支持占位符/表达式的数值解析（用于 min/max 动态化） */
-    private Double parseDoubleWithPlaceholders(String raw, OfflinePlayer player, Variable variable) {
+    private Double parseDoubleWithPlaceholders(String raw, OfflinePlayer player, Variable variable, boolean allowPapi) {
         if (isBlank(raw)) return null;
         String candidate = raw;
         // 仅在存在占位符或运算符时才解析，避免无谓的 resolveExpression
         if (raw.contains("%") || raw.contains("${") || raw.matches(".*[+\\-*/()^].*")) {
-            candidate = resolveExpression(raw, player, variable);
+            candidate = resolveExpression(raw, player, variable, allowPapi);
         }
         return parseDoubleSafe(candidate);
     }
@@ -1318,7 +1478,7 @@ public class RefactoredVariablesManager {
         if (target == null) {
             return "0";
         }
-        EffectiveParams params = getEffectiveParams(target, player);
+        EffectiveParams params = getEffectiveParams(target, player, Bukkit.isPrimaryThread());
         if (!params.hasRegenRule()) {
             return "0";
         }
@@ -1331,7 +1491,7 @@ public class RefactoredVariablesManager {
             return "0";
         }
         Double current = parseDoubleSafe(storage.getActualValue());
-        Double maxVal = resolveMax(player, target);
+        Double maxVal = resolveMax(player, target, Bukkit.isPrimaryThread());
         if (current != null && maxVal != null && current >= maxVal - 1e-9) {
             return "0";
         }
@@ -1377,13 +1537,21 @@ public class RefactoredVariablesManager {
      * @return 合并后的有效参数
      */
     public EffectiveParams getEffectiveParams(Variable variable, OfflinePlayer player) {
-        return groupResolver.resolve(variable, player);
+        return groupResolver.resolve(variable, player, true);
+    }
+
+    public EffectiveParams getEffectiveParams(Variable variable, OfflinePlayer player, boolean allowPapi) {
+        return groupResolver.resolve(variable, player, allowPapi);
     }
 
     /**
      * 解析表达式、占位符及内部变量（支持 Variable 的安全限制配置）
      */
     private String resolveExpression(String expression, OfflinePlayer player, Variable variable) {
+        return resolveExpression(expression, player, variable, true);
+    }
+
+    private String resolveExpression(String expression, OfflinePlayer player, Variable variable, boolean allowPapi) {
         if (isBlank(expression)
                 || (!PLACEHOLDER_PATTERN.matcher(expression).find()
                 && !INTERNAL_VAR_PATTERN.matcher(expression).find()
@@ -1427,10 +1595,10 @@ public class RefactoredVariablesManager {
             String prev = result;
 
             // 先解析内部变量 ${var}
-            result = resolveInternalVariables(result, player);
+            result = resolveInternalVariablesInternal(result, player, allowPapi);
 
             // 再解析 PAPI（仅在线玩家上下文）
-            if (isOnline(player)) {
+            if (allowPapi && isOnline(player)) {
                 result = placeholderUtil.parse(player.getPlayer(), result);
             }
 
@@ -1533,17 +1701,52 @@ public class RefactoredVariablesManager {
      * - 若修正后仍不通过，返回 null。
      */
     private String fitValueWithinLimitOrNull(Variable variable, String candidate, OfflinePlayer player) {
-        if (validateValue(variable, candidate, player)) return candidate;
-        EffectiveParams params = getEffectiveParams(variable, player);
-        String adjusted = ValueLimiter.apply(params, candidate);
-        if (adjusted != null && validateValue(variable, adjusted, player)) {
-            return adjusted;
+        return fitValueWithinLimitOrNull(variable, candidate, player, true);
+    }
+
+    private String fitValueWithinLimitOrNull(Variable variable, String candidate, OfflinePlayer player, boolean allowPapi) {
+        try {
+            Double minVal = resolveMin(player, variable, allowPapi);
+            Double maxVal = resolveMax(player, variable, allowPapi);
+            ValueType type = variable.getValueType();
+            if (type == null) type = inferTypeFromValue(candidate);
+
+            String adjusted = null;
+            if ((type == ValueType.INT || type == ValueType.DOUBLE) && (minVal != null || maxVal != null)) {
+                double val = parseDoubleOrDefault(candidate);
+                if (minVal != null) val = Math.max(minVal, val);
+                if (maxVal != null) val = Math.min(maxVal, val);
+                adjusted = (type == ValueType.INT) ? String.valueOf((int) Math.round(val)) : String.valueOf(val);
+            } else if (type == ValueType.STRING && maxVal != null) {
+                int maxLen = Math.max(0, (int) Math.round(maxVal));
+                adjusted = candidate != null && candidate.length() > maxLen
+                        ? candidate.substring(0, maxLen)
+                        : candidate;
+            }
+
+            if (adjusted != null && validateValue(variable, adjusted, player, allowPapi)) {
+                return adjusted;
+            }
+
+            if (validateValue(variable, candidate, player, allowPapi)) return candidate;
+
+            EffectiveParams params = getEffectiveParams(variable, player, allowPapi);
+            adjusted = ValueLimiter.apply(params, candidate);
+            if (adjusted != null && validateValue(variable, adjusted, player, allowPapi)) {
+                return adjusted;
+            }
+        } catch (Exception e) {
+            logger.debug("动态边界截断异常: " + e.getMessage());
         }
         return null;
     }
 
     /** 解析内部变量占位符 ${var}，支持 regen_next:<key> 返回下次恢复剩余秒数 */
     private String resolveInternalVariables(String text, OfflinePlayer player) {
+        return resolveInternalVariablesInternal(text, player, true);
+    }
+
+    private String resolveInternalVariablesInternal(String text, OfflinePlayer player, boolean allowPapi) {
         if (text == null || !INTERNAL_VAR_PATTERN.matcher(text).find()) {
             return text;
         }
@@ -1561,7 +1764,7 @@ public class RefactoredVariablesManager {
                     sb.append(val != null ? val : match);
                 } else {
                     Variable def = getVariableDefinition(varKey);
-                    String val = def != null ? getVariableFromMemoryOrDefault(player, def) : null;
+                    String val = def != null ? getVariableFromMemoryOrDefault(player, def, allowPapi) : null;
                     sb.append(val != null ? val : match);
                 }
             } catch (Exception e) {
@@ -1575,10 +1778,10 @@ public class RefactoredVariablesManager {
     }
 
     /** 处理并验证值，返回合法值或 null */
-    private String processAndValidateValue(Variable variable, String value, OfflinePlayer player) {
+    private String processAndValidateValue(Variable variable, String value, OfflinePlayer player, boolean allowPapi) {
         if (value == null) return null;
-        String resolved = resolveExpression(value, player, variable);
-        return validateValue(variable, resolved, player) ? resolved : null;
+        String resolved = resolveExpression(value, player, variable, allowPapi);
+        return validateValue(variable, resolved, player, allowPapi) ? resolved : null;
     }
 
     /**
@@ -1587,7 +1790,7 @@ public class RefactoredVariablesManager {
      * @param value    已解析的值
      * @return true 若验证通过
      */
-    private boolean validateValue(Variable variable, String value, OfflinePlayer player) {
+    private boolean validateValue(Variable variable, String value, OfflinePlayer player, boolean allowPapi) {
         ValueType type = variable.getValueType();
         if (type == null) type = inferTypeFromValue(value);
 
@@ -1610,42 +1813,40 @@ public class RefactoredVariablesManager {
             }
         }
 
-        EffectiveParams params = getEffectiveParams(variable, player);
+        EffectiveParams params = getEffectiveParams(variable, player, allowPapi);
         Limitations lim = params.getLimitations();
-        String minStr = params.getMin();
-        String maxStr = params.getMax();
-        if (minStr == null && lim != null) {
-            minStr = lim.getMinValue();
+        Double minVal = resolveMin(player, variable, allowPapi);
+        Double maxVal = resolveMax(player, variable, allowPapi);
+        String minRaw = params.getMin();
+        String maxRaw = params.getMax();
+        if (minRaw == null && lim != null) {
+            minRaw = lim.getMinValue();
         }
-        if (maxStr == null && lim != null) {
-            maxStr = lim.getMaxValue();
+        if (maxRaw == null && lim != null) {
+            maxRaw = lim.getMaxValue();
         }
-        boolean hasValueConstraints = minStr != null || maxStr != null;
+        if ((minRaw != null && minVal == null) || (maxRaw != null && maxVal == null)) {
+            logger.warn("变量 " + variable.getKey() + " 的动态约束无法解析，拒绝操作");
+            return false;
+        }
 
-        if (hasValueConstraints) {
+        if (minVal != null || maxVal != null) {
             switch (type) {
                 case INT, DOUBLE -> {
-                    try {
-                        double num = (value != null) ? Double.parseDouble(value) : 0D;
-                        if (!isNumberInRange(num, minStr, maxStr)) {
-                            logger.warn("变量 " + variable.getKey() + " 的值 " + num
-                                    + " 超出范围 [" + minStr + ", " + maxStr + "]");
-                            return false;
-                        }
-                    } catch (NumberFormatException ignored) { }
+                    double num = parseDoubleOrDefault(value);
+                    if ((minVal != null && num < minVal) || (maxVal != null && num > maxVal)) {
+                        logger.warn("变量 " + variable.getKey() + " 的值 " + num
+                                + " 超出范围 [" + minVal + ", " + maxVal + "]");
+                        return false;
+                    }
                 }
                 case STRING, LIST -> {
-                    int min = 0, max = Integer.MAX_VALUE;
-                    try {
-                        if (minStr != null) min = Integer.parseInt(minStr);
-                        if (maxStr != null) max = Integer.parseInt(maxStr);
-                        if (value != null && (value.length() < min || value.length() > max)) {
-                            logger.warn("变量 " + variable.getKey() + " 的长度 "
-                                    + value.length() + " 超出范围 [" + min + ", " + max + "]");
-                            return false;
-                        }
-                    } catch (NumberFormatException ignored) {
-                        logger.debug("字符串类型长度限制解析异常: " + variable.getKey());
+                    int min = minVal != null ? (int) Math.round(minVal) : 0;
+                    int max = maxVal != null ? (int) Math.round(maxVal) : Integer.MAX_VALUE;
+                    if (value != null && (value.length() < min || value.length() > max)) {
+                        logger.warn("变量 " + variable.getKey() + " 的长度 "
+                                + value.length() + " 超出范围 [" + min + ", " + max + "]");
+                        return false;
                     }
                 }
             }
@@ -1754,9 +1955,9 @@ public class RefactoredVariablesManager {
     }
 
     /** 为公式变量计算设置值相对于基础公式的增量 */
-    private String calculateIncrementForSet(Variable variable, String setValue, OfflinePlayer player) {
-        EffectiveParams params = getEffectiveParams(variable, player);
-        String base = resolveExpression(params.getInitial(), player, variable);
+    private String calculateIncrementForSet(Variable variable, String setValue, OfflinePlayer player, boolean allowPapi) {
+        EffectiveParams params = getEffectiveParams(variable, player, allowPapi);
+        String base = resolveExpression(params.getInitial(), player, variable, allowPapi);
         ValueType type = variable.getValueType();
         if (type == null) type = inferTypeFromValue(base);
 
@@ -2062,14 +2263,14 @@ public class RefactoredVariablesManager {
      * @param initialExpression  初始值表达式
      * @return 计算结果
      */
-    private String calculateStrictInitialValue(Variable variable, OfflinePlayer player, String initialExpression) {
+    private String calculateStrictInitialValue(Variable variable, OfflinePlayer player, String initialExpression, boolean allowPapi) {
         try {
             // 如果变量需要依赖快照，使用快照机制
             if (variable.needsDependencySnapshot()) {
                 DependencySnapshot snapshot = dependencyResolver.resolveWithSnapshot(
                         variable, player, (p, key) -> {
                             Variable depVar = getVariableDefinition(key);
-                            return depVar != null ? getVariableFromMemoryOrDefault(p, depVar) : null;
+                            return depVar != null ? getVariableFromMemoryOrDefault(p, depVar, allowPapi) : null;
                         }
                 );
 
@@ -2080,10 +2281,10 @@ public class RefactoredVariablesManager {
 
                 // 对快照结果再进行一次通用解析，确保 PAPI 与数学表达式被最终计算
                 String snapped = snapshot.getCalculatedValue();
-                return resolveExpression(snapped, player, variable);
+                return resolveExpression(snapped, player, variable, allowPapi);
             } else {
                 // 不需要快照，直接解析表达式
-                return resolveExpression(initialExpression, player, variable);
+                return resolveExpression(initialExpression, player, variable, allowPapi);
             }
         } catch (Exception e) {
             logger.error("严格模式初始值计算失败，使用原始表达式: " + variable.getKey(), e);

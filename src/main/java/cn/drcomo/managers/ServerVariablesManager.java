@@ -107,6 +107,16 @@ public class ServerVariablesManager {
                     return result;
                 });
     }
+
+    public VariableResult getServerVariableNow(String key) {
+        Optional<VariableResult> validation = variablesManager.validateScope(key, ScopeType.GLOBAL);
+        if (validation.isPresent()) {
+            return validation.get();
+        }
+        OfflinePlayer playerForPlaceholders = getPlayerForPlaceholders();
+        VariableResult result = variablesManager.getVariableSync(playerForPlaceholders, key);
+        return result;
+    }
     
     /**
      * 设置服务器变量值

@@ -511,25 +511,24 @@ public class ServerVariablesAPI {
             return "变量不存在";
         }
         try {
-            CompletableFuture<VariableResult> future;
             if (var.isGlobal()) {
                 // 全局变量：通过 ServerVariablesManager 获取，以便内部选择在线玩家解析占位符
-                future = serverVariablesManager.getServerVariable(key)
-                        .toCompletableFuture();
+                VariableResult vr = serverVariablesManager.getServerVariableNow(key);
+                return vr.isSuccess() ? vr.getValue() : "0";
             } else if (var.isPlayerScoped()) {
                 if (player == null) {
                     logger.info("占位符 drcomovex_[var] 玩家变量 " + key + " 需要玩家参数");
                     return "需要玩家参数";
                 }
-                future = variablesManager.getVariable(player, key);
+                VariableResult vr = variablesManager.getVariableSync(player, key);
+                return vr.isSuccess() ? vr.getValue() : "0";
             } else {
-                future = variablesManager.getVariable(player, key);
+                VariableResult vr = variablesManager.getVariableSync(player, key);
+                return vr.isSuccess() ? vr.getValue() : "0";
             }
-            VariableResult vr = future.get(500, TimeUnit.MILLISECONDS);
-            return vr.isSuccess() ? vr.getValue() : "0";
         } catch (Exception e) {
             logger.error("占位符 drcomovex_[var] 获取变量 " + key + " 异常", e);
-            return (e instanceof java.util.concurrent.TimeoutException) ? "0" : "异常:" + e.getMessage();
+            return "0";
         }
     }
 
@@ -543,17 +542,16 @@ public class ServerVariablesAPI {
         Variable var = variablesManager.getVariableDefinition(key);
         if (var != null && var.isGlobal()) {
             try {
-                CompletableFuture<VariableResult> future;
                 if (player != null) {
-                    future = variablesManager.getVariable(player, key);
+                    VariableResult vr = variablesManager.getVariableSync(player, key);
+                    return vr.isSuccess() ? vr.getValue() : "0";
                 } else {
-                    future = serverVariablesManager.getServerVariable(key).toCompletableFuture();
+                    VariableResult vr = serverVariablesManager.getServerVariableNow(key);
+                    return vr.isSuccess() ? vr.getValue() : "0";
                 }
-                VariableResult vr = future.get(500, TimeUnit.MILLISECONDS);
-                return vr.isSuccess() ? vr.getValue() : "0";
             } catch (Exception e) {
                 logger.error("占位符 drcomovex_[global] 解析异常，参数: " + key, e);
-                return (e instanceof java.util.concurrent.TimeoutException) ? "0" : "异常:" + e.getMessage();
+                return "0";
             }
         }
         return "变量不存在";
@@ -569,12 +567,11 @@ public class ServerVariablesAPI {
         Variable var = variablesManager.getVariableDefinition(key);
         if (var != null && var.isPlayerScoped()) {
             try {
-                VariableResult vr = variablesManager.getVariable(player, key)
-                        .get(500, TimeUnit.MILLISECONDS);
+                VariableResult vr = variablesManager.getVariableSync(player, key);
                 return vr.isSuccess() ? vr.getValue() : "0";
             } catch (Exception e) {
                 logger.error("占位符 drcomovex_[player] 异常，参数: " + key, e);
-                return (e instanceof java.util.concurrent.TimeoutException) ? "0" : "异常:" + e.getMessage();
+                return "0";
             }
         } else if (var != null) {
             logger.info("占位符 drcomovex_[player] 变量 " + key + " 不是玩家类型");
