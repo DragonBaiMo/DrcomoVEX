@@ -542,6 +542,15 @@ public class BatchPersistenceManager {
             for (PersistenceTask t : tasks) {
                 PlayerVariableUpdateTask u = (PlayerVariableUpdateTask) t;
                 VariableValue v = u.getValue();
+
+                // 关键变量审计日志：持久化写库（INFO 级别）
+                if (isAuditKey(u.getVariableKey())) {
+                    logger.info("[VarAudit] action=DB_WRITE, key=" + u.getVariableKey()
+                            + ", uuid=" + u.getPlayerId()
+                            + ", value=" + v.getRawValue()
+                            + ", updated_at=" + v.getLastModified()
+                            + ", thread=" + Thread.currentThread().getName());
+                }
                 stmt.setString(1, u.getPlayerId().toString());
                 stmt.setString(2, u.getVariableKey());
                 stmt.setString(3, v.getRawValue()); // 使用原始值（包含 strict 编码）
@@ -552,6 +561,18 @@ public class BatchPersistenceManager {
             }
             stmt.executeBatch();
         }
+    }
+
+    /**
+     * 判断变量是否需要审计日志
+     */
+    private static final java.util.Set<String> AUDIT_KEYS = java.util.Set.of(
+            "rank", "player_energy", "hp", "ep"
+    );
+
+    private boolean isAuditKey(String key) {
+        if (key == null) return false;
+        return AUDIT_KEYS.contains(key.toLowerCase());
     }
 
     private void batchUpdateServerVariables(Connection conn, List<PersistenceTask> tasks) throws SQLException {

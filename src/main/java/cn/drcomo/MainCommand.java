@@ -278,6 +278,20 @@ public class MainCommand implements CommandExecutor, TabCompleter {
             return;
         }
         boolean allowOffline = hasFlag(args, 5, "--offline");
+        // rank 保护：禁止通过 add 传入负数以减少 rank（只允许 set）
+        if ("rank".equalsIgnoreCase(args[3])) {
+            try {
+                double delta = Double.parseDouble(args[4]);
+                if (delta < 0) {
+                    messagesManager.sendMessage(sender, "error.operation-failed",
+                            Map.of("reason", "rank 不允许通过 add/remove 减少，请使用 set"));
+                    return;
+                }
+            } catch (Exception ignored) {
+                // 交给后续逻辑处理数值错误提示
+            }
+        }
+
         handlePlayerSingleWrite(
                 sender, args,
                 "drcomovex.command.player.add",
@@ -315,6 +329,13 @@ public class MainCommand implements CommandExecutor, TabCompleter {
             return;
         }
         boolean allowOffline = hasFlag(args, 5, "--offline");
+        // rank 保护：禁止通过 remove 减少 rank（只允许 set）
+        if ("rank".equalsIgnoreCase(args[3])) {
+            messagesManager.sendMessage(sender, "error.operation-failed",
+                    Map.of("reason", "rank 不允许通过 add/remove 减少，请使用 set"));
+            return;
+        }
+
         handlePlayerSingleWrite(
                 sender, args,
                 "drcomovex.command.player.remove",
@@ -578,6 +599,29 @@ public class MainCommand implements CommandExecutor, TabCompleter {
         // 语法：/vex player <action> * <变量通配> [<值或增量>] [-n] [--limit N]
         String normalizedAction = normalizePlayerAction(action);
         String spec = args[3];
+
+        // rank 保护：禁止批量 remove rank；禁止批量 add rank 负数（只允许 set）
+        if ("rank".equalsIgnoreCase(spec) || "rank".equalsIgnoreCase(PlayerBulkHelper.extractGlob(spec))) {
+            if ("remove".equalsIgnoreCase(normalizedAction)) {
+                messagesManager.sendMessage(sender, "error.operation-failed",
+                        Map.of("reason", "rank 不允许通过 add/remove 减少，请使用 set"));
+                return;
+            }
+            if ("add".equalsIgnoreCase(normalizedAction)) {
+                try {
+                    if (args.length >= 5) {
+                        double delta = Double.parseDouble(args[4]);
+                        if (delta < 0) {
+                            messagesManager.sendMessage(sender, "error.operation-failed",
+                                    Map.of("reason", "rank 不允许通过 add/remove 减少，请使用 set"));
+                            return;
+                        }
+                    }
+                } catch (Exception ignored) {
+                    // 交给后续逻辑处理
+                }
+            }
+        }
 
         boolean requiresValue = !"reset".equalsIgnoreCase(normalizedAction);
         if (requiresValue && args.length < 5) {

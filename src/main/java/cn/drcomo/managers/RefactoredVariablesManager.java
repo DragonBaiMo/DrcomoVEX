@@ -409,6 +409,29 @@ public class RefactoredVariablesManager {
             Optional<VariableResult> pre = checkOpPreconditions(player, variable, key, "ADD", playerName, true, allowPapi);
             if (pre.isPresent()) return pre.get();
 
+            // rank 保护：只要通过 ADD 造成值减少（例如 add -1），就阻止并记录
+            if (player != null && variable != null && "rank".equalsIgnoreCase(variable.getKey())) {
+                String currentRaw = getVariableFromMemoryOrDefault(player, variable, allowPapi);
+                int current = parseIntOrDefault(resolveExpression(currentRaw, player, variable, allowPapi));
+                String resolvedAdd = resolveExpression(addValue, player, variable, allowPapi);
+                int delta = parseIntOrDefault(resolvedAdd);
+                int next = current + delta;
+                if (next < current) {
+                    cn.drcomo.util.RankProtectionLogger rpl = plugin.getRankProtectionLogger();
+                    if (rpl != null) {
+                        rpl.logBlockedOperation(
+                                "ADD",
+                                player,
+                                String.valueOf(current),
+                                String.valueOf(delta),
+                                "blocked decrease via ADD; only SET is allowed",
+                                cn.drcomo.util.RankProtectionLogger.getCallerSummary()
+                        );
+                    }
+                    return VariableResult.failure("rank 不允许通过 add/remove 减少，请使用 set", "ADD", key, playerName);
+                }
+            }
+
             String currentValue = getVariableFromMemoryOrDefault(player, variable, allowPapi);
             String newIncrement;
             String displayValue;
@@ -465,6 +488,23 @@ public class RefactoredVariablesManager {
             Variable variable = getVariableDefinition(key);
             Optional<VariableResult> pre = checkOpPreconditions(player, variable, key, "REMOVE", playerName, true, allowPapi);
             if (pre.isPresent()) return pre.get();
+
+            // rank 保护：禁止 REMOVE（只允许 set）
+            if (player != null && variable != null && "rank".equalsIgnoreCase(variable.getKey())) {
+                cn.drcomo.util.RankProtectionLogger rpl = plugin.getRankProtectionLogger();
+                if (rpl != null) {
+                    String resolvedRemove = resolveExpression(removeValue, player, variable, allowPapi);
+                    rpl.logBlockedOperation(
+                            "REMOVE",
+                            player,
+                            getVariableFromMemoryOrDefault(player, variable, allowPapi),
+                            resolvedRemove,
+                            "blocked remove for rank; use SET instead",
+                            cn.drcomo.util.RankProtectionLogger.getCallerSummary()
+                    );
+                }
+                return VariableResult.failure("rank 不允许通过 add/remove 减少，请使用 set", "REMOVE", key, playerName);
+            }
 
             String currentValue = getVariableFromMemoryOrDefault(player, variable, allowPapi);
             String newIncrement;
@@ -568,6 +608,8 @@ public class RefactoredVariablesManager {
                         // 清理玩家的依赖快照
                         dependencyResolver.clearPlayerSnapshots(player);
                         logger.debug("清理玩家依赖快照: " + player.getName());
+                        // 清理玩家的条件评估缓存
+                        clearConditionCache(player);
                     }
                 });
     }
@@ -633,7 +675,20 @@ public class RefactoredVariablesManager {
                     String pid = player.getUniqueId().toString();
                     return fetchPlayerTriple(pid, key).thenAccept(tri -> {
                         if (tri.value != null) {
+                            // 若该玩家该变量在内存中存在未落库的脏写入，则不允许 DB 覆盖，避免“离线改值后入服变回去”
+                            if (shouldSkipDbOverwrite(player.getUniqueId(), key, tri.updatedAt)) {
+                                return;
+                            }
                             String normalizedValue = normalizeValueByType(tri.value, var.getValueType());
+
+                            // 关键变量审计日志：显式从 DB 重载（INFO 级别）
+                            if (isAuditKey(key)) {
+                                VariableValue before = memoryStorage.getPlayerVariable(player.getUniqueId(), key);
+                                String beforeVal = before != null ? before.getActualValue() : null;
+                                logger.info(buildAuditLine(
+                                        "DB_RELOAD", player, key, beforeVal, normalizedValue,
+                                        "db.updated_at=" + tri.updatedAt));
+                            }
                             memoryStorage.loadPlayerVariable(
                                     player.getUniqueId(), key, normalizedValue, tri.updatedAt, tri.firstModifiedAt);
                             logger.debug("重载玩家变量成功: player=" + player.getName() + ", key=" + key);
@@ -689,6 +744,14 @@ public class RefactoredVariablesManager {
             tickRegenForGlobal(null);
             return;
         }
+
+        // 关键：Regen 不应依赖“玩家是否执行过 /get 指令”。
+        // 在线玩家应被视为活跃玩家，否则会出现“完全不恢复”的体验。
+        // 仍保留 activeWindow + maxPlayers 作为限流手段。
+        for (OfflinePlayer p : players) {
+            touchRecentPlayer(p);
+        }
+
         OfflinePlayer context = players.get(0);
         tickRegenForGlobal(context);
         List<OfflinePlayer> activePlayers = selectActivePlayers(players, activeWindowMillis, maxPlayers);
@@ -696,25 +759,90 @@ public class RefactoredVariablesManager {
             if (player == null) {
                 continue;
             }
-            Map<String, VariableValue> vars = memoryStorage.getPlayerVariables(player.getUniqueId());
-            if (vars.isEmpty()) {
-                continue;
-            }
-            for (Map.Entry<String, VariableValue> entry : vars.entrySet()) {
-                if (!regenVariableKeys.contains(entry.getKey())) {
+
+            // 每次 tick 对每个玩家建立一次 params 缓存：同一变量的 group/conditions 仅评估一次
+            final java.util.HashMap<String, EffectiveParams> paramsCache = new java.util.HashMap<>();
+
+            // 重要：不要仅遍历“已存在于内存 Map 的变量”，否则首次从未写入/未持久化的变量不会被 regen 处理。
+            // 对 activePlayers，仅遍历配置中声明了 regen 的变量键；缺失时用 initial 写入内存后再执行 regen。
+            for (String key : regenVariableKeys) {
+                if (key == null) {
                     continue;
                 }
-                Variable variable = getVariableDefinition(entry.getKey());
+                Variable variable = getVariableDefinition(key);
                 if (variable == null || !variable.isPlayerScoped()) {
                     continue;
                 }
-                VariableValue storage = entry.getValue();
+
+                boolean allowPapi = Bukkit.isPrimaryThread();
+                EffectiveParams params = getEffectiveParamsCached(variable, player, allowPapi, paramsCache);
+                if (params == null || !params.hasRegenRule()) {
+                    continue;
+                }
+
+                VariableValue storage = memoryStorage.getPlayerVariable(player.getUniqueId(), key);
+                if (storage == null) {
+                    // 首次初始化：将 initial 写入内存，确保后续 regen 有 lastModified 基准
+                    try {
+                        String seed = getVariableFromMemoryOrDefault(player, variable, true);
+                        boolean persist = variable.getLimitations() == null || variable.getLimitations().isPersistable();
+                        if (persist) {
+                            memoryStorage.setPlayerVariable(player.getUniqueId(), key, seed);
+                        } else {
+                            long now = System.currentTimeMillis();
+                            memoryStorage.loadPlayerVariable(player.getUniqueId(), key, seed, now, now);
+                        }
+                        storage = memoryStorage.getPlayerVariable(player.getUniqueId(), key);
+                    } catch (Exception e) {
+                        // 防止坏配置导致每 tick 重复初始化失败
+                        logger.warn("Regen 初始化变量失败，已跳过: player=" + getPlayerName(player)
+                                + ", key=" + key
+                                + ", err=" + (e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName()));
+                        storage = null;
+                    }
+                }
                 if (storage == null) {
                     continue;
                 }
-                applyRegenIfNeeded(player, variable, storage, storage.getActualValue(), Bukkit.isPrimaryThread());
+
+                // 在同一 tick 内复用 params，并一次性解析 max/min（避免重复条件判断）
+                Double maxVal = parseDoubleWithPlaceholders(params.getMax(), player, variable, allowPapi);
+                Double minVal = parseDoubleWithPlaceholders(params.getMin(), player, variable, allowPapi);
+                Limitations lim = params.getLimitations();
+                if (maxVal == null && lim != null) {
+                    maxVal = parseDoubleWithPlaceholders(lim.getMaxValue(), player, variable, allowPapi);
+                }
+                if (minVal == null && lim != null) {
+                    minVal = parseDoubleWithPlaceholders(lim.getMinValue(), player, variable, allowPapi);
+                }
+                applyRegenIfNeededCached(player, variable, storage, storage.getActualValue(), allowPapi, params, maxVal, minVal);
             }
         }
+    }
+
+    /**
+     * Regen 专用：缓存 EffectiveParams（同一 tick 内同一变量只评估一次 group/conditions）
+     */
+    private EffectiveParams getEffectiveParamsCached(Variable variable,
+                                                     OfflinePlayer player,
+                                                     boolean allowPapi,
+                                                     java.util.Map<String, EffectiveParams> cache) {
+        if (variable == null) {
+            return null;
+        }
+        if (cache == null) {
+            return getEffectiveParams(variable, player, allowPapi);
+        }
+        String k = variable.getKey();
+        EffectiveParams cached = cache.get(k);
+        if (cached != null) {
+            return cached;
+        }
+        EffectiveParams params = getEffectiveParams(variable, player, allowPapi);
+        if (params != null) {
+            cache.put(k, params);
+        }
+        return params;
     }
 
     private void tickRegenForGlobal(OfflinePlayer contextPlayer) {
@@ -1035,9 +1163,28 @@ public class RefactoredVariablesManager {
             }
             try {
                 if (!allowPapi && resolved.contains("%")) {
-                    return false;
+                    // 异步路径下无法评估 PAPI 条件时，尝试从缓存获取结果
+                    // 如果缓存中有该玩家+条件的匹配结果，使用缓存；否则保守返回 true（不做破坏性回退）
+                    if (player != null) {
+                        Boolean cached = getConditionCacheResult(player, cond);
+                        if (cached != null) {
+                            if (!cached) {
+                                return false;
+                            }
+                            continue; // 缓存命中且为 true，继续下一个条件
+                        }
+                    }
+                    // 无缓存时：保守策略 - 返回 true 以避免错误截断
+                    // 这样异步路径下 group 会"乐观匹配"，但不会导致值被错误截断到基础配置
+                    logger.debug("异步路径跳过 PAPI 条件评估（保守通过）: " + cond);
+                    continue;
                 }
-                if (!conditionEvaluator.parse(allowPapi ? onlinePlayer : null, resolved)) {
+                boolean result = conditionEvaluator.parse(allowPapi ? onlinePlayer : null, resolved);
+                // 缓存主线程评估结果，供异步路径使用
+                if (allowPapi && player != null) {
+                    cacheConditionResult(player, cond, result);
+                }
+                if (!result) {
                     return false;
                 }
             } catch (Exception e) {
@@ -1046,6 +1193,41 @@ public class RefactoredVariablesManager {
             }
         }
         return true;
+    }
+
+    // ======================== 条件评估结果缓存（用于异步路径） ========================
+
+    /**
+     * 条件评估结果缓存：玩家 UUID -> (条件表达式 -> 评估结果)
+     * 使用 Caffeine 缓存，自动过期以避免权限变更后的不一致
+     */
+    private final com.github.benmanes.caffeine.cache.Cache<String, Boolean> conditionResultCache =
+            com.github.benmanes.caffeine.cache.Caffeine.newBuilder()
+                    .maximumSize(10000)
+                    .expireAfterWrite(java.time.Duration.ofSeconds(30)) // 30 秒过期，平衡一致性与性能
+                    .build();
+
+    private String buildConditionCacheKey(OfflinePlayer player, String condition) {
+        // 直接使用 condition 字符串作为键，消除 hashCode 碰撞风险
+        // condition 是配置文件的条件表达式，长度通常可控
+        return player.getUniqueId().toString() + "@" + condition;
+    }
+
+    private Boolean getConditionCacheResult(OfflinePlayer player, String condition) {
+        return conditionResultCache.getIfPresent(buildConditionCacheKey(player, condition));
+    }
+
+    private void cacheConditionResult(OfflinePlayer player, String condition, boolean result) {
+        conditionResultCache.put(buildConditionCacheKey(player, condition), result);
+    }
+
+    /**
+     * 清理玩家的条件缓存（玩家退出或权限变更时调用）
+     */
+    public void clearConditionCache(OfflinePlayer player) {
+        if (player == null) return;
+        String prefix = player.getUniqueId().toString() + "@";
+        conditionResultCache.asMap().keySet().removeIf(key -> key.startsWith(prefix));
     }
 
     private Player toOnlinePlayer(OfflinePlayer player) {
@@ -1233,9 +1415,34 @@ public class RefactoredVariablesManager {
             }
 
             memoryStorage.setPlayerVariable(player.getUniqueId(), variable.getKey(), value);
+
+            // 关键变量审计日志（INFO 级别）
+            if (isAuditKey(variable.getKey())) {
+                logger.info(buildAuditLine(
+                        "WRITE", player, variable.getKey(), oldValue, value,
+                        reason != null ? reason.name() : "OTHER"));
+            }
             if (!persist) {
                 memoryStorage.clearDirtyFlag("player:" + player.getUniqueId() + ":" + variable.getKey());
                 logger.debug("变量设置为不可持久化，跳过数据库保存: " + variable.getKey());
+            }
+
+            // 离线写入兜底：立刻触发该玩家的数据刷盘，避免玩家入服时 DB 覆盖内存导致“变回去”
+            if (persist && !player.isOnline()) {
+                try {
+                    persistenceManager.flushPlayerData(player.getUniqueId())
+                            .orTimeout(10, java.util.concurrent.TimeUnit.SECONDS)
+                            .exceptionally(ex -> {
+                                logger.warn("离线玩家变量写入触发持久化失败: uuid=" + player.getUniqueId()
+                                        + ", key=" + variable.getKey()
+                                        + ", err=" + (ex != null ? ex.getMessage() : "unknown"));
+                                return null;
+                            });
+                } catch (Exception ex) {
+                    logger.warn("离线玩家变量写入触发持久化异常: uuid=" + player.getUniqueId()
+                            + ", key=" + variable.getKey()
+                            + ", err=" + ex.getMessage());
+                }
             }
 
             // 当前上下文缓存失效
@@ -1253,6 +1460,72 @@ public class RefactoredVariablesManager {
             // 全局上下文缓存一并清理
             invalidateCachesSafely(null, variable.getKey());
             // 注意：全局变量暂不触发事件，因为 PlayerVariableChangeEvent 需要 player
+        }
+    }
+
+    // ======================== 审计日志相关 ========================
+
+    /**
+     * 需要审计的变量 key 列表（可配置化扩展）
+     */
+    private static final java.util.Set<String> AUDIT_KEYS = java.util.Set.of(
+            "rank", "player_energy", "hp", "ep"
+    );
+
+    /**
+     * 判断变量是否需要审计日志
+     */
+    private boolean isAuditKey(String key) {
+        if (key == null) return false;
+        return AUDIT_KEYS.contains(key.toLowerCase());
+    }
+
+    /**
+     * 审计日志构造（尽量短且可检索）
+     */
+    private String buildAuditLine(String action, OfflinePlayer player, String key,
+                                      String oldValue, String newValue, String reason) {
+        String playerName = (player != null ? player.getName() : "SERVER");
+        String playerId = (player != null ? String.valueOf(player.getUniqueId()) : "-");
+        String thread = Thread.currentThread().getName();
+        // 性能优化：仅对低频关键变量(rank)记录堆栈，hp/ep/player_energy 等高频变量跳过
+        String caller = "rank".equalsIgnoreCase(key) ? getCallerSummary(6) : "(-)";
+        return "[VarAudit] action=" + action
+                + ", key=" + key
+                + ", player=" + playerName
+                + ", uuid=" + playerId
+                + ", old=" + String.valueOf(oldValue)
+                + ", new=" + String.valueOf(newValue)
+                + ", reason=" + String.valueOf(reason)
+                + ", thread=" + thread
+                + ", caller=" + caller;
+    }
+
+    /**
+     * 获取调用方摘要（截取若干栈帧，避免日志过长）
+     */
+    private String getCallerSummary(int maxFrames) {
+        try {
+            StackTraceElement[] st = Thread.currentThread().getStackTrace();
+            // st[0]=getStackTrace, st[1]=getCallerSummary, st[2]=buildRankAuditLine, st[3]=updateMemoryAndInvalidate...
+            int start = 4;
+            StringBuilder sb = new StringBuilder();
+            int appended = 0;
+            for (int i = start; i < st.length && appended < Math.max(1, maxFrames); i++) {
+                StackTraceElement e = st[i];
+                if (e == null) continue;
+                String cls = e.getClassName();
+                // 跳过 JDK/反射框架栈
+                if (cls != null && (cls.startsWith("java.") || cls.startsWith("jdk."))) {
+                    continue;
+                }
+                if (sb.length() > 0) sb.append(" <- ");
+                sb.append(e.getClassName()).append("#").append(e.getMethodName()).append(":").append(e.getLineNumber());
+                appended++;
+            }
+            return sb.length() == 0 ? "(unknown)" : sb.toString();
+        } catch (Exception ignored) {
+            return "(unknown)";
         }
     }
 
@@ -1325,20 +1598,32 @@ public class RefactoredVariablesManager {
         if (vt != ValueType.INT && vt != ValueType.DOUBLE) {
             return currentValue;
         }
-        Double maxVal = resolveMax(player, variable, allowPapi);
-        Double minVal = resolveMin(player, variable, allowPapi);
+        // 重要修复：max/min 必须使用 group 生效后的 EffectiveParams，而不是 variable 基础配置。
+        Double maxVal = parseDoubleWithPlaceholders(params.getMax(), player, variable, allowPapi);
+        Double minVal = parseDoubleWithPlaceholders(params.getMin(), player, variable, allowPapi);
+
         Limitations lim = params.getLimitations();
         String maxRaw = params.getMax();
         String minRaw = params.getMin();
         if (maxRaw == null && lim != null) {
             maxRaw = lim.getMaxValue();
+            if (maxVal == null) {
+                maxVal = parseDoubleWithPlaceholders(maxRaw, player, variable, allowPapi);
+            }
         }
         if (minRaw == null && lim != null) {
             minRaw = lim.getMinValue();
+            if (minVal == null) {
+                minVal = parseDoubleWithPlaceholders(minRaw, player, variable, allowPapi);
+            }
         }
         if ((maxRaw != null && maxVal == null) || (minRaw != null && minVal == null)) {
             return currentValue;
         }
+
+        // Lambda 中需要捕获 final/effectively final
+        final Double fMaxVal = maxVal;
+        final Double fMinVal = minVal;
         long now = System.currentTimeMillis();
         RegenRule rule = params.getRegenRule();
 
@@ -1355,7 +1640,7 @@ public class RefactoredVariablesManager {
                     resultHolder[0] = baseValue;
                     return old;
                 }
-                if (maxVal != null && current >= maxVal - 1e-9) {
+                if (fMaxVal != null && current >= fMaxVal - 1e-9) {
                     resultHolder[0] = baseValue;
                     return old;
                 }
@@ -1365,11 +1650,11 @@ public class RefactoredVariablesManager {
                     return old;
                 }
                 double next = current + gain;
-                if (maxVal != null) {
-                    next = Math.min(maxVal, next);
+                if (fMaxVal != null) {
+                    next = Math.min(fMaxVal, next);
                 }
-                if (minVal != null) {
-                    next = Math.max(minVal, next);
+                if (fMinVal != null) {
+                    next = Math.max(fMinVal, next);
                 }
                 String formatted = formatNumber(vt, next);
                 old.setValueAndMarkDirty(formatted);
@@ -1392,7 +1677,7 @@ public class RefactoredVariablesManager {
                     resultHolder[0] = baseValue;
                     return old;
                 }
-                if (maxVal != null && current >= maxVal - 1e-9) {
+                if (fMaxVal != null && current >= fMaxVal - 1e-9) {
                     resultHolder[0] = baseValue;
                     return old;
                 }
@@ -1402,11 +1687,11 @@ public class RefactoredVariablesManager {
                     return old;
                 }
                 double next = current + gain;
-                if (maxVal != null) {
-                    next = Math.min(maxVal, next);
+                if (fMaxVal != null) {
+                    next = Math.min(fMaxVal, next);
                 }
-                if (minVal != null) {
-                    next = Math.max(minVal, next);
+                if (fMinVal != null) {
+                    next = Math.max(fMinVal, next);
                 }
                 String formatted = formatNumber(vt, next);
                 old.setValueAndMarkDirty(formatted);
@@ -1417,6 +1702,71 @@ public class RefactoredVariablesManager {
         }
 
         return currentValue;
+    }
+
+    /**
+     * Regen 专用：调用方已计算好 params/max/min，避免重复 group/conditions 评估。
+     */
+    private String applyRegenIfNeededCached(OfflinePlayer player,
+                                            Variable variable,
+                                            VariableValue storage,
+                                            String currentValue,
+                                            boolean allowPapi,
+                                            EffectiveParams params,
+                                            Double maxVal,
+                                            Double minVal) {
+        if (variable == null || storage == null || params == null) {
+            return currentValue;
+        }
+        if (!params.hasRegenRule()) {
+            return currentValue;
+        }
+        ValueType vt = variable.getValueType();
+        if (vt != ValueType.INT && vt != ValueType.DOUBLE) {
+            return currentValue;
+        }
+        RegenRule rule = params.getRegenRule();
+        if (rule == null) {
+            return currentValue;
+        }
+        final Double fMaxVal = maxVal;
+        final Double fMinVal = minVal;
+        final long now = System.currentTimeMillis();
+
+        String[] resultHolder = new String[1];
+        memoryStorage.updatePlayerVariableAtomic(player.getUniqueId(), variable.getKey(), old -> {
+            if (old == null) {
+                resultHolder[0] = currentValue;
+                return old;
+            }
+            String baseValue = old.getActualValue();
+            Double current = parseDoubleSafe(baseValue);
+            if (current == null) {
+                resultHolder[0] = baseValue;
+                return old;
+            }
+            if (fMaxVal != null && current >= fMaxVal - 1e-9) {
+                resultHolder[0] = baseValue;
+                return old;
+            }
+            double gain = rule.calculateGain(old.getLastModified(), now, resolveRegenZone());
+            if (gain <= 0) {
+                resultHolder[0] = baseValue;
+                return old;
+            }
+            double next = current + gain;
+            if (fMaxVal != null) {
+                next = Math.min(fMaxVal, next);
+            }
+            if (fMinVal != null) {
+                next = Math.max(fMinVal, next);
+            }
+            String formatted = formatNumber(vt, next);
+            old.setValueAndMarkDirty(formatted);
+            resultHolder[0] = formatted;
+            return old;
+        });
+        return resultHolder[0] != null ? resultHolder[0] : currentValue;
     }
 
     private Double resolveMax(OfflinePlayer player, Variable variable, boolean allowPapi) {
@@ -2157,14 +2507,28 @@ public class RefactoredVariablesManager {
             try {
                 List<CompletableFuture<Void>> futures = new ArrayList<>();
                 String pid = player.getUniqueId().toString();
+                java.util.UUID puid = player.getUniqueId();
                 for (String key : getPlayerVariableKeys()) {
                     futures.add(fetchPlayerTriple(pid, key).thenAccept(tri -> {
+                        // 若该玩家该变量在内存中存在未落库的脏写入，则不允许 DB 覆盖，避免“离线改值后入服变回去”
+                        if (shouldSkipDbOverwrite(puid, key, tri.updatedAt)) {
+                            return;
+                        }
                         if (tri.value != null) {
                             // 数据加载时进行类型规范化，确保历史数据格式正确
                             Variable var = getVariableDefinition(key);
                             String normalizedValue = (var != null)
                                 ? normalizeValueByType(tri.value, var.getValueType())
                                 : tri.value;
+
+                            // 关键变量审计日志：从 DB 加载覆盖内存（INFO 级别）
+                            if (isAuditKey(key)) {
+                                VariableValue before = memoryStorage.getPlayerVariable(player.getUniqueId(), key);
+                                String beforeVal = before != null ? before.getActualValue() : null;
+                                logger.info(buildAuditLine(
+                                        "DB_LOAD", player, key, beforeVal, normalizedValue,
+                                        "db.updated_at=" + tri.updatedAt));
+                            }
                             memoryStorage.loadPlayerVariable(
                                     player.getUniqueId(), key, normalizedValue, tri.updatedAt, tri.firstModifiedAt);
                         } else {
@@ -2181,6 +2545,29 @@ public class RefactoredVariablesManager {
                 logger.error("加载玩家变量失败: " + player.getUniqueId(), e);
             }
         }, asyncTaskManager.getExecutor());
+    }
+
+    /**
+     * 是否应跳过数据库覆盖（保护内存中的脏写入，避免被入服加载/DB 重载覆盖）
+     */
+    private boolean shouldSkipDbOverwrite(java.util.UUID playerId, String key, long dbUpdatedAt) {
+        try {
+            if (playerId == null || key == null || key.isEmpty()) {
+                return false;
+            }
+            VariableValue mem = memoryStorage.getPlayerVariable(playerId, key);
+            if (mem == null) {
+                return false;
+            }
+            // 只要存在脏写入，一律保护（DB 可能滞后，或刷盘尚未完成）
+            if (mem.isDirty()) {
+                return true;
+            }
+            // 额外保护：若内存修改时间比 DB 新，则不覆盖
+            return mem.getLastModified() > dbUpdatedAt;
+        } catch (Exception ignored) {
+            return false;
+        }
     }
 
     /** 服务器变量统一三元组查询 */

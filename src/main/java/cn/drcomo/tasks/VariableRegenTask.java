@@ -22,6 +22,9 @@ public class VariableRegenTask {
     private final FileConfiguration config;
     private BukkitTask task;
 
+    // 记录一次告警，避免刷屏
+    private boolean warnedActiveWindow;
+
     public VariableRegenTask(
             DrcomoVEX plugin,
             DebugUtil logger,
@@ -57,7 +60,19 @@ public class VariableRegenTask {
     private void tick() {
         try {
             List<Player> online = new ArrayList<>(Bukkit.getOnlinePlayers());
-            long activeWindowMillis = Math.max(1000, config.getLong("regen.active-window-millis", 15000));
+            int intervalSeconds = Math.max(1, config.getInt("regen.tick-interval-seconds", 1));
+            long intervalMillis = intervalSeconds * 1000L;
+
+            long configuredWindow = Math.max(1000, config.getLong("regen.active-window-millis", 15000));
+            // 关键修复：activeWindow 不能小于 tick 间隔，否则玩家很容易在下一次 tick 前“失活”，导致 regen 永远不执行。
+            // 例如 tick=29s 而 window=15s，会导致除非玩家每 15s 主动触发一次 get，否则 regen 永远不跑。
+            long activeWindowMillis = Math.max(configuredWindow, intervalMillis + 1000L);
+            if (!warnedActiveWindow && configuredWindow < intervalMillis) {
+                warnedActiveWindow = true;
+                logger.warn("检测到 regen.active-window-millis(" + configuredWindow + "ms) < regen.tick-interval-seconds(" + intervalSeconds
+                        + "s)，已自动提升有效 activeWindow 至 " + activeWindowMillis + "ms，避免 regen 不执行。建议配置 active-window-millis >= "
+                        + intervalMillis + "ms");
+            }
             int maxPlayers = Math.max(1, config.getInt("regen.max-players-per-tick", 64));
             variablesManager.tickRegenForOnlinePlayers(online, activeWindowMillis, maxPlayers);
         } catch (Exception e) {

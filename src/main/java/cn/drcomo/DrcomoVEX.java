@@ -42,6 +42,9 @@ public class DrcomoVEX extends JavaPlugin {
     private PlayerVariablesManager playerVariablesManager;
     private MessagesManager messagesManager;
 
+    // rank 保护日志（单独文件）
+    private cn.drcomo.util.RankProtectionLogger rankProtectionLogger;
+
     // 数据库连接
     private HikariConnection database;
     
@@ -77,6 +80,14 @@ public class DrcomoVEX extends JavaPlugin {
         
         // 8. 注册API接口
         registerAPI();
+
+        // 9. 初始化 rank 保护日志器
+        try {
+            rankProtectionLogger = new cn.drcomo.util.RankProtectionLogger(this);
+        } catch (Exception e) {
+            // 不影响插件启动
+            getLogger().warning("[RankProtection] 初始化失败: " + e.getMessage());
+        }
 
         logger.info("DrcomoVEX 变量扩展系统已成功启动！");
         logger.info("版本: 1.0.0 (代号: 直觉)");
@@ -140,6 +151,13 @@ public class DrcomoVEX extends JavaPlugin {
         // 5. 关闭异步任务管理器
         if (asyncTaskManager != null) {
             asyncTaskManager.close();
+        }
+
+        // 6. 关闭 rank 保护日志器
+        if (rankProtectionLogger != null) {
+            try {
+                rankProtectionLogger.shutdown();
+            } catch (Exception ignored) { }
         }
         
         logger.info("DrcomoVEX 已安全关闭，感谢使用！");
@@ -349,5 +367,9 @@ public class DrcomoVEX extends JavaPlugin {
     
     public HikariConnection getDatabase() {
         return database;
+    }
+
+    public cn.drcomo.util.RankProtectionLogger getRankProtectionLogger() {
+        return rankProtectionLogger;
     }
 }
