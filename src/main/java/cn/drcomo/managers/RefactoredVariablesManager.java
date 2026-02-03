@@ -96,6 +96,25 @@ public class RefactoredVariablesManager {
     private final Set<String> regenVariableKeys = ConcurrentHashMap.newKeySet();
     private final ConcurrentHashMap<UUID, Long> recentAccessPlayers = new ConcurrentHashMap<>();
 
+    /**
+     * 穿透查询的“负缓存”（DB 明确无记录时）：避免频繁 miss 导致 DB 压力。
+     *
+     * 注意：
+     * - 负缓存只用于“DB 无记录”的场景，不用于 DB 异常/超时。
+     * - 使用 Caffeine TTL + max size，避免内存泄漏与跨服长期不一致。
+     */
+    private final com.github.benmanes.caffeine.cache.Cache<String, Boolean> playerNegativeCache =
+            com.github.benmanes.caffeine.cache.Caffeine.newBuilder()
+                    .maximumSize(200_000)
+                    .expireAfterWrite(java.time.Duration.ofSeconds(10))
+                    .build();
+
+    /** 主线程穿透查询超时预算（ms）- 避免拖垮 tick（50ms） */
+    private static final long MAIN_THREAD_DB_READ_TIMEOUT_MS = 10L;
+
+    /** 异步线程穿透查询超时预算（ms） */
+    private static final long ASYNC_THREAD_DB_READ_TIMEOUT_MS = 50L;
+
     // 变量定义注册表
     private final ConcurrentHashMap<String, Variable> variableRegistry = new ConcurrentHashMap<>();
 
@@ -1284,14 +1303,100 @@ public class RefactoredVariablesManager {
         return s == null || s.trim().isEmpty();
     }
 
-    /** 获取内存存储中的 VariableValue 引用 */
+    /** 
+     * 获取内存存储中的 VariableValue 引用
+     * 
+     * 穿透查询策略：当内存未命中时，同步从数据库加载到内存，解决跨服离线玩家数据访问问题
+     */
     private VariableValue getMemoryValue(OfflinePlayer player, Variable variable) {
         if (variable.isPlayerScoped() && player != null) {
-            return memoryStorage.getPlayerVariable(player.getUniqueId(), variable.getKey());
+            VariableValue val = memoryStorage.getPlayerVariable(player.getUniqueId(), variable.getKey());
+            if (val == null) {
+                // 穿透查询：内存未命中时从数据库加载
+                val = loadPlayerVariableFromDBSync(player, variable.getKey());
+            }
+            return val;
         } else if (variable.isGlobal()) {
             return memoryStorage.getServerVariable(variable.getKey());
         }
         return null;
+    }
+
+    /**
+     * 同步从数据库加载玩家变量到内存（穿透查询）
+     * 
+     * 用于跨服场景下离线玩家数据的即时加载
+     * 
+     * 注意事项：
+     * - 此方法会阻塞调用线程（建议预算 <= 50ms），避免在主线程高频调用
+     * - 包含竞态保护：DB 查询期间若内存已被其他线程写入，优先使用内存值
+     * - 包含缓存穿透保护：DB 不存在时写入负缓存（TTL），避免重复查询
+     * 
+     * @param player 玩家
+     * @param key 变量键
+     * @return 加载后的 VariableValue；若数据库无记录或 DB 读取失败，则返回 null（上层将回退默认值）
+     */
+    private VariableValue loadPlayerVariableFromDBSync(OfflinePlayer player, String key) {
+        if (player == null || key == null) {
+            return null;
+        }
+        try {
+            String pid = player.getUniqueId().toString();
+            UUID playerId = player.getUniqueId();
+
+            // 负缓存：DB 确认无记录时，短时间内不再穿透，避免 DB miss 风暴
+            String negKey = playerId + ":" + key;
+            if (playerNegativeCache.getIfPresent(negKey) != null) {
+                return null;
+            }
+
+            // 同步查询数据库（穿透查询场景，需要立即获取结果）
+            // 重要：DB 异常/超时不能被当作“无记录”，否则会导致默认值参与后续写入，造成数据丢失。
+            ValueTriple tri;
+            try {
+                long timeoutMs = Bukkit.isPrimaryThread() ? MAIN_THREAD_DB_READ_TIMEOUT_MS : ASYNC_THREAD_DB_READ_TIMEOUT_MS;
+                tri = fetchPlayerTriple(pid, key).get(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS);
+            } catch (Exception ex) {
+                // Fail-closed：DB 读取失败时不允许回退到默认值继续参与后续 ADD/REMOVE 计算，否则可能造成数据丢失。
+                throw new RuntimeException("DB穿透查询失败: player=" + getPlayerName(player) + ", key=" + key
+                        + ", err=" + (ex.getMessage() != null ? ex.getMessage() : ex.getClass().getSimpleName()), ex);
+            }
+
+            // [竞态保护] DB 查询期间内存可能已被其他线程写入，需二次检查
+            VariableValue concurrentVal = memoryStorage.getPlayerVariable(playerId, key);
+            if (concurrentVal != null) {
+                logger.debug("穿透查询跳过: 内存已存在值 player=" + player.getName() + ", key=" + key);
+                return concurrentVal;
+            }
+
+            if (tri.value != null) {
+                // 命中：清理负缓存
+                playerNegativeCache.invalidate(negKey);
+                // 类型规范化
+                Variable var = getVariableDefinition(key);
+                String normalizedValue = (var != null)
+                        ? normalizeValueByType(tri.value, var.getValueType())
+                        : tri.value;
+
+                // 加载到内存
+                memoryStorage.loadPlayerVariable(playerId, key, normalizedValue, tri.updatedAt, tri.firstModifiedAt);
+
+                logger.debug("穿透查询成功: player=" + player.getName() + ", key=" + key + ", value=" + normalizedValue);
+                return memoryStorage.getPlayerVariable(playerId, key);
+            } else {
+                // [缓存穿透保护] 数据库无记录：写入负缓存（TTL），不污染内存存储
+                playerNegativeCache.put(negKey, Boolean.TRUE);
+            }
+            return null;
+        } catch (Exception e) {
+            // 若这里吞掉异常，会被上层当成“无记录”回退默认值，进而导致数据丢失。
+            // 因此这里同样 fail-closed。
+            if (e instanceof RuntimeException) {
+                throw (RuntimeException) e;
+            }
+            throw new RuntimeException("穿透查询异常: player=" + getPlayerName(player) + ", key=" + key
+                    + ", err=" + (e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName()), e);
+        }
     }
 
     /** 从内存获取变量值或返回默认/初始值（含严格模式与公式处理） */
