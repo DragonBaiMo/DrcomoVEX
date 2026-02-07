@@ -401,6 +401,30 @@ public class ServerVariablesAPI {
         // 预解析嵌套占位符
         rawArgs = preProcessNestedPlaceholders(rawArgs, player);
 
+        // 支持 [max]/[min]/[initial] 后缀（玩家占位符专用）
+        VarKeyMode keyMode = resolveVarKeyMode(rawArgs);
+        if (keyMode.mode != VarQueryMode.VALUE) {
+            String key = keyMode.normalizedKey;
+            if (isDebugEnabled()) {
+                logger.debug("占位符 drcomovex_[" + domain + "]_" + key
+                        + " 输入参数: " + rawArgs + " (meta=" + keyMode.mode + ")");
+            }
+            String result;
+            if (key.isEmpty()) {
+                result = "变量名不能为空";
+            } else if (!hasVariable(key)) {
+                logger.info("占位符 drcomovex_[" + domain + "]_" + key + " 变量不存在");
+                result = "变量不存在";
+            } else {
+                result = resolveVarMetaValue(player, key, keyMode.mode);
+            }
+            if (isDebugEnabled()) {
+                logger.debug("占位符 drcomovex_[" + domain + "]_" + key
+                        + " 输出结果: " + result);
+            }
+            return result;
+        }
+
         String key;
         String playerName = null;
 

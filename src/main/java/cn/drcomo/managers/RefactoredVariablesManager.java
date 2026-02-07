@@ -2115,7 +2115,7 @@ public class RefactoredVariablesManager {
      * 根据变量类型规范化值的格式
      * 主要用于解决占位符解析后返回带小数点的 INT 类型问题
      */
-    private String normalizeValueByType(String value, ValueType type) {
+    public String normalizeValueByType(String value, ValueType type) {
         if (value == null || type == null) {
             return value;
         }

@@ -693,6 +693,11 @@ DrcomoVEX 与 [PlaceholderAPI](https://www.spigotmc.org/resources/placeholderapi
 + **通用格式**: `%drcomovex_[var]_[变量键]%`
     - 这个格式会自动判断变量是 `player` 还是 `global` 作用域。
     - **示例**: `%drcomovex_[var]_player_money%`
++ **通用格式（读取参数）**: `%drcomovex_[var]_[变量键]_[max|min|initial]%`
+    - 获取变量的 `max` / `min` / `initial` 配置（支持参数组覆盖与动态表达式解析）。
+    - 未配置时返回空字符串。
+    - 玩家变量需要玩家上下文。
+    - **示例**: `%drcomovex_[var]_player_money_[max]%`
 + **玩家变量专用**: `%drcomovex_[player]_[变量键]%`
     - 明确指定获取玩家变量。
     - **示例**: `%drcomovex_[player]_player_level%`
