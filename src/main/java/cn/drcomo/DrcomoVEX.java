@@ -12,6 +12,14 @@ import cn.drcomo.corelib.config.YamlUtil;
 import cn.drcomo.corelib.async.AsyncTaskManager;
 import cn.drcomo.corelib.message.MessageService;
 import cn.drcomo.corelib.hook.placeholder.PlaceholderAPIUtil;
+import cn.drcomo.redis.RedisConnection;
+import cn.drcomo.redis.RedisCrossServerSync;
+import cn.drcomo.redis.RedisOnlinePlayerTracker;
+import cn.drcomo.redis.RedisServerIdResolver;
+import cn.drcomo.sync.CrossServerSyncConfig;
+import cn.drcomo.sync.CrossServerSyncService;
+import cn.drcomo.sync.CrossServerSyncStore;
+import cn.drcomo.sync.OnlinePlayerTracker;
 import org.bukkit.plugin.java.JavaPlugin;
 import org.bukkit.Bukkit;
 
@@ -52,6 +60,19 @@ public class DrcomoVEX extends JavaPlugin {
     private DataSaveTask dataSaveTask;
     private VariableCycleTask variableCycleTask;
     private cn.drcomo.tasks.VariableRegenTask variableRegenTask;
+
+    // Redis 跨服同步（可选）
+    private RedisConnection redisConnection;
+    private RedisOnlinePlayerTracker redisOnlinePlayerTracker;
+    private RedisCrossServerSync redisCrossServerSync;
+    private String redisResolvedServerId;
+    private String redisResolvedOwner;
+    private int redisServerIdClaimTtlSeconds;
+
+    // MySQL 轮询跨服同步（旧方案兼容）
+    private CrossServerSyncService mysqlCrossServerSync;
+    private CrossServerSyncStore crossServerSyncStore;
+    private OnlinePlayerTracker legacyOnlinePlayerTracker;
     
     @Override
     public void onEnable() {
@@ -77,6 +98,12 @@ public class DrcomoVEX extends JavaPlugin {
         
         // 7. 启动定时任务
         startScheduledTasks();
+
+        // 7.5 启动 Redis 跨服同步（可选）
+        startRedisSync();
+
+        // 7.6 启动 MySQL 轮询跨服同步（仅在 Redis 不可用或未启用时）
+        startMySQLCrossServerSyncIfNeeded();
         
         // 8. 注册API接口
         registerAPI();
@@ -108,6 +135,12 @@ public class DrcomoVEX extends JavaPlugin {
         if (variableRegenTask != null) {
             variableRegenTask.stop();
         }
+
+        // 1.5 停止 Redis 同步
+        stopRedisSync();
+
+        // 1.6 停止 MySQL 轮询跨服同步
+        stopMySQLCrossServerSync();
         
         // 2. 关闭高性能变量管理器（会自动持久化所有数据并关闭数据库）
         if (variablesManager != null) {
@@ -254,6 +287,171 @@ public class DrcomoVEX extends JavaPlugin {
         playerVariablesManager.initialize();
     }
 
+    /**
+     * 启动 Redis 跨服同步（仅在配置启用时生效）
+     */
+    private void startRedisSync() {
+        try {
+            redisConnection = new RedisConnection(logger, configsManager.getMainConfig());
+            redisConnection.initialize();
+            if (!redisConnection.isReady()) {
+                try {
+                    redisConnection.close();
+                } catch (Exception ignored) {
+                }
+                redisConnection = null;
+                return;
+            }
+
+            redisServerIdClaimTtlSeconds = Math.max(30,
+                    configsManager.getMainConfig().getInt("settings.redis-sync.server-id-claim-ttl-seconds", 300));
+
+            RedisServerIdResolver resolver = new RedisServerIdResolver(this, logger);
+            RedisServerIdResolver.ResolvedServerIdentity identity = resolver.resolve(
+                    redisConnection,
+                    "", // 强制使用“当前 jar 绝对路径拆分命名”
+                    null,
+                    redisServerIdClaimTtlSeconds
+            );
+
+            redisResolvedServerId = identity.getServerId();
+            redisResolvedOwner = identity.getOwner();
+
+            if (redisResolvedServerId == null || redisResolvedServerId.trim().isEmpty()) {
+                logger.error("启动 Redis 跨服同步失败：无法基于当前运行路径生成 server-id");
+                try {
+                    redisConnection.close();
+                } catch (Exception ignored) {
+                }
+                redisConnection = null;
+                return;
+            }
+
+            logger.info("Redis server-id 已自动生成: " + redisResolvedServerId);
+
+            int onlineTtl = Math.max(30, configsManager.getMainConfig().getInt("settings.redis-sync.online-ttl-seconds", 300));
+
+            redisOnlinePlayerTracker = new RedisOnlinePlayerTracker(
+                    logger,
+                    redisConnection,
+                    redisResolvedServerId,
+                    onlineTtl
+            );
+            redisCrossServerSync = new RedisCrossServerSync(
+                    logger,
+                    asyncTaskManager,
+                    variablesManager,
+                    redisConnection,
+                    redisOnlinePlayerTracker,
+                    redisResolvedServerId,
+                    redisResolvedOwner,
+                    redisServerIdClaimTtlSeconds,
+                    configsManager.getMainConfig()
+            );
+
+            // 注入到管理器（保持旧 API，不破坏现有调用）
+            variablesManager.setRedisSyncService(redisCrossServerSync);
+            playerVariablesManager.setRedisSyncService(redisCrossServerSync);
+
+            redisCrossServerSync.start();
+        } catch (Exception e) {
+            logger.error("启动 Redis 跨服同步失败，已降级为本地模式", e);
+            try {
+                if (redisConnection != null) {
+                    redisConnection.close();
+                }
+            } catch (Exception ignored) {
+            }
+            redisConnection = null;
+            redisOnlinePlayerTracker = null;
+            redisCrossServerSync = null;
+            redisResolvedServerId = null;
+            redisResolvedOwner = null;
+        }
+    }
+
+    /**
+     * 兼容旧 MySQL 事件表轮询同步：
+     * - 当 Redis 已启用且可用：跳过旧方案
+     * - 当 Redis 未启用或初始化失败：按 settings.cross-server-sync 配置启用旧方案
+     */
+    private void startMySQLCrossServerSyncIfNeeded() {
+        try {
+            if (redisCrossServerSync != null && redisCrossServerSync.isEnabled()) {
+                logger.info("Redis 同步已启用，跳过 MySQL 轮询跨服同步");
+                return;
+            }
+
+            CrossServerSyncConfig syncConfig = new CrossServerSyncConfig(configsManager.getMainConfig());
+            if (!syncConfig.isEnabled()) {
+                logger.info("MySQL 轮询跨服同步已禁用");
+                return;
+            }
+
+            legacyOnlinePlayerTracker = new OnlinePlayerTracker();
+            for (org.bukkit.entity.Player p : Bukkit.getOnlinePlayers()) {
+                legacyOnlinePlayerTracker.markOnline(p.getUniqueId());
+            }
+
+            crossServerSyncStore = new CrossServerSyncStore(this, yamlUtil, logger);
+            crossServerSyncStore.initialize();
+
+            mysqlCrossServerSync = new CrossServerSyncService(
+                    logger,
+                    asyncTaskManager,
+                    database,
+                    variablesManager,
+                    variablesManager.getMemoryStorage(),
+                    syncConfig,
+                    crossServerSyncStore,
+                    legacyOnlinePlayerTracker
+            );
+            mysqlCrossServerSync.start();
+            logger.info("MySQL 轮询跨服同步已启动（兼容模式）");
+        } catch (Exception e) {
+            logger.error("启动 MySQL 轮询跨服同步失败", e);
+        }
+    }
+
+    private void stopRedisSync() {
+        try {
+            if (redisCrossServerSync != null) {
+                redisCrossServerSync.stop();
+            }
+        } catch (Exception e) {
+            logger.warn("停止 Redis 跨服同步失败: " + e.getMessage());
+        }
+
+        try {
+            if (redisConnection != null) {
+                redisConnection.close();
+            }
+        } catch (Exception e) {
+            logger.warn("关闭 Redis 连接失败: " + e.getMessage());
+        }
+
+        redisConnection = null;
+        redisCrossServerSync = null;
+        redisOnlinePlayerTracker = null;
+        redisResolvedServerId = null;
+        redisResolvedOwner = null;
+    }
+
+    private void stopMySQLCrossServerSync() {
+        try {
+            if (mysqlCrossServerSync != null) {
+                mysqlCrossServerSync.stop();
+                mysqlCrossServerSync = null;
+            }
+            if (crossServerSyncStore != null) {
+                crossServerSyncStore.flush();
+                crossServerSyncStore = null;
+            }
+        } catch (Exception e) {
+            logger.warn("停止 MySQL 轮询跨服同步失败: " + e.getMessage());
+        }
+    }
+
     public void reloadAll() {
         configsManager.reload();
         messagesManager.reload();
@@ -371,5 +569,17 @@ public class DrcomoVEX extends JavaPlugin {
 
     public cn.drcomo.util.RankProtectionLogger getRankProtectionLogger() {
         return rankProtectionLogger;
+    }
+
+    public RedisCrossServerSync getRedisCrossServerSync() {
+        return redisCrossServerSync;
+    }
+
+    public RedisOnlinePlayerTracker getRedisOnlinePlayerTracker() {
+        return redisOnlinePlayerTracker;
+    }
+
+    public OnlinePlayerTracker getLegacyOnlinePlayerTracker() {
+        return legacyOnlinePlayerTracker;
     }
 }

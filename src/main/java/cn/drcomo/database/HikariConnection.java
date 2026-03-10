@@ -375,6 +375,52 @@ public class HikariConnection {
     }
 
     /**
+     * 异步查询单行多列。
+     *
+     * @param sql SQL 语句（应返回 0~1 行）
+     * @param columns 需要读取的列数量（从第 1 列开始）
+     * @param params 参数
+     * @return 返回长度为 columns 的字符串数组；无记录返回 null
+     */
+    public CompletableFuture<String[]> queryRowAsync(String sql, int columns, Object... params) {
+        final int colCount = Math.max(1, columns);
+
+        if ("sqlite".equals(databaseType)) {
+            return sqliteDB.queryOneAsync(sql, rs -> {
+                String[] row = new String[colCount];
+                for (int i = 0; i < colCount; i++) {
+                    row[i] = rs.getString(i + 1);
+                }
+                return row;
+            }, params);
+        }
+
+        return CompletableFuture.supplyAsync(() -> {
+            try (Connection conn = getConnection();
+                 PreparedStatement stmt = conn.prepareStatement(sql)) {
+                try { conn.setNetworkTimeout(dbExecutor, 15000); } catch (Throwable ignore) {}
+                try { stmt.setQueryTimeout(15); } catch (Throwable ignore) {}
+                for (int i = 0; i < params.length; i++) {
+                    stmt.setObject(i + 1, params[i]);
+                }
+                try (ResultSet rs = stmt.executeQuery()) {
+                    if (!rs.next()) {
+                        return null;
+                    }
+                    String[] row = new String[colCount];
+                    for (int i = 0; i < colCount; i++) {
+                        row[i] = rs.getString(i + 1);
+                    }
+                    return row;
+                }
+            } catch (SQLException e) {
+                logger.error("查询数据库行失败: " + sql, e);
+                throw new RuntimeException("查询数据库行失败", e);
+            }
+        }, dbExecutor);
+    }
+
+    /**
      * 异步按变量键查询玩家记录，返回 [player_uuid, variable_key, value]
      */
     public CompletableFuture<List<String[]>> queryPlayerVariablesByKeyAsync(String variableKeyOrLike, boolean likePattern) {

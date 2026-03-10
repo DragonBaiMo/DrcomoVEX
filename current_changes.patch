@@ -1,0 +1,865 @@
+diff --git a/DrcomoVEX-使用手册.md b/DrcomoVEX-使用手册.md
+index f0c4b5c..d452a37 100644
+--- a/DrcomoVEX-使用手册.md
++++ b/DrcomoVEX-使用手册.md
+@@ -693,6 +693,11 @@ DrcomoVEX 与 [PlaceholderAPI](https://www.spigotmc.org/resources/placeholderapi
+ + **通用格式**: `%drcomovex_[var]_[变量键]%`
+     - 这个格式会自动判断变量是 `player` 还是 `global` 作用域。
+     - **示例**: `%drcomovex_[var]_player_money%`
+++ **通用格式（读取参数）**: `%drcomovex_[var]_[变量键]_[max|min|initial]%`
++    - 获取变量的 `max` / `min` / `initial` 配置（支持参数组覆盖与动态表达式解析）。
++    - 未配置时返回空字符串。
++    - 玩家变量需要玩家上下文。
++    - **示例**: `%drcomovex_[var]_player_money_[max]%`
+ + **玩家变量专用**: `%drcomovex_[player]_[变量键]%`
+     - 明确指定获取玩家变量。
+     - **示例**: `%drcomovex_[player]_player_level%`
+diff --git a/src/main/java/cn/drcomo/api/ServerVariablesAPI.java b/src/main/java/cn/drcomo/api/ServerVariablesAPI.java
+index 845c8a8..a1e44d2 100644
+--- a/src/main/java/cn/drcomo/api/ServerVariablesAPI.java
++++ b/src/main/java/cn/drcomo/api/ServerVariablesAPI.java
+@@ -42,6 +42,10 @@ public class ServerVariablesAPI {
+     private static final Pattern PLAYER_ARGS_PATTERN = Pattern.compile("^\\[([^\\]]+)](?:_\\[([^\\]]+)])?$");
+     /** 嵌套占位符匹配正则：匹配 {placeholder} 格式 */
+     private static final Pattern NESTED_PLACEHOLDER_PATTERN = Pattern.compile("\\{([^}]+)\\}");
++    /** var 后缀模式（带[]）：只匹配末尾 [max|min|initial] */
++    private static final Pattern VAR_SUFFIX_BRACKET_PATTERN = Pattern.compile("^(.*)_\\[(max|min|initial)]$", Pattern.CASE_INSENSITIVE);
++    /** var 后缀模式（不带[]）：仅用于回退判定 */
++    private static final Pattern VAR_SUFFIX_PLAIN_PATTERN = Pattern.compile("^(.*)_(max|min|initial)$", Pattern.CASE_INSENSITIVE);
+ 
+     private final DebugUtil logger;
+     private final RefactoredVariablesManager variablesManager;
+@@ -347,8 +351,9 @@ public class ServerVariablesAPI {
+         // 预解析嵌套占位符
+         rawArgs = preProcessNestedPlaceholders(rawArgs, player);
+ 
+-        // 兼容外层加[]的参数：统一规范化后再匹配
+-        String normalizedArgs = rawArgs.replace("[", "").replace("]", "").trim();
++        // 预解析参数模式（支持 [max]/[min]/[initial] 后缀）
++        VarKeyMode keyMode = resolveVarKeyMode(rawArgs);
++        String normalizedArgs = keyMode.normalizedKey;
+         String full = "drcomovex_" + placeholder + "_" + normalizedArgs;
+         Matcher m = FULL_PLACEHOLDER_PATTERN.matcher(full);
+         if (!m.matches()) {
+@@ -370,7 +375,11 @@ public class ServerVariablesAPI {
+             logger.info("占位符 drcomovex_[" + domain + "]_" + key + " 变量不存在");
+             result = "变量不存在";
+         } else {
+-            result = handler.apply(player, key);
++            if (keyMode.mode == VarQueryMode.VALUE || !"var".equalsIgnoreCase(domain)) {
++                result = handler.apply(player, key);
++            } else {
++                result = resolveVarMetaValue(player, key, keyMode.mode);
++            }
+         }
+ 
+         if (isDebugEnabled()) {
+@@ -383,6 +392,81 @@ public class ServerVariablesAPI {
+         return result;
+     }
+ 
++    private String resolveVarMetaValue(OfflinePlayer player, String key, VarQueryMode mode) {
++        if (!hasVariable(key)) return "变量不存在";
++        Variable var = variablesManager.getVariableDefinition(key);
++        if (var == null) return "变量不存在";
++        if (var.isPlayerScoped() && player == null) {
++            logger.info("占位符 drcomovex_[var] 玩家变量 " + key + " 需要玩家参数");
++            return "需要玩家参数";
++        }
++        boolean allowPapi = Bukkit.isPrimaryThread();
++        return switch (mode) {
++            case MAX -> variablesManager.resolveEffectiveMax(player, key, allowPapi);
++            case MIN -> variablesManager.resolveEffectiveMin(player, key, allowPapi);
++            case INITIAL -> variablesManager.resolveEffectiveInitial(player, key, allowPapi);
++            default -> "";
++        };
++    }
++
++    private VarKeyMode resolveVarKeyMode(String rawArgs) {
++        String cleaned = rawArgs.replace(" ", "").trim();
++        Matcher bracket = VAR_SUFFIX_BRACKET_PATTERN.matcher(cleaned);
++        if (bracket.matches()) {
++            String key = normalizeKey(bracket.group(1));
++            VarQueryMode mode = VarQueryMode.from(bracket.group(2));
++            return new VarKeyMode(key, mode != null ? mode : VarQueryMode.VALUE);
++        }
++
++        String normalized = normalizeKey(cleaned);
++        if (variablesManager.getVariableDefinition(normalized) != null) {
++            return new VarKeyMode(normalized, VarQueryMode.VALUE);
++        }
++
++        Matcher plain = VAR_SUFFIX_PLAIN_PATTERN.matcher(cleaned);
++        if (plain.matches()) {
++            String possibleKey = normalizeKey(plain.group(1));
++            String possibleMode = plain.group(2);
++            if (variablesManager.getVariableDefinition(possibleKey) != null) {
++                VarQueryMode mode = VarQueryMode.from(possibleMode);
++                if (mode != null) {
++                    return new VarKeyMode(possibleKey, mode);
++                }
++            }
++        }
++
++        return new VarKeyMode(normalized, VarQueryMode.VALUE);
++    }
++
++    private String normalizeKey(String input) {
++        return input.replace("[", "").replace("]", "").trim();
++    }
++
++    private enum VarQueryMode {
++        VALUE, MAX, MIN, INITIAL;
++
++        static VarQueryMode from(String raw) {
++            if (raw == null) return null;
++            String v = raw.trim().toLowerCase();
++            return switch (v) {
++                case "max" -> MAX;
++                case "min" -> MIN;
++                case "initial" -> INITIAL;
++                default -> null;
++            };
++        }
++    }
++
++    private static class VarKeyMode {
++        private final String normalizedKey;
++        private final VarQueryMode mode;
++
++        private VarKeyMode(String normalizedKey, VarQueryMode mode) {
++            this.normalizedKey = normalizedKey;
++            this.mode = mode;
++        }
++    }
++
+     /**
+      * 处理玩家变量专用占位符，支持指定玩家名
+      */
+diff --git a/src/main/java/cn/drcomo/database/HikariConnection.java b/src/main/java/cn/drcomo/database/HikariConnection.java
+index 44074ab..a793b3e 100644
+--- a/src/main/java/cn/drcomo/database/HikariConnection.java
++++ b/src/main/java/cn/drcomo/database/HikariConnection.java
+@@ -294,12 +294,89 @@ public class HikariConnection {
+                 }
+             }
+             logger.debug("MySQL 表结构初始化完成");
++            initializeCrossServerSyncTables(connection);
+         } catch (SQLException e) {
+             logger.error("初始化 MySQL 表结构失败", e);
+             throw new RuntimeException("初始化表结构失败", e);
+         }
+     }
+ 
++    private void initializeCrossServerSyncTables(Connection connection) throws SQLException {
++        List<String> ddl = List.of(
++                "CREATE TABLE IF NOT EXISTS player_variable_change_events (" +
++                        "id BIGINT NOT NULL AUTO_INCREMENT," +
++                        "created_at BIGINT NOT NULL," +
++                        "server_id VARCHAR(64) NOT NULL," +
++                        "player_uuid CHAR(36) NOT NULL," +
++                        "variable_key VARCHAR(128) NOT NULL," +
++                        "value MEDIUMTEXT NULL," +
++                        "updated_at BIGINT NOT NULL," +
++                        "first_modified_at BIGINT NOT NULL," +
++                        "op VARCHAR(16) NOT NULL DEFAULT 'OTHER'," +
++                        "scope VARCHAR(16) NOT NULL DEFAULT 'PLAYER'," +
++                        "PRIMARY KEY (id)" +
++                        ")",
++                "CREATE TABLE IF NOT EXISTS player_variable_change_consumers (" +
++                        "server_id VARCHAR(64) NOT NULL," +
++                        "last_event_id BIGINT NOT NULL," +
++                        "updated_at BIGINT NOT NULL," +
++                        "PRIMARY KEY (server_id)" +
++                        ")"
++        );
++        for (String sql : ddl) {
++            try (PreparedStatement stmt = connection.prepareStatement(sql)) {
++                stmt.executeUpdate();
++            }
++        }
++
++        // 兼容旧库：确保新增列存在
++        ensureColumn(connection, "player_variable_change_events", "op",
++                "ALTER TABLE player_variable_change_events ADD COLUMN op VARCHAR(16) NOT NULL DEFAULT 'OTHER'");
++        ensureColumn(connection, "player_variable_change_events", "scope",
++                "ALTER TABLE player_variable_change_events ADD COLUMN scope VARCHAR(16) NOT NULL DEFAULT 'PLAYER'");
++
++        List<String> idx = List.of(
++                "CREATE INDEX idx_pvce_player ON player_variable_change_events(player_uuid)",
++                "CREATE INDEX idx_pvce_key ON player_variable_change_events(variable_key)",
++                "CREATE INDEX idx_pvce_server ON player_variable_change_events(server_id)",
++                "CREATE INDEX idx_pvce_updated ON player_variable_change_events(updated_at)",
++                "CREATE INDEX idx_pvce_scope ON player_variable_change_events(scope)",
++                "CREATE INDEX idx_pvce_created ON player_variable_change_events(created_at)"
++        );
++        for (String sql : idx) {
++            try (PreparedStatement stmt = connection.prepareStatement(sql)) {
++                stmt.executeUpdate();
++            } catch (SQLException e) {
++                if (e.getErrorCode() == 1061 || (e.getMessage() != null && e.getMessage().toLowerCase().contains("duplicate key name"))) {
++                    continue;
++                }
++                throw e;
++            }
++        }
++        logger.debug("跨服同步表结构初始化完成");
++    }
++
++    private void ensureColumn(Connection connection, String table, String column, String alterSql) throws SQLException {
++        String sql = "SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ?";
++        try (PreparedStatement stmt = connection.prepareStatement(sql)) {
++            stmt.setString(1, table);
++            stmt.setString(2, column);
++            try (ResultSet rs = stmt.executeQuery()) {
++                if (rs.next() && rs.getInt(1) > 0) {
++                    return;
++                }
++            }
++        }
++        try (PreparedStatement stmt = connection.prepareStatement(alterSql)) {
++            stmt.executeUpdate();
++        } catch (SQLException e) {
++            if (e.getErrorCode() == 1060 || (e.getMessage() != null && e.getMessage().toLowerCase().contains("duplicate column name"))) {
++                return;
++            }
++            throw e;
++        }
++    }
++
+     /**
+      * 从脚本文件读取 SQL 语句
+      */
+@@ -412,6 +489,31 @@ public class HikariConnection {
+         });
+     }
+ 
++    public CompletableFuture<String[]> queryPlayerVariableTripleAsync(String playerUuid, String variableKey) {
++        String sql = "SELECT value, updated_at, first_modified_at FROM player_variables WHERE player_uuid = ? AND variable_key = ?";
++        Object[] params = new Object[]{ playerUuid, variableKey };
++        if ("sqlite".equals(databaseType)) {
++            return sqliteDB.queryOneAsync(sql, rs -> new String[]{ rs.getString(1), rs.getString(2), rs.getString(3) }, params);
++        }
++        return asyncTaskManager.supplyAsync(() -> {
++            try (Connection conn = getConnection();
++                 PreparedStatement stmt = conn.prepareStatement(sql)) {
++                try { stmt.setQueryTimeout(15); } catch (Throwable ignore) {}
++                stmt.setString(1, playerUuid);
++                stmt.setString(2, variableKey);
++                try (ResultSet rs = stmt.executeQuery()) {
++                    if (rs.next()) {
++                        return new String[]{ rs.getString(1), rs.getString(2), rs.getString(3) };
++                    }
++                }
++                return null;
++            } catch (SQLException e) {
++                logger.error("查询玩家变量三元组失败: " + sql, e);
++                throw new RuntimeException("查询玩家变量三元组失败", e);
++            }
++        });
++    }
++
+     /**
+      * 异步执行更新
+      */
+diff --git a/src/main/java/cn/drcomo/listeners/PlayerListener.java b/src/main/java/cn/drcomo/listeners/PlayerListener.java
+index 55289fc..befb493 100644
+--- a/src/main/java/cn/drcomo/listeners/PlayerListener.java
++++ b/src/main/java/cn/drcomo/listeners/PlayerListener.java
+@@ -27,6 +27,7 @@ public class PlayerListener implements Listener {
+     private final DebugUtil logger;
+     private final PlayerVariablesManager playerVariablesManager;
+     private final ServerVariablesManager serverVariablesManager;
++    private final cn.drcomo.sync.OnlinePlayerTracker onlinePlayerTracker;
+     // 入服兜底刷新冷却：防止玩家频繁重登触发
+     private final java.util.concurrent.ConcurrentHashMap<java.util.UUID, Long> lastJoinRefreshAt = new java.util.concurrent.ConcurrentHashMap<>();
+     
+@@ -34,12 +35,14 @@ public class PlayerListener implements Listener {
+             DrcomoVEX plugin,
+             DebugUtil logger,
+             PlayerVariablesManager playerVariablesManager,
+-            ServerVariablesManager serverVariablesManager
++            ServerVariablesManager serverVariablesManager,
++            cn.drcomo.sync.OnlinePlayerTracker onlinePlayerTracker
+     ) {
+         this.plugin = plugin;
+         this.logger = logger;
+         this.playerVariablesManager = playerVariablesManager;
+         this.serverVariablesManager = serverVariablesManager;
++        this.onlinePlayerTracker = onlinePlayerTracker;
+     }
+     
+     /**
+@@ -48,6 +51,9 @@ public class PlayerListener implements Listener {
+     @EventHandler(priority = EventPriority.MONITOR)
+     public void onPlayerJoin(PlayerJoinEvent event) {
+         try {
++            if (onlinePlayerTracker != null) {
++                onlinePlayerTracker.markOnline(event.getPlayer().getUniqueId());
++            }
+             // 预加载玩家变量数据到内存（高性能优化）
+             plugin.getVariablesManager().handlePlayerJoin(event.getPlayer())
+                     .thenRun(() -> logger.debug("玩家 " + event.getPlayer().getName() + " 变量数据预加载完成"))
+@@ -85,6 +91,9 @@ public class PlayerListener implements Listener {
+             serverVariablesManager.handlePlayerQuit(event.getPlayer());
+             // 冷却清理
+             lastJoinRefreshAt.remove(event.getPlayer().getUniqueId());
++            if (onlinePlayerTracker != null) {
++                onlinePlayerTracker.markOffline(event.getPlayer().getUniqueId());
++            }
+             
+         } catch (Exception e) {
+             logger.error("处理玩家退出事件失败: " + event.getPlayer().getName(), e);
+@@ -197,4 +206,4 @@ public class PlayerListener implements Listener {
+             }
+         }
+     }
+-}
+\ No newline at end of file
++}
+diff --git a/src/main/java/cn/drcomo/managers/RefactoredVariablesManager.java b/src/main/java/cn/drcomo/managers/RefactoredVariablesManager.java
+index a358a41..fec8709 100644
+--- a/src/main/java/cn/drcomo/managers/RefactoredVariablesManager.java
++++ b/src/main/java/cn/drcomo/managers/RefactoredVariablesManager.java
+@@ -479,6 +479,79 @@ public class RefactoredVariablesManager {
+                 newIncrement = fitted;
+                 displayValue = fitted;
+             }
++            if (player != null && variable != null && variable.isPlayerScoped()) {
++                String resolvedAdd = resolveExpression(addValue, player, variable, allowPapi);
++                final String finalResolvedAdd = resolvedAdd;
++                final String finalDisplay = displayValue;
++                final String finalNewIncrement = newIncrement;
++                VariableResult[] resultHolder = new VariableResult[1];
++                memoryStorage.updatePlayerVariableAtomic(player.getUniqueId(), key, old -> {
++                    if (old == null) {
++                        return old;
++                    }
++                    String actual = old.getActualValue();
++                    String inc;
++                    if (isFormulaVariable(variable)) {
++                        String currentIncInternal = getCurrentIncrementForFormula(old);
++                        inc = calculateFormulaIncrement(variable.getValueType(), currentIncInternal, finalResolvedAdd, true);
++                    } else {
++                        inc = calculateAddition(variable.getValueType(), actual, finalResolvedAdd);
++                    }
++                    String fittedLocal = fitValueWithinLimitOrNull(variable,
++                            isFormulaVariable(variable) ? finalDisplay : inc,
++                            player, allowPapi);
++                    if (fittedLocal == null) {
++                        resultHolder[0] = VariableResult.failure("加法结果超出限制", "ADD", key, playerName);
++                        return old;
++                    }
++                    old.setValueAndMarkDirty(isFormulaVariable(variable) ? finalNewIncrement : fittedLocal);
++                    resultHolder[0] = VariableResult.success(finalDisplay, "ADD", key, playerName);
++                    return old;
++                }, PlayerVariableChangeEvent.ChangeReason.ADD.name());
++                if (resultHolder[0] != null) {
++                    return resultHolder[0];
++                }
++            }
++            if (player != null && variable != null && variable.isPlayerScoped()) {
++                String resolvedAdd = resolveExpression(addValue, player, variable, allowPapi);
++                String base = null;
++                if (isFormulaVariable(variable)) {
++                    EffectiveParams params = getEffectiveParams(variable, player, allowPapi);
++                    base = resolveExpression(params.getInitial(), player, variable, allowPapi);
++                }
++                final String finalResolvedAdd = resolvedAdd;
++                final String finalBase = base;
++                VariableResult[] resultHolder = new VariableResult[1];
++                memoryStorage.updatePlayerVariableAtomic(player.getUniqueId(), key, old -> {
++                    if (old == null) {
++                        return old;
++                    }
++                    String actual = old.getActualValue();
++                    String inc;
++                    String display;
++                    if (isFormulaVariable(variable)) {
++                        String currentIncInternal = getCurrentIncrementForFormula(old);
++                        inc = calculateFormulaIncrement(variable.getValueType(), currentIncInternal, finalResolvedAdd, true);
++                        display = addFormulaIncrement(finalBase, inc, variable.getValueType());
++                    } else {
++                        inc = calculateAddition(variable.getValueType(), actual, finalResolvedAdd);
++                        display = inc;
++                    }
++                    String fittedLocal = fitValueWithinLimitOrNull(variable,
++                            isFormulaVariable(variable) ? display : inc,
++                            player, allowPapi);
++                    if (fittedLocal == null) {
++                        resultHolder[0] = VariableResult.failure("加法结果超出限制", "ADD", key, playerName);
++                        return old;
++                    }
++                    old.setValueAndMarkDirty(isFormulaVariable(variable) ? inc : fittedLocal);
++                    resultHolder[0] = VariableResult.success(isFormulaVariable(variable) ? display : fittedLocal, "ADD", key, playerName);
++                    return old;
++                }, PlayerVariableChangeEvent.ChangeReason.ADD.name());
++                if (resultHolder[0] != null) {
++                    return resultHolder[0];
++                }
++            }
+             updateMemoryAndInvalidate(player, variable, newIncrement, PlayerVariableChangeEvent.ChangeReason.ADD);
+             return VariableResult.success(displayValue, "ADD", key, playerName);
+         } catch (Exception e) {
+@@ -553,6 +626,79 @@ public class RefactoredVariablesManager {
+                 newIncrement = fitted;
+                 displayValue = fitted;
+             }
++            if (player != null && variable != null && variable.isPlayerScoped()) {
++                String resolvedRemove = resolveExpression(removeValue, player, variable, allowPapi);
++                final String finalResolvedRemove = resolvedRemove;
++                final String finalDisplay = displayValue;
++                final String finalNewIncrement = newIncrement;
++                VariableResult[] resultHolder = new VariableResult[1];
++                memoryStorage.updatePlayerVariableAtomic(player.getUniqueId(), key, old -> {
++                    if (old == null) {
++                        return old;
++                    }
++                    String actual = old.getActualValue();
++                    String inc;
++                    if (isFormulaVariable(variable)) {
++                        String currentIncInternal = getCurrentIncrementForFormula(old);
++                        inc = calculateFormulaIncrement(variable.getValueType(), currentIncInternal, finalResolvedRemove, false);
++                    } else {
++                        inc = calculateAddition(variable.getValueType(), actual, "-" + finalResolvedRemove);
++                    }
++                    String fittedLocal = fitValueWithinLimitOrNull(variable,
++                            isFormulaVariable(variable) ? finalDisplay : inc,
++                            player, allowPapi);
++                    if (fittedLocal == null) {
++                        resultHolder[0] = VariableResult.failure("删除结果超出限制", "REMOVE", key, playerName);
++                        return old;
++                    }
++                    old.setValueAndMarkDirty(isFormulaVariable(variable) ? finalNewIncrement : fittedLocal);
++                    resultHolder[0] = VariableResult.success(finalDisplay, "REMOVE", key, playerName);
++                    return old;
++                }, PlayerVariableChangeEvent.ChangeReason.REMOVE.name());
++                if (resultHolder[0] != null) {
++                    return resultHolder[0];
++                }
++            }
++            if (player != null && variable != null && variable.isPlayerScoped()) {
++                String resolvedRemove = resolveExpression(removeValue, player, variable, allowPapi);
++                String base = null;
++                if (isFormulaVariable(variable)) {
++                    EffectiveParams params = getEffectiveParams(variable, player, allowPapi);
++                    base = resolveExpression(params.getInitial(), player, variable, allowPapi);
++                }
++                final String finalResolvedRemove = resolvedRemove;
++                final String finalBase = base;
++                VariableResult[] resultHolder = new VariableResult[1];
++                memoryStorage.updatePlayerVariableAtomic(player.getUniqueId(), key, old -> {
++                    if (old == null) {
++                        return old;
++                    }
++                    String actual = old.getActualValue();
++                    String inc;
++                    String display;
++                    if (isFormulaVariable(variable)) {
++                        String currentIncInternal = getCurrentIncrementForFormula(old);
++                        inc = calculateFormulaIncrement(variable.getValueType(), currentIncInternal, finalResolvedRemove, false);
++                        display = addFormulaIncrement(finalBase, inc, variable.getValueType());
++                    } else {
++                        inc = calculateAddition(variable.getValueType(), actual, "-" + finalResolvedRemove);
++                        display = inc;
++                    }
++                    String fittedLocal = fitValueWithinLimitOrNull(variable,
++                            isFormulaVariable(variable) ? display : inc,
++                            player, allowPapi);
++                    if (fittedLocal == null) {
++                        resultHolder[0] = VariableResult.failure("删除结果超出限制", "REMOVE", key, playerName);
++                        return old;
++                    }
++                    old.setValueAndMarkDirty(isFormulaVariable(variable) ? inc : fittedLocal);
++                    resultHolder[0] = VariableResult.success(isFormulaVariable(variable) ? display : fittedLocal, "REMOVE", key, playerName);
++                    return old;
++                }, PlayerVariableChangeEvent.ChangeReason.REMOVE.name());
++                if (resultHolder[0] != null) {
++                    return resultHolder[0];
++                }
++            }
+             updateMemoryAndInvalidate(player, variable, newIncrement, PlayerVariableChangeEvent.ChangeReason.REMOVE);
+             return VariableResult.success(displayValue, "REMOVE", key, playerName);
+         } catch (Exception e) {
+@@ -1894,6 +2040,59 @@ public class RefactoredVariablesManager {
+         return v;
+     }
+ 
++    /**
++     * 对外暴露：解析变量的 max，支持参数组与占位符/表达式。
++     * 未配置或无法解析时返回空字符串。
++     */
++    public String resolveEffectiveMax(OfflinePlayer player, String key, boolean allowPapi) {
++        if (isBlank(key)) return "";
++        Variable variable = getVariableDefinition(key);
++        if (variable == null) return "";
++        return resolveEffectiveBoundAsString(player, variable, allowPapi, true);
++    }
++
++    /**
++     * 对外暴露：解析变量的 min，支持参数组与占位符/表达式。
++     * 未配置或无法解析时返回空字符串。
++     */
++    public String resolveEffectiveMin(OfflinePlayer player, String key, boolean allowPapi) {
++        if (isBlank(key)) return "";
++        Variable variable = getVariableDefinition(key);
++        if (variable == null) return "";
++        return resolveEffectiveBoundAsString(player, variable, allowPapi, false);
++    }
++
++    /**
++     * 对外暴露：解析变量的 initial，支持参数组与占位符/表达式。
++     * 未配置时返回空字符串。
++     */
++    public String resolveEffectiveInitial(OfflinePlayer player, String key, boolean allowPapi) {
++        if (isBlank(key)) return "";
++        Variable variable = getVariableDefinition(key);
++        if (variable == null) return "";
++        EffectiveParams params = getEffectiveParams(variable, player, allowPapi);
++        String init = params.getInitial();
++        if (isBlank(init)) return "";
++        return resolveExpression(init, player, variable, allowPapi);
++    }
++
++    private String resolveEffectiveBoundAsString(OfflinePlayer player, Variable variable, boolean allowPapi, boolean isMax) {
++        EffectiveParams params = getEffectiveParams(variable, player, allowPapi);
++        String raw = isMax ? params.getMax() : params.getMin();
++        Double v = parseDoubleWithPlaceholders(raw, player, variable, allowPapi);
++        if (v == null && params.getLimitations() != null) {
++            String limRaw = isMax ? params.getLimitations().getMaxValue() : params.getLimitations().getMinValue();
++            v = parseDoubleWithPlaceholders(limRaw, player, variable, allowPapi);
++        }
++        if (v == null) return "";
++        ValueType vt = variable.getValueType();
++        if (vt == null) vt = ValueType.DOUBLE;
++        if (vt != ValueType.INT && vt != ValueType.DOUBLE) {
++            vt = ValueType.INT;
++        }
++        return formatNumber(vt, v);
++    }
++
+     private Double parseDoubleSafe(String raw) {
+         if (isBlank(raw)) return null;
+         try {
+@@ -2637,6 +2836,9 @@ public class RefactoredVariablesManager {
+                             memoryStorage.loadPlayerVariable(
+                                     player.getUniqueId(), key, normalizedValue, tri.updatedAt, tri.firstModifiedAt);
+                         } else {
++                            if (shouldSkipDbOverwrite(puid, key, 0L)) {
++                                return;
++                            }
+                             memoryStorage.removePlayerVariable(player.getUniqueId(), key, false);
+                         }
+                     }).exceptionally(ex -> {
+@@ -2694,19 +2896,13 @@ public class RefactoredVariablesManager {
+ 
+     /** 玩家变量统一三元组查询 */
+     private CompletableFuture<ValueTriple> fetchPlayerTriple(String playerUuid, String key) {
+-        CompletableFuture<String> vF = database.queryValueAsync(
+-                "SELECT value FROM player_variables WHERE player_uuid = ? AND variable_key = ?", playerUuid, key);
+-        CompletableFuture<String> uF = database.queryValueAsync(
+-                "SELECT updated_at FROM player_variables WHERE player_uuid = ? AND variable_key = ?", playerUuid, key);
+-        CompletableFuture<String> fF = database.queryValueAsync(
+-                "SELECT first_modified_at FROM player_variables WHERE player_uuid = ? AND variable_key = ?", playerUuid, key);
+-
+-        return CompletableFuture.allOf(vF, uF, fF)
+-                .thenApply(ignored -> new ValueTriple(
+-                        vF.join(),
+-                        parseLongOrNow(uF.join()),
+-                        parseLongOrNow(fF.join())
+-                ));
++        return database.queryPlayerVariableTripleAsync(playerUuid, key)
++                .thenApply(tri -> {
++                    if (tri == null) {
++                        return new ValueTriple(null, System.currentTimeMillis(), System.currentTimeMillis());
++                    }
++                    return new ValueTriple(tri[0], parseLongOrNow(tri[1]), parseLongOrNow(tri[2]));
++                });
+     }
+ 
+     /** 安全解析为 long，失败返回当前时间戳 */
+diff --git a/src/main/java/cn/drcomo/storage/BatchPersistenceManager.java b/src/main/java/cn/drcomo/storage/BatchPersistenceManager.java
+index 643620a..2eb3fda 100644
+--- a/src/main/java/cn/drcomo/storage/BatchPersistenceManager.java
++++ b/src/main/java/cn/drcomo/storage/BatchPersistenceManager.java
+@@ -40,8 +40,7 @@ public class BatchPersistenceManager {
+     private final double memoryPressureThreshold;
+     private final int maxRetries;
+ 
+-    // 持久化任务队列与线程池
+-    private final BlockingQueue<PersistenceTask> persistenceQueue;
++    // 持久化线程池
+     private final ExecutorService persistenceExecutor;
+     private final ScheduledExecutorService scheduler;
+     private ScheduledFuture<?> scheduledPersistenceTask;
+@@ -52,8 +51,7 @@ public class BatchPersistenceManager {
+     private final AtomicLong failedPersistenceOperations = new AtomicLong(0);
+     private final AtomicLong lastPersistenceTime = new AtomicLong(0);
+ 
+-    // 运行状态
+-    private volatile boolean running = true;
++    // 运行状态字段已移除
+ 
+     // --- 构造函数 ---
+     public BatchPersistenceManager(
+@@ -74,8 +72,7 @@ public class BatchPersistenceManager {
+         this.memoryPressureThreshold = config.getMemoryPressureThreshold();
+         this.maxRetries = config.getMaxRetries();
+ 
+-        // 初始化队列和线程池
+-        this.persistenceQueue = new LinkedBlockingQueue<>(config.getQueueSize());
++        // 初始化线程池
+         this.persistenceExecutor = Executors.newFixedThreadPool(
+                 config.getWorkerThreads(),
+                 r -> {
+@@ -98,10 +95,7 @@ public class BatchPersistenceManager {
+      */
+     public void start() {
+         logger.info("启动批量持久化管理器...");
+-        // 启动工作线程
+-        for (int i = 0; i < 2; i++) {
+-            persistenceExecutor.submit(this::persistenceWorker);
+-        }
++        // 持久化工作线程已移除
+         // 启动定时批量持久化
+         scheduledPersistenceTask = scheduler.scheduleAtFixedRate(
+                 this::scheduledPersistence,
+@@ -116,7 +110,6 @@ public class BatchPersistenceManager {
+      */
+     public void shutdown() {
+         logger.info("正在关闭批量持久化管理器...");
+-        running = false;
+         
+         // 取消定时任务
+         if (scheduledPersistenceTask != null) {
+@@ -241,7 +234,7 @@ public class BatchPersistenceManager {
+                 totalPersistedVariables.get(),
+                 failedPersistenceOperations.get(),
+                 lastPersistenceTime.get(),
+-                persistenceQueue.size(),
++                0,
+                 memoryStorage.getAllDirtyData().size()
+         );
+     }
+@@ -265,38 +258,6 @@ public class BatchPersistenceManager {
+         }
+     }
+ 
+-    /**
+-     * 工作线程主循环
+-     */
+-    private void persistenceWorker() {
+-        logger.debug("持久化工作线程启动");
+-        while (running) {
+-            try {
+-                PersistenceTask first = persistenceQueue.poll(1, TimeUnit.SECONDS);
+-                if (first == null) continue;
+-                List<PersistenceTask> batch = new ArrayList<>();
+-                batch.add(first);
+-                long start = System.currentTimeMillis();
+-                while (batch.size() < maxBatchSize &&
+-                        System.currentTimeMillis() - start < 100) {
+-                    PersistenceTask next = persistenceQueue.poll(10, TimeUnit.MILLISECONDS);
+-                    if (next == null) break;
+-                    batch.add(next);
+-                }
+-                try {
+-                    executeBatchPersistence(batch);
+-                } catch (Exception e) {
+-                    logger.error("工作线程执行批量持久化失败", e);
+-                }
+-            } catch (InterruptedException e) {
+-                Thread.currentThread().interrupt();
+-                break;
+-            } catch (Exception e) {
+-                logger.error("持久化工作线程异常", e);
+-            }
+-        }
+-        logger.debug("持久化工作线程退出");
+-    }
+ 
+     /**
+      * 收集持久化任务
+@@ -480,7 +441,7 @@ public class BatchPersistenceManager {
+      */
+     private void clearDirtyFlags(List<PersistenceTask> tasks) {
+         for (PersistenceTask t : tasks) {
+-            memoryStorage.clearDirtyFlag(t.getKey());
++            memoryStorage.clearDirtyFlag(t.getKey(), t.getDirtyFlag());
+         }
+     }
+ 
+@@ -492,8 +453,8 @@ public class BatchPersistenceManager {
+         for (PersistenceTask t : tasks) {
+             t.getDirtyFlag().incrementRetry();
+             if (t.getDirtyFlag().hasExcessiveRetries(maxRetries)) {
+-                logger.error("任务重试次数过多，放弃持久化: " + t.getKey());
+-                memoryStorage.clearDirtyFlag(t.getKey());
++                logger.error("任务重试次数过多，跳过本轮持久化: " + t.getKey());
++                // 保留脏标记，避免丢失最新数据
+             }
+         }
+     }
+diff --git a/src/main/java/cn/drcomo/storage/VariableMemoryStorage.java b/src/main/java/cn/drcomo/storage/VariableMemoryStorage.java
+index 9e60fd1..5783787 100644
+--- a/src/main/java/cn/drcomo/storage/VariableMemoryStorage.java
++++ b/src/main/java/cn/drcomo/storage/VariableMemoryStorage.java
+@@ -236,6 +236,55 @@ public class VariableMemoryStorage {
+         }
+     }
+ 
++    public boolean loadPlayerVariableIfNewer(UUID playerId, String key, String value, long lastModified, long firstModifiedAt) {
++        if (playerId == null || key == null) {
++            return false;
++        }
++        memoryLock.writeLock().lock();
++        try {
++            ConcurrentHashMap<String, VariableValue> playerVars = playerVariables.computeIfAbsent(
++                    playerId, k -> new ConcurrentHashMap<>());
++            VariableValue existing = playerVars.get(key);
++            if (existing != null && (existing.isDirty() || existing.getLastModified() > lastModified)) {
++                return false;
++            }
++            VariableValue newValue = new VariableValue(value, lastModified, firstModifiedAt);
++            VariableValue old = playerVars.put(key, newValue);
++            if (old != null) {
++                updateMemoryUsage(newValue.getEstimatedMemoryUsage() - old.getEstimatedMemoryUsage());
++            } else {
++                updateMemoryUsage(newValue.getEstimatedMemoryUsage());
++            }
++            playerFirstModifiedIndex.compute(key, (k, v) -> v == null || firstModifiedAt < v ? firstModifiedAt : v);
++            return true;
++        } finally {
++            memoryLock.writeLock().unlock();
++        }
++    }
++
++    public boolean loadServerVariableIfNewer(String key, String value, long lastModified, long firstModifiedAt) {
++        if (key == null) {
++            return false;
++        }
++        memoryLock.writeLock().lock();
++        try {
++            VariableValue existing = serverVariables.get(key);
++            if (existing != null && (existing.isDirty() || existing.getLastModified() > lastModified)) {
++                return false;
++            }
++            VariableValue newValue = new VariableValue(value, lastModified, firstModifiedAt);
++            VariableValue old = serverVariables.put(key, newValue);
++            if (old != null) {
++                updateMemoryUsage(newValue.getEstimatedMemoryUsage() - old.getEstimatedMemoryUsage());
++            } else {
++                updateMemoryUsage(newValue.getEstimatedMemoryUsage());
++            }
++            return true;
++        } finally {
++            memoryLock.writeLock().unlock();
++        }
++    }
++
+     /**
+      * 获取服务器变量值
+      */
+@@ -502,28 +551,47 @@ public class VariableMemoryStorage {
+      * 清除脏数据标记（持久化完成后调用）
+      */
+     public void clearDirtyFlag(String key) {
+-        DirtyFlag flag = dirtyTracker.remove(key);
+-        if (flag != null) {
+-            // 同时清除对应变量的脏标记
++        DirtyFlag flag = dirtyTracker.get(key);
++        clearDirtyFlag(key, flag);
++    }
++
++    public void clearDirtyFlag(String key, DirtyFlag expectedFlag) {
++        if (key == null || expectedFlag == null) {
++            return;
++        }
++        memoryLock.writeLock().lock();
++        try {
++            if (expectedFlag.isDeleteOperation()) {
++                if (dirtyTracker.remove(key, expectedFlag)) {
++                    logger.debug("清除删除脏标记: " + key);
++                }
++                return;
++            }
+             if (key.startsWith("player:")) {
+                 String[] parts = key.split(":", 3);
+                 if (parts.length == 3) {
+                     UUID playerId = UUID.fromString(parts[1]);
+                     String varKey = parts[2];
+                     VariableValue value = getPlayerVariable(playerId, varKey);
+-                    if (value != null) {
+-                        value.clearDirty();
++                    if (value != null && (expectedFlag.getExpectedVersion() <= 0 || value.isVersionValid(expectedFlag.getExpectedVersion()))) {
++                        if (dirtyTracker.remove(key, expectedFlag)) {
++                            value.clearDirty();
++                            logger.debug("清除脏数据标记: " + key);
++                        }
+                     }
+                 }
+             } else if (key.startsWith("server:")) {
+                 String varKey = key.substring(7);
+                 VariableValue value = getServerVariable(varKey);
+-                if (value != null) {
+-                    value.clearDirty();
++                if (value != null && (expectedFlag.getExpectedVersion() <= 0 || value.isVersionValid(expectedFlag.getExpectedVersion()))) {
++                    if (dirtyTracker.remove(key, expectedFlag)) {
++                        value.clearDirty();
++                        logger.debug("清除脏数据标记: " + key);
++                    }
+                 }
+             }
+-            
+-            logger.debug("清除脏数据标记: " + key);
++        } finally {
++            memoryLock.writeLock().unlock();
+         }
+     }
+     
+diff --git a/src/main/java/cn/drcomo/storage/VariableValue.java b/src/main/java/cn/drcomo/storage/VariableValue.java
+index 5e0a887..a23e55d 100644
+--- a/src/main/java/cn/drcomo/storage/VariableValue.java
++++ b/src/main/java/cn/drcomo/storage/VariableValue.java
+@@ -258,7 +258,7 @@ public class VariableValue {
+             return value;
+         }
+         int lastSep = value.lastIndexOf(STRICT_SEPARATOR);
+-        if (lastSep > STRICT_PREFIX.length()) {
++        if (lastSep >= STRICT_PREFIX.length()) {
+             return value.substring(STRICT_PREFIX.length(), lastSep);
+         }
+         return value;
+@@ -272,7 +272,7 @@ public class VariableValue {
+             return 0;
+         }
+         int lastSep = value.lastIndexOf(STRICT_SEPARATOR);
+-        if (lastSep > STRICT_PREFIX.length() && lastSep + 1 < value.length()) {
++        if (lastSep >= STRICT_PREFIX.length() && lastSep + 1 < value.length()) {
+             try {
+                 return Long.parseLong(value.substring(lastSep + STRICT_SEPARATOR.length()));
+             } catch (NumberFormatException e) {
+diff --git a/src/main/resources/config.yml b/src/main/resources/config.yml
+index 00509e7..4ad4e4d 100644
+--- a/src/main/resources/config.yml
++++ b/src/main/resources/config.yml
+@@ -85,6 +85,19 @@ settings:
+     preheat: false             # 是否在失效缓存后对目标键进行预热（异步只读）
+     keys: []                   # 可选：指定兜底刷新键清单（留空则自动筛选）
+ 
++  # 跨服变量同步（MySQL）
++  cross-server-sync:
++    enabled: false
++    server-id: "s1"           # 每个子服唯一
++    poll-interval-ms: 250
++    batch-size: 500
++    retention-days: 7
++    fail-closed-on-db-error: true
++    cleanup-interval-seconds: 180
++    cleanup-safety-margin: 1000
++    ignore-stale-consumers: true
++    consumer-stale-days: 7
++
+ # 调试配置
+ debug:
+   # 日志级别: DEBUG, INFO, WARN, ERROR

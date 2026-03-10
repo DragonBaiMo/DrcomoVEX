@@ -40,6 +40,8 @@ public class PlayerVariableChangeEvent extends Event {
         RESET,
         /** 周期性恢复 */
         REGEN,
+        /** 远端子服同步 */
+        REMOTE_SYNC,
         /** 其他/未知 */
         OTHER
     }

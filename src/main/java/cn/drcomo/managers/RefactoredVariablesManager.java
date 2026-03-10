@@ -27,6 +27,7 @@ import cn.drcomo.util.DependencyResolver;
 import cn.drcomo.util.ValueLimiter;
 import cn.drcomo.corelib.math.FormulaCalculator;
 import cn.drcomo.events.PlayerVariableChangeEvent;
+import cn.drcomo.redis.RedisCrossServerSync;
 import org.bukkit.Bukkit;
 import org.bukkit.OfflinePlayer;
 import org.bukkit.entity.Player;
@@ -95,6 +96,7 @@ public class RefactoredVariablesManager {
     private final PlaceholderConditionEvaluator conditionEvaluator;
     private final Set<String> regenVariableKeys = ConcurrentHashMap.newKeySet();
     private final ConcurrentHashMap<UUID, Long> recentAccessPlayers = new ConcurrentHashMap<>();
+    private volatile RedisCrossServerSync redisSyncService;
 
     /**
      * 穿透查询的“负缓存”（DB 明确无记录时）：避免频繁 miss 导致 DB 压力。
@@ -113,7 +115,15 @@ public class RefactoredVariablesManager {
     private static final long MAIN_THREAD_DB_READ_TIMEOUT_MS = 10L;
 
     /** 异步线程穿透查询超时预算（ms） */
-    private static final long ASYNC_THREAD_DB_READ_TIMEOUT_MS = 50L;
+    private static final long ASYNC_THREAD_DB_READ_TIMEOUT_MS = 3_000L;
+
+    /**
+     * 离线读路径下，本地脏值覆盖 DB 的判定窗口：
+     * 仅当本地脏值时间戳严格新于 DB 更新时间时，才允许保留本地脏值。
+     */
+    private static final long OFFLINE_DIRTY_BEATS_DB_MIN_DELTA_MS = 1L;
+
+    // 不再使用时间窗口裁决，避免在数据库写入延迟场景下将合法脏值误判为旧值。
 
     // 变量定义注册表
     private final ConcurrentHashMap<String, Variable> variableRegistry = new ConcurrentHashMap<>();
@@ -316,12 +326,29 @@ public class RefactoredVariablesManager {
         return memoryStorage.getPlayerFirstModifiedAtAsync(key);
     }
 
+    /**
+     * 注入 Redis 跨服同步服务（可选）。
+     */
+    public void setRedisSyncService(RedisCrossServerSync redisSyncService) {
+        this.redisSyncService = redisSyncService;
+    }
+
+    public RedisCrossServerSync getRedisSyncService() {
+        return redisSyncService;
+    }
+
     // ======================== 公共 API：变量操作 ========================
 
     /**
      * 获取变量值（完全异步，无阻塞）
      */
     public CompletableFuture<VariableResult> getVariable(OfflinePlayer player, String key) {
+        if (Bukkit.isPrimaryThread() && shouldForceAsyncForOfflinePlayer(player)) {
+            return CompletableFuture.supplyAsync(
+                    () -> getVariableSync(player, key, false),
+                    asyncTaskManager.getExecutor()
+            );
+        }
         if (Bukkit.isPrimaryThread()) {
             return CompletableFuture.completedFuture(getVariableSync(player, key, true));
         }
@@ -353,7 +380,12 @@ public class RefactoredVariablesManager {
             touchRecentPlayer(player);
             return VariableResult.success(finalValue, "GET", key, playerName);
         } catch (Exception e) {
-            logger.error("获取变量失败: " + key, e);
+            // DB穿透查询超时是预期情况，使用warn级别且不打印堆栈
+            if (e.getMessage() != null && e.getMessage().contains("DB穿透查询失败")) {
+                logger.warn("获取变量失败: " + key + " - " + e.getMessage());
+            } else {
+                logger.error("获取变量失败: " + key, e);
+            }
             return VariableResult.fromException(e, "GET", key, playerName);
         }
     }
@@ -371,6 +403,12 @@ public class RefactoredVariablesManager {
      */
     public CompletableFuture<VariableResult> setVariable(OfflinePlayer player, String key, String value) {
         final String playerName = getPlayerName(player);
+        if (Bukkit.isPrimaryThread() && shouldForceAsyncForOfflinePlayer(player)) {
+            return CompletableFuture.supplyAsync(
+                    () -> setVariableSync(player, key, value, false),
+                    asyncTaskManager.getExecutor()
+            );
+        }
         if (Bukkit.isPrimaryThread()) {
             return CompletableFuture.completedFuture(setVariableSync(player, key, value, true));
         }
@@ -412,6 +450,12 @@ public class RefactoredVariablesManager {
      */
     public CompletableFuture<VariableResult> addVariable(OfflinePlayer player, String key, String addValue) {
         final String playerName = getPlayerName(player);
+        if (Bukkit.isPrimaryThread() && shouldForceAsyncForOfflinePlayer(player)) {
+            return CompletableFuture.supplyAsync(
+                    () -> addVariableSync(player, key, addValue, false),
+                    asyncTaskManager.getExecutor()
+            );
+        }
         if (Bukkit.isPrimaryThread()) {
             return CompletableFuture.completedFuture(addVariableSync(player, key, addValue, true));
         }
@@ -492,6 +536,12 @@ public class RefactoredVariablesManager {
      */
     public CompletableFuture<VariableResult> removeVariable(OfflinePlayer player, String key, String removeValue) {
         final String playerName = getPlayerName(player);
+        if (Bukkit.isPrimaryThread() && shouldForceAsyncForOfflinePlayer(player)) {
+            return CompletableFuture.supplyAsync(
+                    () -> removeVariableSync(player, key, removeValue, false),
+                    asyncTaskManager.getExecutor()
+            );
+        }
         if (Bukkit.isPrimaryThread()) {
             return CompletableFuture.completedFuture(removeVariableSync(player, key, removeValue, true));
         }
@@ -567,6 +617,12 @@ public class RefactoredVariablesManager {
     public CompletableFuture<VariableResult> resetVariable(OfflinePlayer player, String key) {
 
         final String playerName = getPlayerName(player);
+        if (Bukkit.isPrimaryThread() && shouldForceAsyncForOfflinePlayer(player)) {
+            return CompletableFuture.supplyAsync(
+                    () -> resetVariableSync(player, key, false),
+                    asyncTaskManager.getExecutor()
+            );
+        }
         if (Bukkit.isPrimaryThread()) {
             return CompletableFuture.completedFuture(resetVariableSync(player, key, true));
         }
@@ -583,7 +639,7 @@ public class RefactoredVariablesManager {
             Optional<VariableResult> pre = checkOpPreconditions(player, variable, key, "RESET", playerName, true, allowPapi);
             if (pre.isPresent()) return pre.get();
 
-            removeFromMemoryAndInvalidate(player, variable);
+            removeFromMemoryAndInvalidate(player, variable, "RESET");
 
             if (variable.isStrictInitialMode()) {
                 dependencyResolver.clearSnapshot(player, key);
@@ -692,7 +748,7 @@ public class RefactoredVariablesManager {
                 if (var.isPlayerScoped() && player != null) {
                     // 从数据库查询并更新内存
                     String pid = player.getUniqueId().toString();
-                    return fetchPlayerTriple(pid, key).thenAccept(tri -> {
+                    return fetchPlayerTriple(pid, key, false).thenAccept(tri -> {
                         if (tri.value != null) {
                             // 若该玩家该变量在内存中存在未落库的脏写入，则不允许 DB 覆盖，避免“离线改值后入服变回去”
                             if (shouldSkipDbOverwrite(player.getUniqueId(), key, tri.updatedAt)) {
@@ -1282,6 +1338,13 @@ public class RefactoredVariablesManager {
         return player != null && player.isOnline() && player.getPlayer() != null;
     }
 
+    /**
+     * 离线玩家在主线程触发时，强制切到异步线程执行，避免主线程等待 DB。
+     */
+    private boolean shouldForceAsyncForOfflinePlayer(OfflinePlayer player) {
+        return player != null && !player.isOnline();
+    }
+
     private boolean isNumberInRange(double value, String minStr, String maxStr) {
         if (minStr != null) {
             try {
@@ -1309,11 +1372,33 @@ public class RefactoredVariablesManager {
      * 穿透查询策略：当内存未命中时，同步从数据库加载到内存，解决跨服离线玩家数据访问问题
      */
     private VariableValue getMemoryValue(OfflinePlayer player, Variable variable) {
+        // [DIAG] 诊断日志：getMemoryValue 入口
+        boolean isOnline = player != null && player.isOnline();
+        boolean shouldForceAsync = shouldForceAsyncForOfflinePlayer(player);
+        logger.debug("[DIAG-getMemoryValue] player=" + getPlayerName(player)
+                + ", key=" + variable.getKey()
+                + ", isOnline=" + isOnline
+                + ", shouldForceAsync=" + shouldForceAsync
+                + ", thread=" + Thread.currentThread().getName());
+
         if (variable.isPlayerScoped() && player != null) {
+            // 关键修复：本服离线玩家按 DB 优先，避免命中本地旧内存导致跨服不一致。
+            if (shouldForceAsync) {
+                logger.debug("[DIAG-getMemoryValue] 走离线DB优先路径: player=" + getPlayerName(player) + ", key=" + variable.getKey());
+                return getOfflinePlayerMemoryValueDbFirst(player, variable.getKey());
+            }
+
             VariableValue val = memoryStorage.getPlayerVariable(player.getUniqueId(), variable.getKey());
+            logger.debug("[DIAG-getMemoryValue] 在线路径内存查询: player=" + getPlayerName(player)
+                    + ", key=" + variable.getKey()
+                    + ", memoryHit=" + (val != null)
+                    + ", memoryValue=" + (val != null ? val.getActualValue() : "null"));
             if (val == null) {
-                // 穿透查询：内存未命中时从数据库加载
-                val = loadPlayerVariableFromDBSync(player, variable.getKey());
+                // 在线路径保持"内存未命中再穿透 DB"的低开销策略
+                val = loadPlayerVariableFromDBSync(player, variable.getKey(), false);
+                logger.debug("[DIAG-getMemoryValue] 在线路径DB穿透结果: player=" + getPlayerName(player)
+                        + ", key=" + variable.getKey()
+                        + ", dbValue=" + (val != null ? val.getActualValue() : "null"));
             }
             return val;
         } else if (variable.isGlobal()) {
@@ -1323,40 +1408,103 @@ public class RefactoredVariablesManager {
     }
 
     /**
+     * 本服离线玩家读取策略：DB 优先，防止旧内存短路导致读到初始值/旧值。
+     *
+     * 规则：
+     * 1) 强制查询 DB（绕过负缓存短路）；
+     * 2) DB 命中时默认以 DB 为准，只有"本地脏值时间戳严格新于 DB"才保留本地；
+     * 3) DB 无记录时，保留本地脏值；清理本地非脏旧值。
+     */
+    private VariableValue getOfflinePlayerMemoryValueDbFirst(OfflinePlayer player, String key) {
+        logger.debug("[DIAG-getOfflinePlayerMemoryValueDbFirst] 进入离线DB优先方法: player=" + getPlayerName(player) + ", key=" + key);
+        if (player == null || key == null || key.isEmpty()) {
+            logger.debug("[DIAG-getOfflinePlayerMemoryValueDbFirst] 参数无效，返回null");
+            return null;
+        }
+        VariableValue result = loadPlayerVariableFromDBSync(player, key, true);
+        logger.debug("[DIAG-getOfflinePlayerMemoryValueDbFirst] DB查询结果: player=" + getPlayerName(player)
+                + ", key=" + key
+                + ", result=" + (result != null ? result.getActualValue() : "null"));
+        return result;
+    }
+
+    /**
+     * 离线读冲突裁决：是否允许本地脏值优先于 DB。
+     *
+     * 仅当本地值为 dirty 且本地最后修改时间严格新于 DB 更新时间，才保留本地脏值。
+     */
+    private boolean shouldKeepLocalDirtyOnOfflineRead(VariableValue localVal, long dbUpdatedAt) {
+        if (localVal == null || !localVal.isDirty()) {
+            return false;
+        }
+        return localVal.getLastModified() >= (dbUpdatedAt + OFFLINE_DIRTY_BEATS_DB_MIN_DELTA_MS);
+    }
+
+    /** 暴露内存存储（供跨服同步服务使用） */
+    public VariableMemoryStorage getMemoryStorage() {
+        return memoryStorage;
+    }
+
+    /**
      * 同步从数据库加载玩家变量到内存（穿透查询）
      * 
      * 用于跨服场景下离线玩家数据的即时加载
      * 
      * 注意事项：
-     * - 此方法会阻塞调用线程（建议预算 <= 50ms），避免在主线程高频调用
+     * - 此方法会阻塞调用线程（异步线程超时预算 3 秒），避免在主线程高频调用
      * - 包含竞态保护：DB 查询期间若内存已被其他线程写入，优先使用内存值
      * - 包含缓存穿透保护：DB 不存在时写入负缓存（TTL），避免重复查询
      * 
      * @param player 玩家
      * @param key 变量键
-     * @return 加载后的 VariableValue；若数据库无记录或 DB 读取失败，则返回 null（上层将回退默认值）
+     * @return 加载后的 VariableValue；若数据库无记录返回 null；若 DB 读取失败抛出异常
      */
     private VariableValue loadPlayerVariableFromDBSync(OfflinePlayer player, String key) {
+        return loadPlayerVariableFromDBSync(player, key, false);
+    }
+
+    /**
+     * 同步从数据库加载玩家变量到内存（可选绕过负缓存）。
+     *
+     * @param player 玩家
+     * @param key 变量键
+     * @param bypassNegativeCache 是否绕过“DB 无记录”负缓存短路
+     */
+    private VariableValue loadPlayerVariableFromDBSync(OfflinePlayer player, String key, boolean bypassNegativeCache) {
+        logger.debug("[DIAG-loadPlayerVariableFromDBSync] 进入方法: player=" + getPlayerName(player)
+                + ", key=" + key
+                + ", bypassNegativeCache=" + bypassNegativeCache
+                + ", isPrimaryThread=" + Bukkit.isPrimaryThread()
+                + ", thread=" + Thread.currentThread().getName());
+
         if (player == null || key == null) {
+            logger.debug("[DIAG-loadPlayerVariableFromDBSync] 参数无效，返回null");
             return null;
         }
         try {
             String pid = player.getUniqueId().toString();
             UUID playerId = player.getUniqueId();
+            logger.debug("[DIAG-loadPlayerVariableFromDBSync] UUID=" + pid);
 
             // 负缓存：DB 确认无记录时，短时间内不再穿透，避免 DB miss 风暴
             String negKey = playerId + ":" + key;
-            if (playerNegativeCache.getIfPresent(negKey) != null) {
+            if (!bypassNegativeCache && playerNegativeCache.getIfPresent(negKey) != null) {
+                logger.debug("[DIAG-loadPlayerVariableFromDBSync] 命中负缓存，返回null");
                 return null;
             }
 
             // 同步查询数据库（穿透查询场景，需要立即获取结果）
-            // 重要：DB 异常/超时不能被当作“无记录”，否则会导致默认值参与后续写入，造成数据丢失。
+            // 重要：DB 异常/超时不能被当作"无记录"，否则会导致默认值参与后续写入，造成数据丢失。
             ValueTriple tri;
             try {
                 long timeoutMs = Bukkit.isPrimaryThread() ? MAIN_THREAD_DB_READ_TIMEOUT_MS : ASYNC_THREAD_DB_READ_TIMEOUT_MS;
-                tri = fetchPlayerTriple(pid, key).get(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS);
+                logger.debug("[DIAG-loadPlayerVariableFromDBSync] 开始DB查询: timeoutMs=" + timeoutMs);
+                tri = fetchPlayerTriple(pid, key, bypassNegativeCache).get(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS);
+                logger.debug("[DIAG-loadPlayerVariableFromDBSync] DB查询完成: tri.value=" + tri.value
+                        + ", tri.updatedAt=" + tri.updatedAt
+                        + ", tri.firstModifiedAt=" + tri.firstModifiedAt);
             } catch (Exception ex) {
+                logger.debug("[DIAG-loadPlayerVariableFromDBSync] DB查询异常: " + ex.getClass().getSimpleName() + " - " + ex.getMessage());
                 // Fail-closed：DB 读取失败时不允许回退到默认值继续参与后续 ADD/REMOVE 计算，否则可能造成数据丢失。
                 throw new RuntimeException("DB穿透查询失败: player=" + getPlayerName(player) + ", key=" + key
                         + ", err=" + (ex.getMessage() != null ? ex.getMessage() : ex.getClass().getSimpleName()), ex);
@@ -1364,12 +1512,11 @@ public class RefactoredVariablesManager {
 
             // [竞态保护] DB 查询期间内存可能已被其他线程写入，需二次检查
             VariableValue concurrentVal = memoryStorage.getPlayerVariable(playerId, key);
-            if (concurrentVal != null) {
-                logger.debug("穿透查询跳过: 内存已存在值 player=" + player.getName() + ", key=" + key);
-                return concurrentVal;
-            }
+            logger.debug("[DIAG-loadPlayerVariableFromDBSync] 竞态检查: concurrentVal=" + (concurrentVal != null ? concurrentVal.getActualValue() : "null")
+                    + ", isDirty=" + (concurrentVal != null ? concurrentVal.isDirty() : "N/A"));
 
             if (tri.value != null) {
+                logger.debug("[DIAG-loadPlayerVariableFromDBSync] DB命中: tri.value=" + tri.value);
                 // 命中：清理负缓存
                 playerNegativeCache.invalidate(negKey);
                 // 类型规范化
@@ -1377,19 +1524,86 @@ public class RefactoredVariablesManager {
                 String normalizedValue = (var != null)
                         ? normalizeValueByType(tri.value, var.getValueType())
                         : tri.value;
+                logger.debug("[DIAG-loadPlayerVariableFromDBSync] 规范化后: normalizedValue=" + normalizedValue);
+
+                if (concurrentVal != null) {
+                    if (bypassNegativeCache) {
+                        // 离线 DB 优先路径：仅当本地脏值严格新于 DB 时，才保留本地。
+                        if (shouldKeepLocalDirtyOnOfflineRead(concurrentVal, tri.updatedAt)) {
+                            logger.debug("[DIAG-loadPlayerVariableFromDBSync] 保留本地较新脏值: localValue=" + concurrentVal.getActualValue());
+                            logger.debug("离线DB优先读取: 保留本地较新脏值 player=" + getPlayerName(player)
+                                    + ", key=" + key
+                                    + ", local.updated_at=" + concurrentVal.getLastModified()
+                                    + ", db.updated_at=" + tri.updatedAt);
+                            return concurrentVal;
+                        }
+
+                        // rank 等关键变量输出审计，便于定位"本地脏值被 DB 覆盖"场景。
+                        if (concurrentVal.isDirty() && isAuditKey(key)) {
+                            long dirtyAgeMs = Math.max(0L, System.currentTimeMillis() - concurrentVal.getLastModified());
+                            logger.info(buildAuditLine(
+                                    "OFFLINE_DB_OVERRIDE",
+                                    player,
+                                    key,
+                                    concurrentVal.getActualValue(),
+                                    normalizedValue,
+                                    "db.updated_at=" + tri.updatedAt
+                                            + ",local.updated_at=" + concurrentVal.getLastModified()
+                                            + ",local.dirty_age_ms=" + dirtyAgeMs
+                            ));
+                        }
+                        logger.debug("[DIAG-loadPlayerVariableFromDBSync] 使用DB结果覆盖本地内存: dbValue=" + normalizedValue);
+                        logger.debug("离线DB优先读取: 使用DB结果覆盖本地内存 player=" + getPlayerName(player)
+                                + ", key=" + key
+                                + ", db.updated_at=" + tri.updatedAt);
+                    } else {
+                        logger.debug("[DIAG-loadPlayerVariableFromDBSync] 穿透查询跳过(内存已存在): concurrentVal=" + concurrentVal.getActualValue());
+                        logger.debug("穿透查询跳过: 内存已存在值 player=" + player.getName() + ", key=" + key);
+                        return concurrentVal;
+                    }
+                }
 
                 // 加载到内存
+                logger.debug("[DIAG-loadPlayerVariableFromDBSync] 加载到内存: normalizedValue=" + normalizedValue);
                 memoryStorage.loadPlayerVariable(playerId, key, normalizedValue, tri.updatedAt, tri.firstModifiedAt);
 
+                VariableValue finalResult = memoryStorage.getPlayerVariable(playerId, key);
+                logger.debug("[DIAG-loadPlayerVariableFromDBSync] 最终返回: " + (finalResult != null ? finalResult.getActualValue() : "null"));
                 logger.debug("穿透查询成功: player=" + player.getName() + ", key=" + key + ", value=" + normalizedValue);
-                return memoryStorage.getPlayerVariable(playerId, key);
+                return finalResult;
             } else {
-                // [缓存穿透保护] 数据库无记录：写入负缓存（TTL），不污染内存存储
-                playerNegativeCache.put(negKey, Boolean.TRUE);
+                logger.debug("[DIAG-loadPlayerVariableFromDBSync] DB未命中: tri.value=null");
+                if (bypassNegativeCache) {
+                    // 离线路径：DB 无记录时，保留本地脏值；清理本地非脏旧值。
+                    VariableValue latest = memoryStorage.getPlayerVariable(playerId, key);
+                    logger.debug("[DIAG-loadPlayerVariableFromDBSync] 离线路径检查本地: latest=" + (latest != null ? latest.getActualValue() : "null")
+                            + ", isDirty=" + (latest != null ? latest.isDirty() : "N/A"));
+                    if (latest != null) {
+                        if (latest.isDirty()) {
+                            logger.debug("[DIAG-loadPlayerVariableFromDBSync] DB无记录，保留本地脏值: " + latest.getActualValue());
+                            logger.debug("离线DB优先读取: DB无记录，保留本地脏值 player=" + getPlayerName(player)
+                                    + ", key=" + key);
+                            return latest;
+                        }
+                        logger.debug("[DIAG-loadPlayerVariableFromDBSync] DB无记录，清理本地旧内存");
+                        memoryStorage.removePlayerVariable(playerId, key, false);
+                        logger.debug("离线DB优先读取: DB无记录，已清理本地旧内存 player=" + getPlayerName(player)
+                                + ", key=" + key);
+                    }
+                    logger.debug("[DIAG-loadPlayerVariableFromDBSync] 离线路径返回null");
+                    return null;
+                }
+
+                // [缓存穿透保护] 普通路径 DB 无记录：写入负缓存（TTL），不污染内存存储
+                if (!bypassNegativeCache) {
+                    logger.debug("[DIAG-loadPlayerVariableFromDBSync] 写入负缓存");
+                    playerNegativeCache.put(negKey, Boolean.TRUE);
+                }
             }
+            logger.debug("[DIAG-loadPlayerVariableFromDBSync] 方法结束，返回null");
             return null;
         } catch (Exception e) {
-            // 若这里吞掉异常，会被上层当成“无记录”回退默认值，进而导致数据丢失。
+            // 若这里吞掉异常，会被上层当成"无记录"回退默认值，进而导致数据丢失。
             // 因此这里同样 fail-closed。
             if (e instanceof RuntimeException) {
                 throw (RuntimeException) e;
@@ -1404,8 +1618,11 @@ public class RefactoredVariablesManager {
         return getVariableFromMemoryOrDefault(player, variable, true);
     }
 
-        private String getVariableFromMemoryOrDefault(OfflinePlayer player, Variable variable, boolean allowPapi) {
+    private String getVariableFromMemoryOrDefault(OfflinePlayer player, Variable variable, boolean allowPapi) {
         String varKey = variable.getKey();
+        logger.debug("[DIAG-getVariableFromMemoryOrDefault] 进入方法: player=" + getPlayerName(player)
+                + ", key=" + varKey + ", allowPapi=" + allowPapi);
+
         Set<String> stack = valueResolvingStack.get();
         if (stack.contains(varKey)) {
             logger.warn("检测到变量值循环引用: " + varKey);
@@ -1418,11 +1635,13 @@ public class RefactoredVariablesManager {
             try {
                 if (variable.hasConditions()) {
                     if (!evaluateConditions(player, variable, allowPapi)) {
+                        logger.debug("[DIAG-getVariableFromMemoryOrDefault] 门控未通过，返回空串");
                         logger.debug("内部访问门控未通过: " + variable.getKey());
                         return "";
                     }
                 }
             } catch (Exception e) {
+                logger.debug("[DIAG-getVariableFromMemoryOrDefault] 门控评估异常，返回空串: " + e.getMessage());
                 logger.debug("内部访问门控评估异常，返回空串: " + variable.getKey());
                 return "";
             }
@@ -1431,6 +1650,11 @@ public class RefactoredVariablesManager {
             VariableValue val = getMemoryValue(player, variable);
             String init = params.getInitial();
             boolean isFormula = isFormulaVariable(variable);
+
+            logger.debug("[DIAG-getVariableFromMemoryOrDefault] 获取到: val=" + (val != null ? val.getActualValue() : "null")
+                    + ", init=" + init
+                    + ", isFormula=" + isFormula
+                    + ", isStrictInitialMode=" + variable.isStrictInitialMode());
 
             // 严格初始值模式
             if (variable.isStrictInitialMode() && !isBlank(init)) {
@@ -1486,16 +1710,21 @@ public class RefactoredVariablesManager {
             if (isFormula && !isBlank(init)) {
                 String base = resolveExpression(init, player, variable, allowPapi);
                 String res = (val != null) ? addFormulaIncrement(base, val.getActualValue(), variable.getValueType()) : base;
+                logger.debug("[DIAG-getVariableFromMemoryOrDefault] 公式变量返回: res=" + res);
                 return finalizeValueWithRegen(player, variable, val, res, allowPapi);
             }
             if (val != null) {
+                logger.debug("[DIAG-getVariableFromMemoryOrDefault] 使用内存值返回: val=" + val.getActualValue());
                 return finalizeValueWithRegen(player, variable, val, val.getActualValue(), allowPapi);
             }
             if (!isBlank(init)) {
                 String resolvedInit = resolveExpression(init, player, variable, allowPapi);
+                logger.debug("[DIAG-getVariableFromMemoryOrDefault] val为null，使用initial返回: init=" + resolvedInit);
                 return finalizeValueWithRegen(player, variable, val, resolvedInit, allowPapi);
             }
-            return finalizeValueWithRegen(player, variable, val, getDefaultValueByType(variable.getValueType()), allowPapi);
+            String defaultVal = getDefaultValueByType(variable.getValueType());
+            logger.debug("[DIAG-getVariableFromMemoryOrDefault] val为null且无init，使用默认值返回: default=" + defaultVal);
+            return finalizeValueWithRegen(player, variable, val, defaultVal, allowPapi);
         } finally {
             stack.remove(varKey);
         }
@@ -1520,6 +1749,10 @@ public class RefactoredVariablesManager {
             }
 
             memoryStorage.setPlayerVariable(player.getUniqueId(), variable.getKey(), value);
+            VariableValue latest = memoryStorage.getPlayerVariable(player.getUniqueId(), variable.getKey());
+            final String broadcastValue = latest != null ? latest.getRawValue() : null;
+            final long broadcastUpdatedAt = latest != null ? latest.getLastModified() : System.currentTimeMillis();
+            final long broadcastFirstModifiedAt = latest != null ? latest.getFirstModifiedAt() : broadcastUpdatedAt;
 
             // 关键变量审计日志（INFO 级别）
             if (isAuditKey(variable.getKey())) {
@@ -1556,8 +1789,31 @@ public class RefactoredVariablesManager {
             // 触发玩家变量变更事件（异步）
             firePlayerVariableChangeEvent(player, variable.getKey(), oldValue, value, reason);
 
+            // Redis 跨服广播（仅广播，不做本地回写）
+            if (latest != null && redisSyncService != null && redisSyncService.isEnabled()) {
+                asyncTaskManager.getExecutor().execute(() -> {
+                    try {
+                        redisSyncService.broadcastPlayerVariableChange(
+                                player.getUniqueId(),
+                                player.getName(),
+                                variable.getKey(),
+                                broadcastValue,
+                                broadcastUpdatedAt,
+                                broadcastFirstModifiedAt,
+                                reason != null ? reason.name() : "OTHER"
+                        );
+                    } catch (Exception ex) {
+                        logger.debug("广播玩家变量变更失败(已忽略): key=" + variable.getKey() + ", err=" + ex.getMessage());
+                    }
+                });
+            }
+
         } else if (variable.isGlobal()) {
             memoryStorage.setServerVariable(variable.getKey(), value);
+            VariableValue latest = memoryStorage.getServerVariable(variable.getKey());
+            final String broadcastValue = latest != null ? latest.getRawValue() : null;
+            final long broadcastUpdatedAt = latest != null ? latest.getLastModified() : System.currentTimeMillis();
+            final long broadcastFirstModifiedAt = latest != null ? latest.getFirstModifiedAt() : broadcastUpdatedAt;
             if (!persist) {
                 memoryStorage.clearDirtyFlag("server:" + variable.getKey());
                 logger.debug("服务器变量设置为不可持久化，跳过数据库保存: " + variable.getKey());
@@ -1565,6 +1821,23 @@ public class RefactoredVariablesManager {
             // 全局上下文缓存一并清理
             invalidateCachesSafely(null, variable.getKey());
             // 注意：全局变量暂不触发事件，因为 PlayerVariableChangeEvent 需要 player
+
+            // Redis 广播全局变量变更
+            if (latest != null && redisSyncService != null && redisSyncService.isEnabled()) {
+                asyncTaskManager.getExecutor().execute(() -> {
+                    try {
+                        redisSyncService.broadcastGlobalVariableChange(
+                                variable.getKey(),
+                                broadcastValue,
+                                broadcastUpdatedAt,
+                                broadcastFirstModifiedAt,
+                                reason != null ? reason.name() : "OTHER"
+                        );
+                    } catch (Exception ex) {
+                        logger.debug("广播全局变量变更失败(已忽略): key=" + variable.getKey() + ", err=" + ex.getMessage());
+                    }
+                });
+            }
         }
     }
 
@@ -1666,10 +1939,50 @@ public class RefactoredVariablesManager {
 
     /** 从内存删除变量并清除缓存 */
     private void removeFromMemoryAndInvalidate(OfflinePlayer player, Variable variable) {
+        removeFromMemoryAndInvalidate(player, variable, "DELETE");
+    }
+
+    /** 从内存删除变量并清除缓存，同时按需广播跨服删除 */
+    private void removeFromMemoryAndInvalidate(OfflinePlayer player, Variable variable, String op) {
+        long now = System.currentTimeMillis();
         if (variable.isPlayerScoped() && player != null) {
+            VariableValue before = memoryStorage.getPlayerVariable(player.getUniqueId(), variable.getKey());
+            long first = before != null ? before.getFirstModifiedAt() : now;
             memoryStorage.removePlayerVariable(player.getUniqueId(), variable.getKey());
+            if (redisSyncService != null && redisSyncService.isEnabled()) {
+                asyncTaskManager.getExecutor().execute(() -> {
+                    try {
+                        redisSyncService.broadcastPlayerVariableDelete(
+                                player.getUniqueId(),
+                                player.getName(),
+                                variable.getKey(),
+                                now,
+                                first,
+                                op
+                        );
+                    } catch (Exception ex) {
+                        logger.debug("广播玩家变量删除失败(已忽略): key=" + variable.getKey() + ", err=" + ex.getMessage());
+                    }
+                });
+            }
         } else if (variable.isGlobal()) {
+            VariableValue before = memoryStorage.getServerVariable(variable.getKey());
+            long first = before != null ? before.getFirstModifiedAt() : now;
             memoryStorage.removeServerVariable(variable.getKey());
+            if (redisSyncService != null && redisSyncService.isEnabled()) {
+                asyncTaskManager.getExecutor().execute(() -> {
+                    try {
+                        redisSyncService.broadcastGlobalVariableDelete(
+                                variable.getKey(),
+                                now,
+                                first,
+                                op
+                        );
+                    } catch (Exception ex) {
+                        logger.debug("广播全局变量删除失败(已忽略): key=" + variable.getKey() + ", err=" + ex.getMessage());
+                    }
+                });
+            }
         }
         invalidateCachesSafely(player, variable.getKey());
     }
@@ -2614,7 +2927,7 @@ public class RefactoredVariablesManager {
                 String pid = player.getUniqueId().toString();
                 java.util.UUID puid = player.getUniqueId();
                 for (String key : getPlayerVariableKeys()) {
-                    futures.add(fetchPlayerTriple(pid, key).thenAccept(tri -> {
+                    futures.add(fetchPlayerTriple(pid, key, false).thenAccept(tri -> {
                         // 若该玩家该变量在内存中存在未落库的脏写入，则不允许 DB 覆盖，避免“离线改值后入服变回去”
                         if (shouldSkipDbOverwrite(puid, key, tri.updatedAt)) {
                             return;
@@ -2675,46 +2988,257 @@ public class RefactoredVariablesManager {
         }
     }
 
-    /** 服务器变量统一三元组查询 */
-    private CompletableFuture<ValueTriple> fetchServerTriple(String key) {
-        CompletableFuture<String> vF = database.queryValueAsync(
-                "SELECT value FROM server_variables WHERE variable_key = ?", key);
-        CompletableFuture<String> uF = database.queryValueAsync(
-                "SELECT updated_at FROM server_variables WHERE variable_key = ?", key);
-        CompletableFuture<String> fF = database.queryValueAsync(
-                "SELECT first_modified_at FROM server_variables WHERE variable_key = ?", key);
+    // ======================== Redis 跨服同步入口 ========================
 
-        return CompletableFuture.allOf(vF, uF, fF)
-                .thenApply(ignored -> new ValueTriple(
-                        vF.join(),
-                        parseLongOrNow(uF.join()),
-                        parseLongOrNow(fF.join())
-                ));
+    /**
+     * 应用来自其他子服的玩家变量变更。
+     *
+     * 规则：
+     * - 仅当本服该玩家在线时才落地到内存；离线时忽略（上线后从 DB 加载）
+     * - 不产生脏标记（loadPlayerVariable），避免回写环路
+     * - 版本保护：只接受 updatedAt 更新的值
+     */
+    public void applyRemotePlayerChange(UUID playerId, String key, String rawValue, long updatedAt, long firstModifiedAt) {
+        Bukkit.getScheduler().runTask(plugin, () -> {
+            try {
+                if (playerId == null || key == null || key.isEmpty()) {
+                    return;
+                }
+                Player online = Bukkit.getPlayer(playerId);
+                if (online == null || !online.isOnline()) {
+                    return;
+                }
+
+                Variable variable = getVariableDefinition(key);
+                if (variable == null || !variable.isPlayerScoped()) {
+                    return;
+                }
+
+                VariableValue current = memoryStorage.getPlayerVariable(playerId, key);
+                if (current != null && updatedAt < current.getLastModified()) {
+                    return;
+                }
+
+                String oldValue = current != null ? current.getActualValue() : null;
+                String normalized = normalizeValueByType(rawValue, variable.getValueType());
+                memoryStorage.loadPlayerVariable(playerId, key, normalized, updatedAt, firstModifiedAt);
+                invalidateCachesSafely(online, key);
+                firePlayerVariableChangeEvent(
+                        online,
+                        key,
+                        oldValue,
+                        normalized,
+                        PlayerVariableChangeEvent.ChangeReason.REMOTE_SYNC
+                );
+            } catch (Exception e) {
+                logger.debug("应用远端玩家变量变更失败: key=" + key + ", err=" + e.getMessage());
+            }
+        });
     }
 
-    /** 玩家变量统一三元组查询 */
-    private CompletableFuture<ValueTriple> fetchPlayerTriple(String playerUuid, String key) {
-        CompletableFuture<String> vF = database.queryValueAsync(
-                "SELECT value FROM player_variables WHERE player_uuid = ? AND variable_key = ?", playerUuid, key);
-        CompletableFuture<String> uF = database.queryValueAsync(
-                "SELECT updated_at FROM player_variables WHERE player_uuid = ? AND variable_key = ?", playerUuid, key);
-        CompletableFuture<String> fF = database.queryValueAsync(
-                "SELECT first_modified_at FROM player_variables WHERE player_uuid = ? AND variable_key = ?", playerUuid, key);
+    public void applyRemotePlayerDelete(UUID playerId, String key, long updatedAt) {
+        Bukkit.getScheduler().runTask(plugin, () -> {
+            try {
+                if (playerId == null || key == null || key.isEmpty()) {
+                    return;
+                }
+                Player online = Bukkit.getPlayer(playerId);
+                if (online == null || !online.isOnline()) {
+                    return;
+                }
 
-        return CompletableFuture.allOf(vF, uF, fF)
-                .thenApply(ignored -> new ValueTriple(
-                        vF.join(),
-                        parseLongOrNow(uF.join()),
-                        parseLongOrNow(fF.join())
-                ));
+                Variable variable = getVariableDefinition(key);
+                if (variable == null || !variable.isPlayerScoped()) {
+                    return;
+                }
+
+                VariableValue current = memoryStorage.getPlayerVariable(playerId, key);
+                if (current == null || updatedAt >= current.getLastModified()) {
+                    String oldValue = current != null ? current.getActualValue() : null;
+                    memoryStorage.removePlayerVariable(playerId, key, false);
+                    invalidateCachesSafely(online, key);
+                    firePlayerVariableChangeEvent(
+                            online,
+                            key,
+                            oldValue,
+                            "",
+                            PlayerVariableChangeEvent.ChangeReason.REMOTE_SYNC
+                    );
+                }
+            } catch (Exception e) {
+                logger.debug("应用远端玩家变量删除失败: key=" + key + ", err=" + e.getMessage());
+            }
+        });
+    }
+
+    public void applyRemoteGlobalChange(String key, String rawValue, long updatedAt, long firstModifiedAt) {
+        Bukkit.getScheduler().runTask(plugin, () -> {
+            try {
+                if (key == null || key.isEmpty()) {
+                    return;
+                }
+                Variable variable = getVariableDefinition(key);
+                if (variable == null || !variable.isGlobal()) {
+                    return;
+                }
+
+                VariableValue current = memoryStorage.getServerVariable(key);
+                if (current != null && updatedAt < current.getLastModified()) {
+                    return;
+                }
+
+                String normalized = normalizeValueByType(rawValue, variable.getValueType());
+                memoryStorage.loadServerVariable(key, normalized, updatedAt, firstModifiedAt);
+                invalidateCachesSafely(null, key);
+            } catch (Exception e) {
+                logger.debug("应用远端全局变量变更失败: key=" + key + ", err=" + e.getMessage());
+            }
+        });
+    }
+
+    public void applyRemoteGlobalDelete(String key, long updatedAt) {
+        Bukkit.getScheduler().runTask(plugin, () -> {
+            try {
+                if (key == null || key.isEmpty()) {
+                    return;
+                }
+                Variable variable = getVariableDefinition(key);
+                if (variable == null || !variable.isGlobal()) {
+                    return;
+                }
+
+                VariableValue current = memoryStorage.getServerVariable(key);
+                if (current == null || updatedAt >= current.getLastModified()) {
+                    memoryStorage.removeServerVariable(key);
+                    invalidateCachesSafely(null, key);
+                }
+            } catch (Exception e) {
+                logger.debug("应用远端全局变量删除失败: key=" + key + ", err=" + e.getMessage());
+            }
+        });
+    }
+
+    /** 服务器变量统一三元组查询 */
+    private CompletableFuture<ValueTriple> fetchServerTriple(String key) {
+        return database.queryRowAsync(
+                        "SELECT value, updated_at, first_modified_at FROM server_variables WHERE variable_key = ?",
+                        3,
+                        key
+                )
+                .thenApply(row -> {
+                    if (row == null) {
+                        return new ValueTriple(null, 0L, 0L);
+                    }
+                    return new ValueTriple(
+                            row[0],
+                            parseLongOrZero(row[1]),
+                            parseLongOrZero(row[2])
+                    );
+                });
+    }
+
+    private ValueTriple toValueTriple(String[] row) {
+        if (row == null) {
+            return new ValueTriple(null, 0L, 0L);
+        }
+        return new ValueTriple(
+                row[0],
+                parseLongOrZero(row[1]),
+                parseLongOrZero(row[2])
+        );
+    }
+
+    /**
+     * UUID 规范化回退查询（仅限“确定了目标 UUID”的单点查询场景）。
+     *
+     * 说明：
+     * - 该查询对 player_uuid 做函数处理，可能无法命中索引；
+     * - 因此仅在需要兼容历史 UUID 存储格式差异时启用，并限制为精确键查询与 LIMIT 1。
+     */
+    private CompletableFuture<ValueTriple> fetchPlayerTripleNormalized(String playerUuid, String key) {
+        if (playerUuid == null || key == null || key.isBlank()) {
+            return CompletableFuture.completedFuture(new ValueTriple(null, 0L, 0L));
+        }
+
+        // 仅在 Java 侧展开 UUID 变体，SQL 侧保持等值匹配，避免对列做函数运算导致索引失效。
+        String uuid = playerUuid.trim();
+        String uuidNoDash = uuid.replace("-", "");
+
+        List<String> variants = new ArrayList<>();
+        addUniqueUuidVariant(variants, uuid);
+        addUniqueUuidVariant(variants, uuid.toLowerCase());
+        addUniqueUuidVariant(variants, uuid.toUpperCase());
+        addUniqueUuidVariant(variants, uuidNoDash);
+        addUniqueUuidVariant(variants, uuidNoDash.toLowerCase());
+        addUniqueUuidVariant(variants, uuidNoDash.toUpperCase());
+
+        CompletableFuture<ValueTriple> chain = CompletableFuture.completedFuture(new ValueTriple(null, 0L, 0L));
+        for (String v : variants) {
+            chain = chain.thenCompose(current -> {
+                if (current.value != null) {
+                    return CompletableFuture.completedFuture(current);
+                }
+                return database.queryRowAsync(
+                                "SELECT value, updated_at, first_modified_at FROM player_variables WHERE player_uuid = ? AND variable_key = ? LIMIT 1",
+                                3,
+                                v,
+                                key
+                        )
+                        .thenApply(this::toValueTriple)
+                        .exceptionally(ex -> new ValueTriple(null, 0L, 0L));
+            });
+        }
+        return chain;
+    }
+
+    private void addUniqueUuidVariant(List<String> variants, String value) {
+        if (value == null || value.isBlank()) {
+            return;
+        }
+        if (!variants.contains(value)) {
+            variants.add(value);
+        }
+    }
+
+    /**
+     * 玩家变量统一三元组查询。
+     *
+     * @param playerUuid 玩家 UUID（标准格式）
+     * @param key 变量键
+     * @param allowNormalizedFallback 是否允许 UUID 规范化回退查询
+     */
+    private CompletableFuture<ValueTriple> fetchPlayerTriple(String playerUuid, String key, boolean allowNormalizedFallback) {
+        logger.debug("[DIAG-fetchPlayerTriple] 开始查询: playerUuid=" + playerUuid + ", key=" + key + ", allowNormalizedFallback=" + allowNormalizedFallback);
+        // 先走精确匹配（保留索引命中能力）
+        return database.queryRowAsync(
+                        "SELECT value, updated_at, first_modified_at FROM player_variables WHERE player_uuid = ? AND variable_key = ?",
+                        3,
+                        playerUuid,
+                        key
+                )
+                .thenCompose(row -> {
+                    if (row != null) {
+                        logger.debug("[DIAG-fetchPlayerTriple] 精确匹配命中: value=" + row[0] + ", updated_at=" + row[1]);
+                        return CompletableFuture.completedFuture(toValueTriple(row));
+                    }
+
+                    logger.debug("[DIAG-fetchPlayerTriple] 精确匹配未命中, allowNormalizedFallback=" + allowNormalizedFallback);
+                    if (!allowNormalizedFallback) {
+                        return CompletableFuture.completedFuture(new ValueTriple(null, 0L, 0L));
+                    }
+
+                    // 仅对离线单人查询场景的主键式读取做一次兼容回退，避免历史 UUID 存储格式导致的误 miss。
+                    logger.debug("[DIAG-fetchPlayerTriple] 尝试UUID变体回退查询");
+                    return fetchPlayerTripleNormalized(playerUuid, key);
+                });
     }
 
     /** 安全解析为 long，失败返回当前时间戳 */
-    private long parseLongOrNow(String value) {
+    private long parseLongOrZero(String value) {
         try {
-            return value == null ? System.currentTimeMillis() : Long.parseLong(value);
+            return value == null ? 0L : Long.parseLong(value);
         } catch (NumberFormatException e) {
-            return System.currentTimeMillis();
+            return 0L;
         }
     }
 

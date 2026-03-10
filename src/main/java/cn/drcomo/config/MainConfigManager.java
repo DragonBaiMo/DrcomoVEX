@@ -101,7 +101,23 @@ public class MainConfigManager {
         // 更新检查配置
         yamlUtil.getBoolean(CONFIG_FILE, "settings.check-updates", true);
         yamlUtil.getBoolean(CONFIG_FILE, "settings.notify-ops", true);
-        
+
+        // Redis 跨服同步配置（可选）
+        yamlUtil.getBoolean(CONFIG_FILE, "settings.redis-sync.enabled", false);
+        yamlUtil.getString(CONFIG_FILE, "settings.redis-sync.host", "127.0.0.1");
+        yamlUtil.getInt(CONFIG_FILE, "settings.redis-sync.port", 6379);
+        yamlUtil.getString(CONFIG_FILE, "settings.redis-sync.password", "");
+        yamlUtil.getInt(CONFIG_FILE, "settings.redis-sync.database", 0);
+        yamlUtil.getString(CONFIG_FILE, "settings.redis-sync.server-id", "");
+        yamlUtil.getInt(CONFIG_FILE, "settings.redis-sync.heartbeat-interval-seconds", 60);
+        yamlUtil.getInt(CONFIG_FILE, "settings.redis-sync.online-ttl-seconds", 300);
+        yamlUtil.getLong(CONFIG_FILE, "settings.redis-sync.request-timeout-millis", 3000L);
+        yamlUtil.getInt(CONFIG_FILE, "settings.redis-sync.server-id-claim-ttl-seconds", 300);
+        yamlUtil.getInt(CONFIG_FILE, "settings.redis-sync.pool.max-total", 8);
+        yamlUtil.getInt(CONFIG_FILE, "settings.redis-sync.pool.max-idle", 4);
+        yamlUtil.getInt(CONFIG_FILE, "settings.redis-sync.pool.min-idle", 1);
+        yamlUtil.getLong(CONFIG_FILE, "settings.redis-sync.pool.timeout-millis", 3000L);
+
         // 调试配置
         yamlUtil.getString(CONFIG_FILE, "debug.level", "INFO");
         

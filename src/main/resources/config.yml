@@ -74,6 +74,24 @@ settings:
   # 是否通知 OP 更新
   notify-ops: true
 
+  # Redis 跨服同步（多子服共库场景）
+  redis-sync:
+    enabled: false              # 是否启用 Redis 同步（默认关闭，兼容旧范式）
+    host: "127.0.0.1"
+    port: 6379
+    password: ""               # 无密码留空
+    database: 0
+    server-id: ""              # 已忽略：运行时自动按“当前jar绝对路径”生成唯一标识
+    server-id-claim-ttl-seconds: 300  # server-id 占用续租 TTL
+    heartbeat-interval-seconds: 60
+    online-ttl-seconds: 300
+    request-timeout-millis: 3000
+    pool:
+      max-total: 8
+      max-idle: 4
+      min-idle: 1
+      timeout-millis: 3000
+
   # 入服兜底刷新（多子服共库建议开启）
   # - 玩家进入服务器后，延迟一段时间清理关键变量的本服缓存并为该玩家预热，避免跨服旧缓存导致的“看起来未刷新”
   # - 仅在本服执行，不会写入数据库；若 keys 为空则自动筛选“玩家作用域且带周期”的变量

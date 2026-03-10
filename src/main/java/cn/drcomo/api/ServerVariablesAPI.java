@@ -347,8 +347,8 @@ public class ServerVariablesAPI {
         // 预解析嵌套占位符
         rawArgs = preProcessNestedPlaceholders(rawArgs, player);
 
-        // 兼容外层加[]的参数：统一规范化后再匹配
-        String normalizedArgs = rawArgs.replace("[", "").replace("]", "").trim();
+        // 兼容外层加[]的参数：仅剥离最外层，避免误删变量名内部括号
+        String normalizedArgs = stripOuterBrackets(rawArgs);
         String full = "drcomovex_" + placeholder + "_" + normalizedArgs;
         Matcher m = FULL_PLACEHOLDER_PATTERN.matcher(full);
         if (!m.matches()) {
@@ -358,7 +358,7 @@ public class ServerVariablesAPI {
             return result;
         }
 
-        String key = m.group(2).replace(" ", "_").replace("[", "").replace("]", "");
+        String key = m.group(2).replace(" ", "_").trim();
         if (isDebugEnabled()) {
             logger.debug("占位符 drcomovex_[" + domain + "]_" + key + " 输入参数: " + rawArgs);
         }
@@ -602,5 +602,128 @@ public class ServerVariablesAPI {
             return "类型不匹配";
         }
         return "变量不存在";
+    }
+
+    /**
+     * 查询模式：
+     * - VALUE：普通值
+     * - MAX/MIN/INITIAL：元参数读取
+     */
+    private enum VarQueryMode {
+        VALUE,
+        MAX,
+        MIN,
+        INITIAL
+    }
+
+    private static final class VarKeyMode {
+        final String normalizedKey;
+        final VarQueryMode mode;
+
+        VarKeyMode(String normalizedKey, VarQueryMode mode) {
+            this.normalizedKey = normalizedKey;
+            this.mode = mode;
+        }
+    }
+
+    /**
+     * 解析变量查询后缀：
+     * - xxx[max]
+     * - xxx[min]
+     * - xxx[initial]
+     */
+    private VarKeyMode resolveVarKeyMode(String rawArgs) {
+        if (rawArgs == null) {
+            return new VarKeyMode("", VarQueryMode.VALUE);
+        }
+        String s = rawArgs.trim();
+        String lower = s.toLowerCase();
+
+        if (lower.endsWith("[max]")) {
+            String key = s.substring(0, s.length() - "[max]".length()).trim();
+            key = key.replace("[", "").replace("]", "").trim();
+            return new VarKeyMode(key, VarQueryMode.MAX);
+        }
+        if (lower.endsWith("[min]")) {
+            String key = s.substring(0, s.length() - "[min]".length()).trim();
+            key = key.replace("[", "").replace("]", "").trim();
+            return new VarKeyMode(key, VarQueryMode.MIN);
+        }
+        if (lower.endsWith("[initial]")) {
+            String key = s.substring(0, s.length() - "[initial]".length()).trim();
+            key = key.replace("[", "").replace("]", "").trim();
+            return new VarKeyMode(key, VarQueryMode.INITIAL);
+        }
+
+        // 支持 xxx_max / xxx_min / xxx_initial 回退格式
+        if (lower.endsWith("_max")) {
+            String base = s.substring(0, s.length() - 4).trim();
+            if (variablesManager.getVariableDefinition(base) != null) {
+                return new VarKeyMode(base, VarQueryMode.MAX);
+            }
+        }
+        if (lower.endsWith("_min")) {
+            String base = s.substring(0, s.length() - 4).trim();
+            if (variablesManager.getVariableDefinition(base) != null) {
+                return new VarKeyMode(base, VarQueryMode.MIN);
+            }
+        }
+        if (lower.endsWith("_initial")) {
+            String base = s.substring(0, s.length() - 8).trim();
+            if (variablesManager.getVariableDefinition(base) != null) {
+                return new VarKeyMode(base, VarQueryMode.INITIAL);
+            }
+        }
+
+        String normalized = s.trim();
+        return new VarKeyMode(normalized, VarQueryMode.VALUE);
+    }
+
+    private String resolveVarMetaValue(OfflinePlayer player, String key, VarQueryMode mode) {
+        Variable var = variablesManager.getVariableDefinition(key);
+        if (var == null) {
+            return "变量不存在";
+        }
+
+        switch (mode) {
+            case MAX: {
+                if (var.getMax() != null && !var.getMax().trim().isEmpty()) {
+                    return var.getMax();
+                }
+                if (var.getLimitations() != null && var.getLimitations().getMaxValue() != null) {
+                    return var.getLimitations().getMaxValue();
+                }
+                return "";
+            }
+            case MIN: {
+                if (var.getMin() != null && !var.getMin().trim().isEmpty()) {
+                    return var.getMin();
+                }
+                if (var.getLimitations() != null && var.getLimitations().getMinValue() != null) {
+                    return var.getLimitations().getMinValue();
+                }
+                return "";
+            }
+            case INITIAL: {
+                return var.getInitial() != null ? var.getInitial() : "";
+            }
+            case VALUE:
+            default:
+                return fetchPlayerVariableWithPlayer(player, key);
+        }
+    }
+
+    /**
+     * 仅移除参数最外层的一对方括号，保留内部内容。
+     */
+    private String stripOuterBrackets(String raw) {
+        if (raw == null) {
+            return "";
+        }
+        String s = raw.trim();
+        if (s.length() >= 2 && s.startsWith("[") && s.endsWith("]")) {
+            return s.substring(1, s.length() - 1).trim();
+        }
+        return s;
     }
 }

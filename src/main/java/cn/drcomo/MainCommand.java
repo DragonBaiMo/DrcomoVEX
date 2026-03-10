@@ -231,6 +231,10 @@ public class MainCommand implements CommandExecutor, TabCompleter {
         }
 
         String key = args[3];
+        executePlayerGetViaManager(sender, target, key);
+    }
+
+    private void executePlayerGetViaManager(CommandSender sender, OfflinePlayer target, String key) {
         playerVariablesManager.getPlayerVariable(target, key)
                 .completeOnTimeout(VariableResult.failure("操作超时"), TIMEOUT_SECONDS, TimeUnit.SECONDS)
                 .whenComplete((r, t) -> {
@@ -239,8 +243,8 @@ public class MainCommand implements CommandExecutor, TabCompleter {
                     } else {
                         sendResult(sender, r,
                                 Map.of("variable", key,
-                                       "player", target.getName(),
-                                       "value", r.getValue() != null ? r.getValue() : ""),
+                                        "player", Objects.requireNonNullElse(target.getName(), ""),
+                                        "value", r.getValue() != null ? r.getValue() : ""),
                                 "success.player-get");
                     }
                 });
@@ -254,11 +258,12 @@ public class MainCommand implements CommandExecutor, TabCompleter {
             return;
         }
         boolean allowOffline = hasFlag(args, 5, "--offline");
+        boolean forceWrite = allowOffline || hasFlag(args, 5, "--db-only");
         handlePlayerSingleWrite(
                 sender, args,
                 "drcomovex.command.player.set",
                 /*needsValue*/ true,
-                (target, key, value) -> playerVariablesManager.setPlayerVariable(target, key, value),
+                (target, key, value) -> playerVariablesManager.setPlayerVariable(target, key, value, forceWrite),
                 (targetName, key, value, resultValue) -> Map.of(
                         "variable", key,
                         "player", targetName,
@@ -278,6 +283,7 @@ public class MainCommand implements CommandExecutor, TabCompleter {
             return;
         }
         boolean allowOffline = hasFlag(args, 5, "--offline");
+        boolean forceWrite = allowOffline || hasFlag(args, 5, "--db-only");
         // rank 保护：禁止通过 add 传入负数以减少 rank（只允许 set）
         if ("rank".equalsIgnoreCase(args[3])) {
             try {
@@ -298,7 +304,7 @@ public class MainCommand implements CommandExecutor, TabCompleter {
                 /*needsValue*/ true,
                 (target, key, value) -> {
                     logger.debug("开始执行玩家变量添加操作: player=" + target.getName() + ", key=" + key + ", value=" + value);
-                    return playerVariablesManager.addPlayerVariable(target, key, value)
+                    return playerVariablesManager.addPlayerVariable(target, key, value, forceWrite)
                             .whenComplete((r, t) -> logger.debug("玩家变量添加操作完成: result=" + (r != null ? r.isSuccess() : "null")
                                     + ", throwable=" + (t != null ? t.getMessage() : "null")));
                 },
@@ -329,6 +335,7 @@ public class MainCommand implements CommandExecutor, TabCompleter {
             return;
         }
         boolean allowOffline = hasFlag(args, 5, "--offline");
+        boolean forceWrite = allowOffline || hasFlag(args, 5, "--db-only");
         // rank 保护：禁止通过 remove 减少 rank（只允许 set）
         if ("rank".equalsIgnoreCase(args[3])) {
             messagesManager.sendMessage(sender, "error.operation-failed",
@@ -340,7 +347,7 @@ public class MainCommand implements CommandExecutor, TabCompleter {
                 sender, args,
                 "drcomovex.command.player.remove",
                 /*needsValue*/ true,
-                (target, key, value) -> playerVariablesManager.removePlayerVariable(target, key, value),
+                (target, key, value) -> playerVariablesManager.removePlayerVariable(target, key, value, forceWrite),
                 (targetName, key, value, resultValue) -> Map.of(
                         "variable", key,
                         "player", targetName,
@@ -361,6 +368,7 @@ public class MainCommand implements CommandExecutor, TabCompleter {
             return;
         }
         boolean allowOffline = hasFlag(args, 4, "--offline");
+        boolean forceWrite = allowOffline || hasFlag(args, 4, "--db-only");
         String spec = args[3];
         if (PlayerBulkHelper.isWildcard(spec) || PlayerBulkHelper.hasCondition(spec)) {
             handlePlayerSinglePatternReset(sender, args, allowOffline);
@@ -370,7 +378,7 @@ public class MainCommand implements CommandExecutor, TabCompleter {
                 sender, args,
                 "drcomovex.command.player.reset",
                 /*needsValue*/ false,
-                (target, key, value) -> playerVariablesManager.resetPlayerVariable(target, key),
+                (target, key, value) -> playerVariablesManager.resetPlayerVariable(target, key, forceWrite),
                 (targetName, key, value, resultValue) -> Map.of(
                         "variable", key,
                         "player", targetName,
@@ -542,6 +550,7 @@ public class MainCommand implements CommandExecutor, TabCompleter {
         boolean onlineOnly = hasFlag(args, 4, "--online-only");
         boolean includeDatabase = !onlineOnly;
         boolean includeOnline = !dbOnly;
+        int limit = parseLimit(args, 4);
         Optional<String> outOpt = parseOutFile(args, 4);
         PlayerFilter playerFilter = parsePlayerFilter(args, 4);
 
@@ -553,7 +562,7 @@ public class MainCommand implements CommandExecutor, TabCompleter {
                 includeDatabase,
                 includeOnline,
                 MAX_PREVIEW_EXAMPLES,
-                MAX_BULK_LIMIT,
+                Math.min(limit, MAX_BULK_LIMIT),
                 playerFilter
         );
 
@@ -637,6 +646,13 @@ public class MainCommand implements CommandExecutor, TabCompleter {
         boolean onlineOnly = hasFlag(args, flagStart, "--online-only");
         boolean includeDatabase = !onlineOnly;
         boolean includeOnline = !dbOnly;
+
+        // 命令层安全网：Redis 不可用时，批量写禁止包含离线来源（DB）候选。
+        if (!isRedisAvailableForRouting() && includeDatabase) {
+            messagesManager.sendMessage(sender, "error.operation-failed",
+                    Map.of("reason", "Redis 不可用：批量写仅允许 --online-only"));
+            return;
+        }
 
         String basePerm = "drcomovex.command.player." + normalizedAction;
         if (!requireBulkOthersPermission(sender, basePerm)) return;
@@ -880,6 +896,22 @@ public class MainCommand implements CommandExecutor, TabCompleter {
         String key = args[3];
         String value = needsValue ? args[4] : null;
 
+        // 命令层安全网：Redis 不可用时，禁止对本服离线玩家执行写操作。
+        // 但 --offline 或 --db-only 任一出现时视为强制操作，跳过阻断。
+        int flagStart = needsValue ? 5 : 4;
+        boolean forceWrite = allowOffline || hasFlag(args, flagStart, "--db-only");
+        if (!forceWrite && needsValue && shouldBlockOfflineWriteAtCommand(target)) {
+            messagesManager.sendMessage(sender, "error.operation-failed",
+                    Map.of("reason", "Redis 不可用：禁止修改本服离线玩家变量（仅允许 get）"));
+            return;
+        }
+
+        if (!forceWrite && !needsValue && shouldBlockOfflineWriteAtCommand(target)) {
+            messagesManager.sendMessage(sender, "error.operation-failed",
+                    Map.of("reason", "Redis 不可用：禁止修改本服离线玩家变量（仅允许 get）"));
+            return;
+        }
+
         op.apply(target, key, value)
         .toCompletableFuture() // 关键：先转 CompletableFuture
         .completeOnTimeout(VariableResult.failure("操作超时"), TIMEOUT_SECONDS, TimeUnit.SECONDS)
@@ -907,6 +939,13 @@ public class MainCommand implements CommandExecutor, TabCompleter {
     private void handlePlayerSinglePatternReset(CommandSender sender, String[] args, boolean allowOffline) {
         OfflinePlayer target = resolvePlayer(sender, args[2], allowOffline);
         if (target == null) {
+            return;
+        }
+
+        boolean forceWrite = allowOffline || hasFlag(args, 4, "--db-only");
+        if (!forceWrite && shouldBlockOfflineWriteAtCommand(target)) {
+            messagesManager.sendMessage(sender, "error.operation-failed",
+                    Map.of("reason", "Redis 不可用：禁止修改本服离线玩家变量（仅允许 get）"));
             return;
         }
 
@@ -1223,6 +1262,24 @@ public class MainCommand implements CommandExecutor, TabCompleter {
             }
         }
         return Optional.empty();
+    }
+
+    /** Redis 路由可用性：配置开启 + 运行态可用 双条件。 */
+    private boolean isRedisAvailableForRouting() {
+        boolean enabledByConfig = false;
+        try {
+            if (plugin.getConfigsManager() != null && plugin.getConfigsManager().getMainConfig() != null) {
+                enabledByConfig = plugin.getConfigsManager().getMainConfig().getBoolean("settings.redis-sync.enabled", false);
+            }
+        } catch (Exception ignored) {
+        }
+        cn.drcomo.redis.RedisCrossServerSync sync = plugin.getRedisCrossServerSync();
+        return enabledByConfig && sync != null && sync.isEnabled();
+    }
+
+    /** 命令层写阻断：本服离线且 Redis 不可用。 */
+    private boolean shouldBlockOfflineWriteAtCommand(OfflinePlayer target) {
+        return target != null && !target.isOnline() && !isRedisAvailableForRouting();
     }
 
     /**

@@ -48,6 +48,19 @@ public class PlayerListener implements Listener {
     @EventHandler(priority = EventPriority.MONITOR)
     public void onPlayerJoin(PlayerJoinEvent event) {
         try {
+            if (plugin.getLegacyOnlinePlayerTracker() != null) {
+                plugin.getLegacyOnlinePlayerTracker().markOnline(event.getPlayer().getUniqueId());
+            }
+
+            if (plugin.getRedisCrossServerSync() != null) {
+                try {
+                    // 同步更新本地在线状态，Redis I/O 由服务内部异步处理
+                    plugin.getRedisCrossServerSync().handlePlayerJoin(event.getPlayer());
+                } catch (Exception ex) {
+                    logger.debug("玩家上线 Redis 标记失败(已忽略): " + ex.getMessage());
+                }
+            }
+
             // 预加载玩家变量数据到内存（高性能优化）
             plugin.getVariablesManager().handlePlayerJoin(event.getPlayer())
                     .thenRun(() -> logger.debug("玩家 " + event.getPlayer().getName() + " 变量数据预加载完成"))
@@ -73,6 +86,19 @@ public class PlayerListener implements Listener {
     @EventHandler(priority = EventPriority.MONITOR)
     public void onPlayerQuit(PlayerQuitEvent event) {
         try {
+            if (plugin.getLegacyOnlinePlayerTracker() != null) {
+                plugin.getLegacyOnlinePlayerTracker().markOffline(event.getPlayer().getUniqueId());
+            }
+
+            if (plugin.getRedisCrossServerSync() != null) {
+                try {
+                    // 同步更新本地在线状态，Redis I/O 由服务内部异步处理
+                    plugin.getRedisCrossServerSync().handlePlayerQuit(event.getPlayer());
+                } catch (Exception ex) {
+                    logger.debug("玩家下线 Redis 标记失败(已忽略): " + ex.getMessage());
+                }
+            }
+
             // 立即持久化玩家变量数据（高性能优化）
             plugin.getVariablesManager().handlePlayerQuit(event.getPlayer())
                     .thenRun(() -> logger.debug("玩家 " + event.getPlayer().getName() + " 变量数据持久化完成"))

@@ -56,6 +56,23 @@ public class MainConfigSchema implements ConfigSchema {
 					String s = String.valueOf(v).trim().toUpperCase();
 					return Set.of("DEBUG","INFO","WARN","ERROR").contains(s);
 				}, "debug.level 必须为 DEBUG/INFO/WARN/ERROR 之一");
+
+		// Redis 同步配置
+		validator.validateString("settings.redis-sync.host");
+		validator.validateNumber("settings.redis-sync.port")
+				.custom(n -> {
+					int p = ((Number) n).intValue();
+					return p > 0 && p <= 65535;
+				}, "settings.redis-sync.port 必须在 1-65535 范围内");
+		validator.validateString("settings.redis-sync.server-id");
+		validator.validateNumber("settings.redis-sync.heartbeat-interval-seconds")
+				.custom(n -> ((Number) n).intValue() >= 5, "settings.redis-sync.heartbeat-interval-seconds 不能小于 5");
+		validator.validateNumber("settings.redis-sync.online-ttl-seconds")
+				.custom(n -> ((Number) n).intValue() >= 10, "settings.redis-sync.online-ttl-seconds 不能小于 10");
+		validator.validateNumber("settings.redis-sync.request-timeout-millis")
+				.custom(n -> ((Number) n).intValue() >= 500, "settings.redis-sync.request-timeout-millis 不能小于 500");
+		validator.validateNumber("settings.redis-sync.server-id-claim-ttl-seconds")
+				.custom(n -> ((Number) n).intValue() >= 30, "settings.redis-sync.server-id-claim-ttl-seconds 不能小于 30");
 	}
 }
 
