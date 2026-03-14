@@ -459,6 +459,46 @@ public class HikariConnection {
     }
 
     /**
+     * 异步查询全部服务器全局变量。
+     * 返回列顺序: [variable_key, value, updated_at, first_modified_at]
+     */
+    public CompletableFuture<List<String[]>> queryAllServerVariablesAsync() {
+        String sql = "SELECT variable_key, value, updated_at, first_modified_at FROM server_variables";
+
+        if ("sqlite".equals(databaseType)) {
+            return sqliteDB.queryListAsync(sql, rs -> new String[] {
+                    rs.getString(1),
+                    rs.getString(2),
+                    rs.getString(3),
+                    rs.getString(4)
+            });
+        }
+
+        return CompletableFuture.supplyAsync(() -> {
+            List<String[]> results = new ArrayList<>();
+            try (Connection conn = getConnection();
+                 PreparedStatement stmt = conn.prepareStatement(sql)) {
+                try { conn.setNetworkTimeout(dbExecutor, 15000); } catch (Throwable ignore) {}
+                try { stmt.setQueryTimeout(15); } catch (Throwable ignore) {}
+                try (ResultSet rs = stmt.executeQuery()) {
+                    while (rs.next()) {
+                        results.add(new String[] {
+                                rs.getString(1),
+                                rs.getString(2),
+                                rs.getString(3),
+                                rs.getString(4)
+                        });
+                    }
+                }
+            } catch (SQLException e) {
+                logger.error("查询全部服务器变量失败", e);
+                throw new RuntimeException("查询全部服务器变量失败", e);
+            }
+            return results;
+        }, dbExecutor);
+    }
+
+    /**
      * 异步执行更新
      */
     public CompletableFuture<Integer> executeUpdateAsync(String sql, Object... params) {

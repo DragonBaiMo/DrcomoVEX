@@ -102,6 +102,23 @@ public class MainConfigManager {
         yamlUtil.getBoolean(CONFIG_FILE, "settings.check-updates", true);
         yamlUtil.getBoolean(CONFIG_FILE, "settings.notify-ops", true);
 
+        // 全局变量数据库拉取同步（无需 server-id）
+        yamlUtil.getBoolean(CONFIG_FILE, "settings.global-db-sync.enabled", true);
+        yamlUtil.getInt(CONFIG_FILE, "settings.global-db-sync.poll-interval-millis", 1000);
+        yamlUtil.getLong(CONFIG_FILE, "settings.global-db-sync.query-timeout-millis", 5000L);
+
+        // MySQL 事件表跨服同步（旧兼容方案）
+        yamlUtil.getBoolean(CONFIG_FILE, "settings.cross-server-sync.enabled", false);
+        yamlUtil.getString(CONFIG_FILE, "settings.cross-server-sync.server-id", "");
+        yamlUtil.getInt(CONFIG_FILE, "settings.cross-server-sync.poll-interval-ms", 250);
+        yamlUtil.getInt(CONFIG_FILE, "settings.cross-server-sync.batch-size", 500);
+        yamlUtil.getInt(CONFIG_FILE, "settings.cross-server-sync.retention-days", 7);
+        yamlUtil.getBoolean(CONFIG_FILE, "settings.cross-server-sync.fail-closed-on-db-error", true);
+        yamlUtil.getInt(CONFIG_FILE, "settings.cross-server-sync.cleanup-interval-seconds", 180);
+        yamlUtil.getInt(CONFIG_FILE, "settings.cross-server-sync.cleanup-safety-margin", 1000);
+        yamlUtil.getBoolean(CONFIG_FILE, "settings.cross-server-sync.ignore-stale-consumers", false);
+        yamlUtil.getInt(CONFIG_FILE, "settings.cross-server-sync.consumer-stale-days", 7);
+
         // Redis 跨服同步配置（可选）
         yamlUtil.getBoolean(CONFIG_FILE, "settings.redis-sync.enabled", false);
         yamlUtil.getString(CONFIG_FILE, "settings.redis-sync.host", "127.0.0.1");

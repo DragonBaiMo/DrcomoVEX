@@ -5,6 +5,7 @@ import cn.drcomo.managers.*;
 import cn.drcomo.listeners.PlayerListener;
 import cn.drcomo.api.ServerVariablesAPI;
 import cn.drcomo.tasks.DataSaveTask;
+import cn.drcomo.tasks.GlobalVariableSyncTask;
 import cn.drcomo.tasks.VariableCycleTask;
 import cn.drcomo.database.HikariConnection;
 import cn.drcomo.corelib.util.DebugUtil;
@@ -30,7 +31,7 @@ import org.bukkit.Bukkit;
  * 动态表达式计算、周期性重置和全能指令操作。
  * 
  * @author BaiMo
- * @version 1.0.0
+ * @version 1.2.0
  */
 public class DrcomoVEX extends JavaPlugin {
     
@@ -60,6 +61,7 @@ public class DrcomoVEX extends JavaPlugin {
     private DataSaveTask dataSaveTask;
     private VariableCycleTask variableCycleTask;
     private cn.drcomo.tasks.VariableRegenTask variableRegenTask;
+    private GlobalVariableSyncTask globalVariableSyncTask;
 
     // Redis 跨服同步（可选）
     private RedisConnection redisConnection;
@@ -104,6 +106,9 @@ public class DrcomoVEX extends JavaPlugin {
 
         // 7.6 启动 MySQL 轮询跨服同步（仅在 Redis 不可用或未启用时）
         startMySQLCrossServerSyncIfNeeded();
+
+        // 7.7 启动全局变量数据库拉取同步（无需 server-id）
+        startGlobalDatabaseSyncIfNeeded();
         
         // 8. 注册API接口
         registerAPI();
@@ -117,7 +122,7 @@ public class DrcomoVEX extends JavaPlugin {
         }
 
         logger.info("DrcomoVEX 变量扩展系统已成功启动！");
-        logger.info("版本: 1.0.0 (代号: 直觉)");
+        logger.info("版本: 1.2.0 (代号: 直觉)");
         logger.info("感谢使用 DrcomoVEX - 让变量管理变得直观而强大！");
     }
     
@@ -134,6 +139,9 @@ public class DrcomoVEX extends JavaPlugin {
         }
         if (variableRegenTask != null) {
             variableRegenTask.stop();
+        }
+        if (globalVariableSyncTask != null) {
+            globalVariableSyncTask.stop();
         }
 
         // 1.5 停止 Redis 同步
@@ -449,6 +457,21 @@ public class DrcomoVEX extends JavaPlugin {
             }
         } catch (Exception e) {
             logger.warn("停止 MySQL 轮询跨服同步失败: " + e.getMessage());
+        }
+    }
+
+    private void startGlobalDatabaseSyncIfNeeded() {
+        try {
+            globalVariableSyncTask = new GlobalVariableSyncTask(
+                    this,
+                    logger,
+                    variablesManager,
+                    database,
+                    configsManager.getMainConfig()
+            );
+            globalVariableSyncTask.start();
+        } catch (Exception e) {
+            logger.error("启动全局变量数据库拉取同步失败", e);
         }
     }
 
