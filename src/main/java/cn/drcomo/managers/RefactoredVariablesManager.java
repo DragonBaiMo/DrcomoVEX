@@ -31,6 +31,7 @@ import cn.drcomo.redis.RedisCrossServerSync;
 import org.bukkit.Bukkit;
 import org.bukkit.OfflinePlayer;
 import org.bukkit.entity.Player;
+import org.bukkit.configuration.file.FileConfiguration;
  
 
 
@@ -130,6 +131,7 @@ public class RefactoredVariablesManager {
 
     // 初始化完成状态
     private final AtomicBoolean initialized = new AtomicBoolean(false);
+    private final AtomicBoolean warnedMissingLegacySyncServerId = new AtomicBoolean(false);
 
     // 验证过程中传递当前变量键的线程本地变量
     private final ThreadLocal<String> currentValidatingVariable = new ThreadLocal<>();
@@ -1788,6 +1790,14 @@ public class RefactoredVariablesManager {
 
             // 触发玩家变量变更事件（异步）
             firePlayerVariableChangeEvent(player, variable.getKey(), oldValue, value, reason);
+            emitLegacyCrossServerChangeEvent(
+                    variable,
+                    player,
+                    broadcastValue,
+                    broadcastUpdatedAt,
+                    broadcastFirstModifiedAt,
+                    reason != null ? reason.name() : "OTHER"
+            );
 
             // Redis 跨服广播（仅广播，不做本地回写）
             if (latest != null && redisSyncService != null && redisSyncService.isEnabled()) {
@@ -1817,10 +1827,20 @@ public class RefactoredVariablesManager {
             if (!persist) {
                 memoryStorage.clearDirtyFlag("server:" + variable.getKey());
                 logger.debug("服务器变量设置为不可持久化，跳过数据库保存: " + variable.getKey());
+            } else if (latest != null) {
+                writeThroughGlobalVariable(variable.getKey(), latest);
             }
             // 全局上下文缓存一并清理
             invalidateCachesSafely(null, variable.getKey());
             // 注意：全局变量暂不触发事件，因为 PlayerVariableChangeEvent 需要 player
+            emitLegacyCrossServerChangeEvent(
+                    variable,
+                    null,
+                    broadcastValue,
+                    broadcastUpdatedAt,
+                    broadcastFirstModifiedAt,
+                    reason != null ? reason.name() : "OTHER"
+            );
 
             // Redis 广播全局变量变更
             if (latest != null && redisSyncService != null && redisSyncService.isEnabled()) {
@@ -1949,6 +1969,7 @@ public class RefactoredVariablesManager {
             VariableValue before = memoryStorage.getPlayerVariable(player.getUniqueId(), variable.getKey());
             long first = before != null ? before.getFirstModifiedAt() : now;
             memoryStorage.removePlayerVariable(player.getUniqueId(), variable.getKey());
+            emitLegacyCrossServerChangeEvent(variable, player, null, now, first, op);
             if (redisSyncService != null && redisSyncService.isEnabled()) {
                 asyncTaskManager.getExecutor().execute(() -> {
                     try {
@@ -1969,6 +1990,8 @@ public class RefactoredVariablesManager {
             VariableValue before = memoryStorage.getServerVariable(variable.getKey());
             long first = before != null ? before.getFirstModifiedAt() : now;
             memoryStorage.removeServerVariable(variable.getKey());
+            writeThroughDeleteGlobalVariable(variable.getKey());
+            emitLegacyCrossServerChangeEvent(variable, null, null, now, first, op);
             if (redisSyncService != null && redisSyncService.isEnabled()) {
                 asyncTaskManager.getExecutor().execute(() -> {
                     try {
@@ -1990,6 +2013,143 @@ public class RefactoredVariablesManager {
     /** 缓存失效的安全封装（缓存层已移除，此方法为空操作） */
     private void invalidateCachesSafely(OfflinePlayer player, String key) {
         // 缓存层已移除，此方法保留仅为代码兼容
+    }
+
+    /**
+     * 全局变量写穿数据库。
+     * 这样其他子服通过数据库拉取同步时，可以尽快看到最新值，而不必等待批量持久化周期。
+     */
+    private void writeThroughGlobalVariable(String key, VariableValue latest) {
+        if (key == null || latest == null || !isGlobalDbSyncEnabled()) {
+            return;
+        }
+
+        database.executeUpdateAsync(
+                "INSERT INTO server_variables " +
+                        "(variable_key, value, created_at, updated_at, first_modified_at) VALUES (?, ?, ?, ?, ?) " +
+                        "ON DUPLICATE KEY UPDATE value = VALUES(value), updated_at = VALUES(updated_at), first_modified_at = VALUES(first_modified_at)",
+                key,
+                latest.getRawValue(),
+                latest.getCreatedAt(),
+                latest.getLastModified(),
+                latest.getFirstModifiedAt()
+        ).exceptionally(ex -> {
+            logger.warn("全局变量写穿数据库失败: key=" + key
+                    + ", err=" + (ex != null ? ex.getMessage() : "unknown"));
+            return 0;
+        });
+    }
+
+    /**
+     * 全局变量删除时同步删除数据库记录。
+     */
+    private void writeThroughDeleteGlobalVariable(String key) {
+        if (key == null || key.isEmpty() || !isGlobalDbSyncEnabled()) {
+            return;
+        }
+
+        database.executeUpdateAsync(
+                "DELETE FROM server_variables WHERE variable_key = ?",
+                key
+        ).exceptionally(ex -> {
+            logger.warn("删除全局变量数据库记录失败: key=" + key
+                    + ", err=" + (ex != null ? ex.getMessage() : "unknown"));
+            return 0;
+        });
+    }
+
+    /**
+     * 是否启用“全局变量数据库拉取同步”。
+     */
+    private boolean isGlobalDbSyncEnabled() {
+        if (database == null || !database.isMySQL()) {
+            return false;
+        }
+        try {
+            FileConfiguration config = configsManager != null ? configsManager.getMainConfig() : null;
+            return config != null && config.getBoolean("settings.global-db-sync.enabled", true);
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    /**
+     * 向旧版 MySQL 事件表写入跨服同步事件。
+     * 仅当启用了 settings.cross-server-sync 且当前未启用 Redis 同步时生效。
+     */
+    private void emitLegacyCrossServerChangeEvent(
+            Variable variable,
+            OfflinePlayer player,
+            String rawValue,
+            long updatedAt,
+            long firstModifiedAt,
+            String op
+    ) {
+        if (variable == null || !isLegacyMySqlSyncEventEnabled()) {
+            return;
+        }
+
+        String serverId = getLegacyMySqlSyncServerId();
+        if (serverId.isEmpty()) {
+            if (warnedMissingLegacySyncServerId.compareAndSet(false, true)) {
+                logger.warn("已启用 MySQL 跨服同步，但未配置 settings.cross-server-sync.server-id，事件将不会写入。");
+            }
+            return;
+        }
+
+        String scope = variable.isGlobal() ? "GLOBAL" : "PLAYER";
+        String playerUuid = null;
+        if (variable.isPlayerScoped() && player != null && player.getUniqueId() != null) {
+            playerUuid = player.getUniqueId().toString();
+        }
+
+        database.executeUpdateAsync(
+                "INSERT INTO player_variable_change_events " +
+                        "(server_id, player_uuid, variable_key, value, updated_at, first_modified_at, scope, op, created_at) " +
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                serverId,
+                playerUuid,
+                variable.getKey(),
+                rawValue,
+                updatedAt,
+                firstModifiedAt,
+                scope,
+                op != null ? op : "OTHER",
+                System.currentTimeMillis()
+        ).exceptionally(ex -> {
+            logger.warn("写入 MySQL 跨服同步事件失败: key=" + variable.getKey()
+                    + ", scope=" + scope
+                    + ", err=" + (ex != null ? ex.getMessage() : "unknown"));
+            return 0;
+        });
+    }
+
+    private boolean isLegacyMySqlSyncEventEnabled() {
+        if (redisSyncService != null && redisSyncService.isEnabled()) {
+            return false;
+        }
+        if (database == null || !database.isMySQL()) {
+            return false;
+        }
+        try {
+            FileConfiguration config = configsManager != null ? configsManager.getMainConfig() : null;
+            return config != null && config.getBoolean("settings.cross-server-sync.enabled", false);
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    private String getLegacyMySqlSyncServerId() {
+        try {
+            FileConfiguration config = configsManager != null ? configsManager.getMainConfig() : null;
+            if (config == null) {
+                return "";
+            }
+            String serverId = config.getString("settings.cross-server-sync.server-id", "");
+            return serverId != null ? serverId.trim() : "";
+        } catch (Exception e) {
+            return "";
+        }
     }
 
     /** 统一出口：在返回前应用渐进恢复 */

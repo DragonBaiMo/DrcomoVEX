@@ -50,6 +50,27 @@ public class MainConfigSchema implements ConfigSchema {
 				.custom(n -> ((Number) n).intValue() >= 1, "cycle.check-interval-seconds 不能小于 1");
 		validator.validateString("cycle.timezone");
 
+		// 全局变量数据库拉取同步配置
+		validator.validateNumber("settings.global-db-sync.poll-interval-millis")
+				.custom(n -> ((Number) n).intValue() >= 250, "settings.global-db-sync.poll-interval-millis 不能小于 250");
+		validator.validateNumber("settings.global-db-sync.query-timeout-millis")
+				.custom(n -> ((Number) n).longValue() >= 1000L, "settings.global-db-sync.query-timeout-millis 不能小于 1000");
+
+		// MySQL 事件表跨服同步配置
+		validator.validateString("settings.cross-server-sync.server-id");
+		validator.validateNumber("settings.cross-server-sync.poll-interval-ms")
+				.custom(n -> ((Number) n).intValue() >= 100, "settings.cross-server-sync.poll-interval-ms 不能小于 100");
+		validator.validateNumber("settings.cross-server-sync.batch-size")
+				.custom(n -> ((Number) n).intValue() >= 50, "settings.cross-server-sync.batch-size 不能小于 50");
+		validator.validateNumber("settings.cross-server-sync.retention-days")
+				.custom(n -> ((Number) n).intValue() >= 1, "settings.cross-server-sync.retention-days 不能小于 1");
+		validator.validateNumber("settings.cross-server-sync.cleanup-interval-seconds")
+				.custom(n -> ((Number) n).intValue() >= 60, "settings.cross-server-sync.cleanup-interval-seconds 不能小于 60");
+		validator.validateNumber("settings.cross-server-sync.cleanup-safety-margin")
+				.custom(n -> ((Number) n).intValue() >= 100, "settings.cross-server-sync.cleanup-safety-margin 不能小于 100");
+		validator.validateNumber("settings.cross-server-sync.consumer-stale-days")
+				.custom(n -> ((Number) n).intValue() >= 1, "settings.cross-server-sync.consumer-stale-days 不能小于 1");
+
 		// 日志级别
 		validator.validateString("debug.level")
 				.custom(v -> {

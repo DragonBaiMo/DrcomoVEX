@@ -1,6 +1,6 @@
 # ================================================================
 # DrcomoVEX - 基于直觉设计的服务器变量管理系统
-# 版本: 1.0.0 (代号: 直觉)
+# 版本: 1.2.0 (代号: 直觉)
 # 作者: BaiMo
 # ================================================================
 
@@ -73,6 +73,31 @@ settings:
 
   # 是否通知 OP 更新
   notify-ops: true
+
+  # 全局变量数据库拉取同步
+  # - 只处理 scope=global 的变量
+  # - 基于共享 MySQL 的 server_variables 表，无需 server-id
+  # - Redis 已启用时会自动跳过，因为 Redis 已负责实时同步
+  global-db-sync:
+    enabled: true
+    poll-interval-millis: 1000
+    query-timeout-millis: 5000
+
+  # MySQL 事件表跨服同步（旧兼容方案）
+  # - 仅在 database.type=mysql 时生效
+  # - 仅在 Redis 同步未启用或不可用时启用
+  # - 每个子服必须配置唯一 server-id，否则不会启动
+  cross-server-sync:
+    enabled: false
+    server-id: ""                # 必填：每个子服唯一标识，例如 survival-1 / survival-2
+    poll-interval-ms: 250        # 轮询事件表间隔（毫秒）
+    batch-size: 500              # 每轮最多拉取的事件数量
+    retention-days: 7            # 事件保留天数
+    fail-closed-on-db-error: true
+    cleanup-interval-seconds: 180
+    cleanup-safety-margin: 1000
+    ignore-stale-consumers: false
+    consumer-stale-days: 7
 
   # Redis 跨服同步（多子服共库场景）
   redis-sync:
